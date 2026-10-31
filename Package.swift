@@ -17,7 +17,8 @@ let package = Package(
   ],
   targets: [
     .target(name: "PerfLoopKit"),
-    // Runtime knobs (C4) and, later, the probe seam, the stretch sampler and the build stamp reader.
+    // Runtime knobs (C4), mutation records and their attribution to bodies (C7); later the probe seam, the stretch
+    // sampler and the build stamp reader.
     .target(name: "PerfLoopProbe"),
     // The runner's file and process plumbing: the content-addressed store, the adapter as a child, the experiment
     // verbs. Foundation only (Process, FileManager), so it builds on Linux too; `perfloop` is a thin main over it.
