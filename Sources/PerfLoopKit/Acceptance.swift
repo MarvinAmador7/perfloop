@@ -22,6 +22,9 @@ public enum Acceptance {
     case "latencyMs": (15, 3)
     case "hitchTimeRatioMsPerS": (25, 2)
     case "longestStretchMs": (25, 4)
+    // A replayed gesture (C9): both sit at 0 on a main thread that keeps up, so their bands are absolute.
+    case "positionErrorP95Pt": (25, 0.5)
+    case "stalls": (25, 1)
     default: (10, 0)
     }
   }
@@ -75,7 +78,8 @@ public enum Acceptance {
   }
 
   /// Full: won when Mann-Whitney U gives p < 0.05, the effect is ≥ the band (and ≥ 5 %), and the frame guards
-  /// (hitch time ratio, longest stretch) are not worse beyond their bands; "unknown" for 0.05 ≤ p < 0.2 (extend), which
+  /// (hitch time ratio, longest stretch; for a replayed gesture also its position error and stalls, C9) are not worse
+  /// beyond their bands; "unknown" for 0.05 ≤ p < 0.2 (extend), which
   /// becomes "noDecision" at the last look; lost otherwise. `regression` only when the candidate is significantly
   /// worse beyond the band: a same-build comparison is never one.
   public static func full(_ pairs: [Pair], metric: String, guards: [String], lastLook: Bool) -> Stage {
@@ -90,7 +94,10 @@ public enum Acceptance {
     st.signP = SignTest.p(wins: st.wins, losses: use.filter { $0.b.objective! > $0.a.objective! }.count)
     // Frame guards: not worse than the champion beyond their own bands, whatever the objective did.
     var fg: [String: FrameGuard] = [:]
-    for (name, pick) in [("hitchTimeRatioMsPerS", { (s: Side) in s.hitchTimeRatioMsPerS }), ("longestStretchMs", { (s: Side) in s.longestStretchMs })] where name != metric {
+    // Jerk is never a guard: it differentiates three times and swings with the display link's jitter.
+    let guarded: [(String, (Side) -> Double?)] = [("hitchTimeRatioMsPerS", \.hitchTimeRatioMsPerS), ("longestStretchMs", \.longestStretchMs),
+                                                  ("positionErrorP95Pt", \.positionErrorP95Pt), ("stalls", \.stalls)]
+    for (name, pick) in guarded where name != metric {
       let xa = use.compactMap { pick($0.a) }, xb = use.compactMap { pick($0.b) }
       guard xa.count == use.count, xb.count == use.count else { continue }
       let f = floors(name), bd = Band(champion: xa, candidate: xb, floorPct: f.pct, absoluteFloor: f.absolute)

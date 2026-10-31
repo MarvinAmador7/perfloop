@@ -42,6 +42,9 @@ perfloop: an agent-first performance loop (design/perf-loop/SPEC.md; the adapter
   sweep SCENARIO --set NAME=4..64/4 [--set …] [--bench PATH] [--fixture F] [--reps N] [--dry-run] [--lock DIR] [--json]
                                             a grid over fixture parameters, knobs and params: the objective per point
                                             and fitted cost curves (perfloop.sweep/1); `perfloop sweep --help` for more
+  gestures list [FILE…] [--dir DIR] [--bench PATH]
+                                            recorded and synthetic gestures (perfloop.gesture/1) for a gesture-replay
+                                            scenario: the store's gestures/, each --dir, the adapter's built-in ones
   session start                             the stopping rules (SPEC §5.3) count from here
 
 store: --store DIR, else ${PERFLOOP_HOME:-~/.perfloop}/<app>, app from --app or $PERFLOOP_APP
@@ -52,7 +55,7 @@ struct Args {
   var positional: [String] = []
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
-                                    "patch", "pr", "store", "app", "exp", "against", "guard-tolerance"]
+                                    "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -189,6 +192,7 @@ func run(_ args: Args) throws -> Int32 {
     return r.mismatches == 0 ? 0 : 4
 
   case ("sweep", _): return try SweepCommand.run(Array(CommandLine.arguments.dropFirst(2)))
+  case ("gestures", _): return try GesturesCommand.run(args)
   case ("guards", _):
     guard let id = args.one("exp") ?? args[1] else { throw PLError.usage("usage: perfloop guards --exp ID [--guard-tolerance X --owner]") }
     var tol: Double?

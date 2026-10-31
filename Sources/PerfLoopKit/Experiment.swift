@@ -91,6 +91,11 @@ public struct Side: Codable, Sendable, Equatable {
   public var worstStretch: StretchNote?
   /// Correctness guards the side's run reported (C6), plus, on the candidate, the runner's pairwise `snapshot-diff`.
   public var guards: [GuardResult]?
+  /// A replayed gesture's smoothness (C9, `reps[].smoothness`): content-to-finger error p95 in pt, stalls, jerk p95.
+  /// nil when the scenario replays none.
+  public var positionErrorP95Pt: Double?
+  public var stalls: Double?
+  public var jerkP95: Double?
   public init(objective: Double?, hitch: Double? = nil, longest: Double? = nil, checksFailed: [String] = []) {
     self.objective = objective; hitchTimeRatioMsPerS = hitch; longestStretchMs = longest; self.checksFailed = checksFailed
   }

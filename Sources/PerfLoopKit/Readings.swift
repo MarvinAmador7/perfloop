@@ -29,6 +29,7 @@ public enum Readings {
     s.steadyHz = r.at("frames.steadyHz")?.double; s.lateFrames = r.at("frames.late")?.double
     s.worstStretch = worst(r["worstStretches"]?.array ?? [])
     s.guards = r["guards"]?.array.map { $0.compactMap(GuardResult.init(json:)) }
+    s.positionErrorP95Pt = r.at("smoothness.positionErrorP95Pt")?.double; s.stalls = r.at("smoothness.stalls")?.double; s.jerkP95 = r.at("smoothness.jerkP95")?.double
     return s
   }
 
@@ -41,6 +42,8 @@ public enum Readings {
     value = value ?? med(metric)
     var s = Side(objective: value, hitch: med("hitchTimeRatioMsPerS"), longest: med("longestStretchMs"), checksFailed: v["checksFailed"]?.strings ?? [])
     s.steadyHz = med("steadyHz"); s.lateFrames = med("lateFrames")
+    func smooth(_ k: String) -> Double? { v["smoothness"]?[k]?["median"]?.double }
+    s.positionErrorP95Pt = smooth("positionErrorP95Pt"); s.stalls = smooth("stalls"); s.jerkP95 = smooth("jerkP95")
     return s
   }
 

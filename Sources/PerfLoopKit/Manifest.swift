@@ -23,13 +23,16 @@ public struct Manifest: Codable, Sendable, Equatable {
   public var source: String?
   /// The fixture the adapter runs when none is named (a sweep varies this one unless told otherwise).
   public var defaultFixture: String?
+  /// Gestures the adapter has built in (C9): names its gesture-replay scenario takes for its `gesture` parameter
+  /// without a file (`synthetic:flick-forward`); recorded ones are `perfloop.gesture/1` files.
+  public var gestures: [String]?
 
   public init(app: String, adapter: String, build: Build?, scenarios: [ScenarioEntry], fixtures: [JSONValue] = [], knobs: [KnobEntry] = [], source: String? = "describe") {
     schema = "perfloop.manifest/1"; self.protocol = 1; self.app = app; self.adapter = adapter; self.build = build
     self.scenarios = scenarios; self.fixtures = fixtures; self.knobs = knobs; self.source = source
   }
 
-  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards }
+  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards, gestures }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     schema = try c.decodeIfPresent(String.self, forKey: .schema) ?? "perfloop.manifest/1"
@@ -42,6 +45,7 @@ public struct Manifest: Codable, Sendable, Equatable {
     knobs = try c.decodeIfPresent([KnobEntry].self, forKey: .knobs) ?? []
     hosts = try c.decodeIfPresent([String].self, forKey: .hosts); defaultHost = try c.decodeIfPresent(String.self, forKey: .defaultHost)
     probes = try c.decodeIfPresent([String].self, forKey: .probes); exitCodes = try c.decodeIfPresent([String: Int].self, forKey: .exitCodes)
+    gestures = try? c.decodeIfPresent([String].self, forKey: .gestures)
     source = try c.decodeIfPresent(String.self, forKey: .source)
     defaultFixture = try c.decodeIfPresent(String.self, forKey: .defaultFixture)
     isolationGuards = try? c.decodeIfPresent([String].self, forKey: .isolationGuards)
