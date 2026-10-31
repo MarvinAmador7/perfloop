@@ -93,7 +93,7 @@ extension ReplayPlan {
     return b
   }
 
-  public func path(_ rel: String) -> String { rel.hasPrefix("/") ? rel : (root as NSString).appendingPathComponent(rel) }
+  public func path(_ rel: String) -> String { rel.hasPrefix("/") ? rel : URL(fileURLWithPath: root).appendingPathComponent(rel).path }
   public func build(_ name: String) -> ReplayBuild? { builds.first { $0.name == name } }
 
   /// The `--dry-run` text: what would be imported, run and checked, and what it costs against the session.

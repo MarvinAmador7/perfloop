@@ -11,7 +11,7 @@ final class ImportGuardTests: XCTestCase {
     let files = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
     for f in files {
       guard let text = try? String(contentsOf: f, encoding: .utf8) else { continue }
-      for m in re.matches(in: text, range: NSRange(text.startIndex..., in: text)) { out.append("\(f.lastPathComponent): \((text as NSString).substring(with: m.range))") }
+      for m in re.matches(in: text, range: NSRange(text.startIndex..., in: text)) { out.append("\(f.lastPathComponent): \(Range(m.range, in: text).map { String(text[$0]) } ?? "")") }
     }
     return out
   }

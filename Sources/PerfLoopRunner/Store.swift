@@ -18,14 +18,17 @@ public struct Store {
   /// `--store DIR` > `$PERFLOOP_HOME/<app>` where app is `--app` > `$PERFLOOP_APP` > the only app already in the
   /// home > the bench's manifest (`fallbackApp`).
   public static func locate(store: String?, app: String?, env: [String: String] = ProcessInfo.processInfo.environment, fallbackApp: () -> String? = { nil }) throws -> Store {
-    if let s = store { return Store(root: URL(fileURLWithPath: (s as NSString).expandingTildeInPath)) }
-    let home = URL(fileURLWithPath: ((env["PERFLOOP_HOME"] ?? "~/.perfloop") as NSString).expandingTildeInPath)
+    if let s = store { return Store(root: URL(fileURLWithPath: tilde(s))) }
+    let home = URL(fileURLWithPath: tilde(env["PERFLOOP_HOME"] ?? "~/.perfloop"))
     if let a = app ?? env["PERFLOOP_APP"] { return Store(root: home.appendingPathComponent(a)) }
     let apps = ((try? FileManager.default.contentsOfDirectory(atPath: home.path)) ?? []).filter { !$0.hasPrefix(".") }
     if apps.count == 1 { return Store(root: home.appendingPathComponent(apps[0])) }
     if let a = fallbackApp() { return Store(root: home.appendingPathComponent(a)) }
     throw PLError.usage("which app's store? pass --app NAME or set PERFLOOP_APP (stores in \(home.path): \(apps.isEmpty ? "none" : apps.joined(separator: ", ")))")
   }
+
+  /// `~/x` → the home directory's x (no NSString bridging: the runner builds on Linux).
+  static func tilde(_ p: String) -> String { p == "~" || p.hasPrefix("~/") ? FileManager.default.homeDirectoryForCurrentUser.path + p.dropFirst() : p }
 
   public var ledger: Ledger { Ledger(path: root.appendingPathComponent("ledger.jsonl").path) }
   var builds: URL { root.appendingPathComponent("builds") }
@@ -44,7 +47,7 @@ public struct Store {
 
   /// The executable of a bench given as a file or as a directory holding one.
   public static func executable(at path: String, named: String? = nil) throws -> URL {
-    let u = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
+    let u = URL(fileURLWithPath: tilde(path)).standardizedFileURL
     var isDir: ObjCBool = false
     guard FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir) else { throw PLError.usage("no such bench: \(u.path)") }
     if !isDir.boolValue { return u }
