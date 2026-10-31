@@ -74,13 +74,15 @@ public final class SweepRun {
       do { (raw, values) = try SweepAxis.parse(s) } catch let e as SweepError { throw PLError.usage(e.description) }
       parsed.append((raw, "", values))
     }
-    // The fixture: given, else the first parametric one when a fixture parameter is swept, else the first.
+    // The fixture: given, else the default (or the first parametric one) when a fixture parameter is swept, else the
+    // default, else the first.
     let fixtures = m?.fixtures ?? []
     func entry(_ name: String) -> JSONValue? { fixtures.first { $0["name"]?.string == String(name.split(separator: "@").first ?? "") } }
     func params(_ f: String?) -> [String: JSONValue] { f.flatMap { entry($0)?["parametric"]?.object } ?? [:] }
-    let parametric = fixtures.first { $0["parametric"]?.object?.isEmpty == false }?["name"]?.string
+    let isParametric = { (n: String?) in n.map { entry($0)?["parametric"]?.object?.isEmpty == false } ?? false }
+    let parametric = isParametric(m?.defaultFixture) ? m?.defaultFixture : fixtures.first { $0["parametric"]?.object?.isEmpty == false }?["name"]?.string
     let wantsFixtureParam = parsed.contains { p in p.name.hasPrefix("fixture:") || (m?.knobs.contains { $0.name == p.name } != true && fixtures.contains { $0["parametric"]?[p.name] != nil }) }
-    guard let fixture = o.fixture ?? (wantsFixtureParam ? parametric : nil) ?? fixtures.first?["name"]?.string else { throw PLError.usage("pass --fixture: the bench's manifest names none") }
+    guard let fixture = o.fixture ?? (wantsFixtureParam ? parametric : nil) ?? m?.defaultFixture ?? fixtures.first?["name"]?.string else { throw PLError.usage("pass --fixture: the bench's manifest names none") }
     if let m, !m.fixtures.isEmpty, entry(fixture) == nil { throw PLError.usage("unknown fixture '\(fixture)'; the bench has \(m.fixtureNames.joined(separator: ", "))") }
     let fp = params(fixture)
     for i in parsed.indices {

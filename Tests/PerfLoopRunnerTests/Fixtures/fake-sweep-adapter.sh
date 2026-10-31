@@ -10,7 +10,7 @@ describe)
 { "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakesweep",
   "build": { "commit": "abc1234", "dirty": false, "configuration": "release", "stamp": true, "hash": "sha256:feed" },
   "scenarios": [ { "name": "step", "kind": "smooth", "params": { "steps": "8" }, "objective": "mainThreadCpuMsPerStep", "guards": ["landed"] } ],
-  "fixtures": [ { "name": "crew17" }, { "name": "crew", "parametric": { "agents": [1, 128], "items": [1, 2000] } } ],
+  "defaultFixture": "crew17", "fixtures": [ { "name": "crew17" }, { "name": "crew", "parametric": { "agents": [1, 128], "items": [1, 2000] } } ],
   "knobs": [ { "name": "reel.slide", "type": "choice", "default": "ca", "choices": ["ca", "clip"] } ] }
 JSON
   ;;

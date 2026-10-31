@@ -19,13 +19,15 @@ public struct Manifest: Codable, Sendable, Equatable {
   public var exitCodes: [String: Int]?
   /// "describe" when the adapter printed it; "list" when the runner derived it from an older adapter's `list --json`.
   public var source: String?
+  /// The fixture the adapter runs when none is named (a sweep varies this one unless told otherwise).
+  public var defaultFixture: String?
 
   public init(app: String, adapter: String, build: Build?, scenarios: [ScenarioEntry], fixtures: [JSONValue] = [], knobs: [KnobEntry] = [], source: String? = "describe") {
     schema = "perfloop.manifest/1"; self.protocol = 1; self.app = app; self.adapter = adapter; self.build = build
     self.scenarios = scenarios; self.fixtures = fixtures; self.knobs = knobs; self.source = source
   }
 
-  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source }
+  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     schema = try c.decodeIfPresent(String.self, forKey: .schema) ?? "perfloop.manifest/1"
@@ -39,6 +41,7 @@ public struct Manifest: Codable, Sendable, Equatable {
     hosts = try c.decodeIfPresent([String].self, forKey: .hosts); defaultHost = try c.decodeIfPresent(String.self, forKey: .defaultHost)
     probes = try c.decodeIfPresent([String].self, forKey: .probes); exitCodes = try c.decodeIfPresent([String: Int].self, forKey: .exitCodes)
     source = try c.decodeIfPresent(String.self, forKey: .source)
+    defaultFixture = try c.decodeIfPresent(String.self, forKey: .defaultFixture)
   }
 
   public func scenario(_ name: String) -> ScenarioEntry? { scenarios.first { $0.name == name } }
