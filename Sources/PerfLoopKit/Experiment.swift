@@ -36,6 +36,13 @@ public struct Experiment: Codable, Sendable, Equatable {
   /// The screen on the second fixture after a win: promotion needs it not worse (SPEC §5.5).
   public var secondScreen: SecondFixture?
   public var confirmation: JSONValue?
+  /// The isolation scenarios' checks (C6), run once the full has won: a promotion needs every one to hold.
+  public var isolation: [IsolationGuard]?
+  /// `perfloop guards --exp ID` runs, oldest first.
+  public var guardRuns: [GuardRun]?
+  /// Guard parameters the owner set for this experiment (`perfloop guards --guard-tolerance X --owner`), on top of the
+  /// champion manifest's for every later pair.
+  public var guardParams: [String: JSONValue]?
   public var diff: String?
   public var explain: String?
   public var promotedAt: String?
@@ -82,6 +89,8 @@ public struct Side: Codable, Sendable, Equatable {
   public var steadyHz: Double?
   public var lateFrames: Double?
   public var worstStretch: StretchNote?
+  /// Correctness guards the side's run reported (C6), plus, on the candidate, the runner's pairwise `snapshot-diff`.
+  public var guards: [GuardResult]?
   public init(objective: Double?, hitch: Double? = nil, longest: Double? = nil, checksFailed: [String] = []) {
     self.objective = objective; hitchTimeRatioMsPerS = hitch; longestStretchMs = longest; self.checksFailed = checksFailed
   }
@@ -109,7 +118,11 @@ public struct Stage: Codable, Sendable, Equatable {
   public var band: Double?
   public var guardsPassed: Bool
   public var guardFailures: [String]
-  /// promising | rejected (screen); won | lost | unknown | noDecision (full); error when no pair produced numbers.
+  /// Guards over tolerance that ask the owner (a snapshot unlike the champion's): the stage can't be won, it is
+  /// `needsReview`.
+  public var guardReviews: [String]?
+  /// promising | rejected (screen); won | lost | unknown | noDecision (full); needsReview (either: the objective
+  /// would pass but a guard asks the owner); error when no pair produced numbers.
   public var verdict: String
   public var reasons: [String]
   /// The candidate is worse than the champion beyond the band (full: and significantly). Never set by noise alone.

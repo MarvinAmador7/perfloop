@@ -29,6 +29,10 @@ perfloop: an agent-first performance loop (design/perf-loop/SPEC.md; the adapter
                                             the champion moves to the experiment's build
   exp abandon ID [--note "…"]
   exp replay PLAN.json [--dry-run | --go]   a past session as experiments (SPEC §6.1); --go opens windows
+  guards --exp ID [--guard-tolerance X --owner]
+                                            the correctness guards alone (C6): a fresh pair of the experiment's scenario
+                                            and the isolation scenarios; a failure demotes it, a snapshot over tolerance
+                                            asks the owner; only the owner sets a tolerance (never inside exp)
   explain exp/ID                            exp/ID/explain.txt: everything needed to decide the next step
   causes RESULT.json [--json]               why bodies ran: the model mutations each step's and long stretch's bodies
                                             followed (the adapter's mutation records, CAPABILITIES.md C7)
@@ -48,7 +52,7 @@ struct Args {
   var positional: [String] = []
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
-                                    "patch", "pr", "store", "app", "exp", "against"]
+                                    "patch", "pr", "store", "app", "exp", "against", "guard-tolerance"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -83,6 +87,11 @@ func run(_ args: Args) throws -> Int32 {
   }
   func show(_ e: Experiment, _ l: Loop) { out(json ? PLJSON.encode(e) : l.explain(e)) }
 
+  // Guard tolerances come from the champion's manifest; the owner may try another one with `guards`, never an
+  // experiment's verbs (C6, anti-Goodhart).
+  if args[0] == "exp" && args.has("guard-tolerance") {
+    throw PLError.refused("--guard-tolerance is refused inside exp: guards and their tolerances come from the champion's manifest (the owner: perfloop guards --exp ID --guard-tolerance X --owner)")
+  }
   switch (args[0] ?? "help", args[1]) {
   case ("help", _), ("-h", _): out(help); return 0
 
@@ -180,6 +189,19 @@ func run(_ args: Args) throws -> Int32 {
     return r.mismatches == 0 ? 0 : 4
 
   case ("sweep", _): return try SweepCommand.run(Array(CommandLine.arguments.dropFirst(2)))
+  case ("guards", _):
+    guard let id = args.one("exp") ?? args[1] else { throw PLError.usage("usage: perfloop guards --exp ID [--guard-tolerance X --owner]") }
+    var tol: Double?
+    if let t = args.one("guard-tolerance") { guard let x = Double(t), x >= 0 else { throw PLError.usage("--guard-tolerance takes a share of pixels, e.g. 0.01") }; tol = x }
+    let l = try loop()
+    let (e, r) = try l.guards(id, tolerance: tol)
+    if json { out(PLJSON.encode(r)) } else {
+      out("guards for exp \(e.id) (\(e.scenario) on \(e.fixture))\(r.override.map { ", \($0)" } ?? ""): \(r.pass ? "PASS" : r.failures.isEmpty ? "NEEDS REVIEW" : "FAIL") → \(e.state.rawValue)")
+      Explain.guardLines(Stage(metric: "-", pairs: [r.pair], verdict: "-")).forEach(out)
+      for i in r.isolation { out("  isolation \(i.scenario): \(i.pass ? "holds" : i.failures.joined(separator: "; "))") }
+      for f in r.failures + r.reviews { out("  · " + f) }
+    }
+    return r.pass ? 0 : 6
 
   case ("explain", _):
     guard let id = args[1] else { throw PLError.usage("usage: perfloop explain exp/ID") }

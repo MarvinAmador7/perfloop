@@ -19,6 +19,8 @@ public final class Loop {
   public var env = ProcessInfo.processInfo.environment
   /// Who is acting, for the ledger: agent unless the owner said so (`--owner`).
   public var by = "agent"
+  /// Guard parameters on top of the champion manifest's: only `perfloop guards --guard-tolerance` (the owner's) sets one.
+  var guardOverride: [String: JSONValue] = [:]
 
   public init(store: Store) { self.store = store }
 
@@ -176,21 +178,21 @@ public final class Loop {
   /// The champion manifest's view of the scenario: the objective and the guards. Never the candidate's (SPEC §5.5).
   func rule(_ e: Experiment, _ s: Sides) -> (metric: String, guards: [String]) {
     let sc = s.champion.manifest?.scenario(e.scenario)
-    return (sc?.objective ?? "mainThreadCpuMsPerStep", sc?.guards ?? ["checks"])
+    return (sc?.objective ?? "mainThreadCpuMsPerStep", GuardNames.correctness(sc))
   }
 
   /// Pairs `0..<count` of a stage, measuring only the ones without a usable record (resume).
-  func pairs(_ e: Experiment, stage: String, fixture: String, count: Int, sides s: Sides, metric: String) throws -> [Pair] {
+  func pairs(_ e: Experiment, stage: String, fixture: String, count: Int, sides s: Sides, metric: String, scenario: String? = nil) throws -> [Pair] {
     let dir = store.expDir(e.id).appendingPathComponent(stage)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     var out: [Pair] = []
     for i in 0..<count {
       let rec = dir.appendingPathComponent("p\(i + 1).pair.json")
       if let p = try? PLJSON.read(Pair.self, path: rec.path), Acceptance.unusable(p) == nil { out.append(p); continue }
-      var p = try measure(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric)
+      var p = try measure(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric, scenario: scenario)
       if Acceptance.unusable(p) != nil, p.failure != nil {
         log("exp \(e.id) \(stage) pair \(i + 1): \(p.failure!); once more")
-        p = try measure(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric)
+        p = try measure(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric, scenario: scenario)
       }
       try PLJSON.write(p, path: rec.path)
       out.append(p)
@@ -198,25 +200,31 @@ public final class Loop {
     return out
   }
 
-  func measure(_ e: Experiment, index i: Int, stage: String, fixture: String, dir: URL, sides s: Sides, metric: String) throws -> Pair {
+  func measure(_ e: Experiment, index i: Int, stage: String, fixture: String, dir: URL, sides s: Sides, metric: String, scenario: String? = nil) throws -> Pair {
     let first = championFirst("\(e.id)/\(stage)", i), order = first ? "AB" : "BA"
     let raw = dir.appendingPathComponent("p\(i + 1).json")
-    log("exp \(e.id) \(stage) pair \(i + 1) (\(first ? "champion first" : "candidate first")) on \(fixture)")
+    let sc = scenario ?? e.scenario
+    // The champion's guards, asked of both sides; their artifacts under the pair's directory (Guards.swift).
+    let g = guardRule(e, s, scenario: sc), pdir = dir.appendingPathComponent("p\(i + 1)")
+    log("exp \(e.id) \(stage) pair \(i + 1) (\(first ? "champion first" : "candidate first")) on \(fixture)\(sc == e.scenario ? "" : ", scenario \(sc)")")
     let ok: Set<Int32> = [0, 3, 4, 5]                      // pass, budget failed, regression, untrusted: all carry numbers
     let params = e.params ?? [:]
     if e.via == "run" {
       var got: [String: JSONValue] = ["order": .string(order)]
       var failure: String?
       for (label, entry, knobs) in first ? [("a", s.champion, s.championKnobs), ("b", s.candidate, s.candidateKnobs)] : [("b", s.candidate, s.candidateKnobs), ("a", s.champion, s.championKnobs)] {
-        let o = try Adapter(exe: entry.executable).run(scenario: e.scenario, fixture: fixture, params: params, knobs: knobs)
+        let o = try Adapter(exe: entry.executable).run(scenario: sc, fixture: fixture, params: sc == e.scenario ? params : [:], knobs: knobs, env: guardEnv(g, dir: pdir.appendingPathComponent(label)))
         if let v = o.json, ok.contains(o.status) { got[label] = v } else { failure = "\(label == "a" ? "champion" : "candidate") run exited \(o.status)"; break }
       }
       try PLJSON.write(JSONValue.object(got), path: raw.path)
       let a = got["a"].flatMap { Readings.sides(run: $0, metric: metric).first }, b = got["b"].flatMap { Readings.sides(run: $0, metric: metric).first }
-      return Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure ?? (a == nil || b == nil ? "no result" : nil))
+      var p = Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure ?? (a == nil || b == nil ? "no result" : nil))
+      judgeSnapshots(&p, g, dir: pdir, sides: s)
+      return p
     }
     let firstExe = first ? s.champion.executable : s.candidate.executable, secondExe = first ? s.candidate.executable : s.champion.executable
-    let o = try Adapter(exe: s.champion.executable).ab(first: firstExe, second: secondExe, scenario: e.scenario, fixture: fixture, params: params, out: raw.path)
+    let o = try Adapter(exe: s.champion.executable).ab(first: firstExe, second: secondExe, scenario: sc, fixture: fixture, params: sc == e.scenario ? params : [:], out: raw.path,
+                                                      env: guardEnv(g, dir: pdir))
     let v = o.json ?? (try? PLJSON.read(JSONValue.self, path: raw.path))
     guard let v, ok.contains(o.status) else { return Pair(index: i, order: order, result: store.rel(raw), a: Side(objective: nil), b: Side(objective: nil), failure: "ab exited \(o.status)") }
     if !FileManager.default.fileExists(atPath: raw.path) { try PLJSON.write(v, path: raw.path) }
@@ -228,7 +236,9 @@ public final class Loop {
       if let got = Readings.build(ab: v, label: label)?.hash, let want, got != want { failure = "ab ran \(Build.short(got)) as \(label), the store has \(Build.short(want))" }
     }
     if a?.objective == nil || b?.objective == nil, failure == nil { failure = "the ab output has no \(metric) (an adapter older than the objective: use --via run)" }
-    return Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure)
+    var p = Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure)
+    judgeSnapshots(&p, g, dir: pdir, sides: s)
+    return p
   }
 
   // MARK: screen, full, promote
@@ -241,7 +251,8 @@ public final class Loop {
     let ps = try pairs(e, stage: "screen", fixture: e.fixture, count: Acceptance.screenPairs, sides: s, metric: r.metric)
     let st = Acceptance.screen(ps, metric: r.metric, guards: r.guards)
     e.screen = st
-    if st.verdict == "error" { e.notes.append("screen: no usable pair; rerun perfloop exp screen \(e.id)") } else { e.state = st.verdict == "promising" ? .promising : .rejected }
+    if st.verdict == "error" { e.notes.append("screen: no usable pair; rerun perfloop exp screen \(e.id)") }
+    else { e.state = st.verdict == "promising" ? .promising : st.verdict == "needsReview" ? .needsReview : .rejected }
     try record(e, st)
     return e
   }
@@ -249,7 +260,9 @@ public final class Loop {
   public func full(_ id: String, force: Bool = false) throws -> Experiment {
     var e = try store.experiment(id)
     if e.state == .rejected && !force { throw PLError.refused("exp \(e.id) was rejected by its screen; --force to run a full anyway") }
-    guard [.promising, .full, .rejected].contains(e.state) || (e.state == .lost && force) else {
+    // A screen the owner cleared of its snapshot review goes back to promising (perfloop guards --owner); the owner may
+    // also run the full on a screen that still asks for review.
+    guard [.promising, .full, .rejected].contains(e.state) || (e.state == .lost && force) || (e.state == .needsReview && e.full == nil && by == "owner") else {
       if e.full != nil { log("exp \(e.id) already has a full (\(e.full!.verdict))"); return e }
       throw PLError.usage("exp \(e.id) is \(e.state.rawValue): screen it first")
     }
@@ -271,9 +284,14 @@ public final class Loop {
         let ps = try pairs(e, stage: "second", fixture: sf, count: Acceptance.screenPairs, sides: s, metric: r.metric)
         let (s2, ok) = Acceptance.notWorse(ps, metric: r.metric, guards: r.guards)
         e.secondScreen = SecondFixture(fixture: sf, stage: s2, notWorse: ok)
-        if !ok { e.state = .lost; e.notes.append("won on \(e.fixture) but worse on \(sf): over-fitting one fixture (SPEC §5.5)") }
+        if !ok { e.state = (s2.guardReviews ?? []).isEmpty || !s2.guardsPassed ? .lost : .needsReview; e.notes.append("won on \(e.fixture) but worse on \(sf) (or a guard there): over-fitting one fixture (SPEC §5.5)") }
       }
-    case "noDecision": e.state = .needsReview
+      // The isolation scenarios' checks hold on the candidate too, whatever this experiment climbs (C6).
+      if e.state == .won {
+        e.isolation = try isolation(e, sides: s)
+        if let bad = e.isolation?.first(where: { !$0.pass }) { e.state = .lost; e.notes.append("isolation broken in \(bad.scenario): " + bad.failures.joined(separator: "; ")) }
+      }
+    case "noDecision", "needsReview": e.state = .needsReview
     case "error": e.state = .promising; e.notes.append("full: no usable pairs; rerun perfloop exp full \(e.id)")
     default: e.state = .lost
     }
@@ -307,6 +325,16 @@ public final class Loop {
     if let s = e.secondScreen, !s.notWorse { refusals.append("worse on the second fixture \(s.fixture)") }
     if e.secondFixture != nil && e.secondFixture != e.fixture && e.secondScreen == nil { refusals.append("no screen on the second fixture \(e.secondFixture!)") }
     if e.behaviourChange { ownerNeeded.append("a declared behaviour change") }
+    // Guards (C6): a full stage, the isolation scenarios holding (run now if the full predates them), the latest
+    // guards re-run passing.
+    if e.full == nil && e.kind != "baseline" { refusals.append("no full stage: perfloop exp full \(e.id)") }
+    if refusals.isEmpty, e.isolation == nil, !(cEntry.manifest?.isolationGuards ?? []).isEmpty, let s = try? sides(e) {
+      e.isolation = try isolation(e, sides: s); try store.save(e)
+    }
+    for i in e.isolation ?? [] where !i.pass { refusals.append("isolation broken in \(i.scenario): " + i.failures.joined(separator: "; ")) }
+    if let r = e.guardRuns?.last, !r.pass {
+      if r.failures.isEmpty { ownerNeeded.append("the last guards re-run asks for review") } else { refusals.append("the last guards re-run failed: " + r.failures.joined(separator: "; ")) }
+    }
     if let cand = try? store.entry(e.build?.hash ?? ""), let cm = cand.manifest, let km = cEntry.manifest, cm.contract != km.contract {
       ownerNeeded.append("the candidate's manifest changes scenarios, objectives, guards or fixtures (they are their own PR)")
     }
