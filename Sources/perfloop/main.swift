@@ -55,7 +55,8 @@ runners and the queue (C10): where windowed reps run; results never mix runners
                                             starts after --until; ssh:// copies the build there and opens the window
                                             in the logged-in user's session (--launch direct: plain ssh)
   runner check R | runner clean R           the runner's machine, session and store there; clean removes that store
-  ssh runner flags: --accept-new-host-key, --remote-env K=V, --launch gui|direct; local: --idle-from FILE (testing)
+  ssh runner flags: --accept-new-host-key, --remote-env K=V, --launch gui|direct
+  local runner flags: --lock DIR (a mkdir lock held around each rep), --busy-apps A,B, --idle-from FILE (testing)
 
 store: --store DIR, else ${PERFLOOP_HOME:-~/.perfloop}/<app>, app from --app or $PERFLOOP_APP
 exit codes  0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner needed)
@@ -66,7 +67,7 @@ struct Args {
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
                                     "patch", "pr", "store", "app", "exp", "against", "guard-tolerance",
-                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps"]
+                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -311,6 +312,7 @@ func runnerOptions(_ args: Args, gatedByDefault: Bool) throws -> RunnerOptions {
   o.idleFrom = args.one("idle-from") ?? ProcessInfo.processInfo.environment["PERFLOOP_IDLE_FROM"]
   o.acceptNewHostKey = args.has("accept-new-host-key")
   o.launch = args.one("launch")
+  o.lock = args.one("lock")
   for kv in args.all("remote-env") { let p = kv.split(separator: "=", maxSplits: 1).map(String.init); if p.count == 2 { o.remoteEnv[p[0]] = p[1] } }
   return o
 }

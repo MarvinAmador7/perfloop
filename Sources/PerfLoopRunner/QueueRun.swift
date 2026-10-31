@@ -64,9 +64,17 @@ extension Loop {
         try q.append(QueueEvent(item: it.id, state: "running", experiment: it.experiment, stage: it.stage, runner: r.name, note: "pid \(getpid()) on \(id.line)"))
         log("queue \(it.id): exp \(it.experiment) \(it.stage) on \(id.line)")
         let e = try runStage(it)
-        let line = "exp \(e.id) → \(e.state.rawValue)" + ((e.full ?? e.screen).map { " (\($0.verdict))" } ?? "")
-        try q.append(QueueEvent(item: it.id, state: "done", runner: r.name, note: line))
-        res.lines.append("\(it.id): \(line) on \(id.line)"); res.ran += 1
+        let last = e.full ?? e.screen
+        let line = "exp \(e.id) → \(e.state.rawValue)" + (last.map { " (\($0.verdict))" } ?? "")
+        if last?.verdict == "error" {
+          // No pair produced numbers: the runner can't run this bench (or the stage); say why and keep the rest of the queue.
+          let why = line + ": " + (last?.reasons.prefix(3).joined(separator: "; ") ?? "")
+          try q.append(QueueEvent(item: it.id, state: "failed", runner: r.name, note: why))
+          res.lines.append("\(it.id): failed: \(why)")
+        } else {
+          try q.append(QueueEvent(item: it.id, state: "done", runner: r.name, note: line))
+          res.lines.append("\(it.id): \(line) on \(id.line)"); res.ran += 1
+        }
       } catch let s as RunnerStop {
         try q.append(QueueEvent(item: it.id, state: "stopped", runner: r.name, note: "\(s); its stage resumes at the first missing pair"))
         res.stopped = s.description; res.lines.append("\(it.id): stopped: \(s)")

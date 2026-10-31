@@ -16,10 +16,12 @@ final class RunnerTests: FakeBenchCase {
     try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: remoteHome, withIntermediateDirectories: true)
     try? FileManager.default.createSymbolicLink(at: bin.appendingPathComponent("open"), withDestinationURL: Self.fixtures.appendingPathComponent("fake-open.sh"))
+    try? FileManager.default.createSymbolicLink(at: bin.appendingPathComponent("ioreg"), withDestinationURL: Self.fixtures.appendingPathComponent("fake-ioreg.sh"))
+    setenv("FAKE_REMOTE_LOCKED", tmp.appendingPathComponent("mini-locked").path, 1)
     setenv("FAKE_REMOTE_HOME", remoteHome.path, 1); setenv("FAKE_BIN", bin.path, 1); setenv("FAKE_SSH_LOG", sshLog.path, 1)
   }
   override func tearDownWithError() throws {
-    for k in ["FAKE_REMOTE_HOME", "FAKE_BIN", "FAKE_SSH_LOG", "FAKE_SSH_FAIL"] { unsetenv(k) }
+    for k in ["FAKE_REMOTE_HOME", "FAKE_BIN", "FAKE_SSH_LOG", "FAKE_SSH_FAIL", "FAKE_REMOTE_LOCKED", "FAKE_REMOTE_IDLE"] { unsetenv(k) }
     try super.tearDownWithError()
   }
 
@@ -27,7 +29,7 @@ final class RunnerTests: FakeBenchCase {
     let r = try XCTUnwrap(try Runners.make(spec, store: store) as? SSHRunner)
     r.ssh = Self.fixtures.appendingPathComponent("fake-ssh.sh").path
     r.rsync = Self.fixtures.appendingPathComponent("fake-rsync.sh").path
-    r.wake = false; r.launch = launch
+    r.wake = false; r.launch = launch; r.waitPoll = 0.1; r.poll = 0.1
     return r
   }
   func sshCalls(_ prefix: String) -> [String] {
@@ -87,6 +89,40 @@ final class RunnerTests: FakeBenchCase {
     XCTAssertEqual(try loop.queueRun(on: try sshRunner(), until: nil).lines, ["nothing queued for ssh://fake-mini"])
   }
 
+  func testALockedRemoteScreenWaitsUntilUnlocked() throws {
+    try baseline()
+    let e = try candidate(); try loop.queueAdd(e.id, stage: "screen")
+    let locked = tmp.appendingPathComponent("mini-locked")
+    FileManager.default.createFile(atPath: locked.path, contents: Data())
+    XCTAssertTrue(try sshRunner().check().contains { $0.hasPrefix("screen: LOCKED") })
+    let res = try loop.queueRun(on: try sshRunner(), until: Date().addingTimeInterval(1))
+    XCTAssertNotNil(res.stopped)
+    XCTAssertTrue(adapterCalls("ab").isEmpty)
+    XCTAssertTrue(loop.queue.items()[0].lastWait?.contains("its screen is locked") == true, "\(loop.queue.items())")
+    // Unlocked a moment later: the waiting runner goes on by itself.
+    DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { try? FileManager.default.removeItem(at: locked) }
+    XCTAssertEqual(try loop.queueRun(on: try sshRunner(), until: nil).ran, 1)
+    XCTAssertEqual(adapterCalls("ab").count, 3)
+  }
+
+  func testRemoteIdleGateAbortsARepOnInputThere() throws {
+    try baseline(["SLEEP": "2"])
+    let e = try candidate(values: ["SLEEP": "2"])
+    let r = try sshRunner(); r.gate = IdleGate(threshold: 5)
+    setenv("FAKE_REMOTE_IDLE", "100", 1)
+    var waits: [String] = []
+    r.onWait = { waits.append($0) }
+    var once = false
+    r.log = { line in if line.contains("copying") { return }; if !once, line.hasPrefix("ssh://fake-mini: mar") { once = true } }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) { setenv("FAKE_REMOTE_IDLE", "0.5", 1) }       // someone sits down at the mini
+    DispatchQueue.global().asyncAfter(deadline: .now() + 2.5) { setenv("FAKE_REMOTE_IDLE", "100", 1) }       // and leaves
+    loop.runner = r
+    let x = try loop.screen(e.id)
+    XCTAssertEqual(x.state, .promising, "\(x.screen?.reasons ?? [])")
+    XCTAssertTrue(waits.contains { $0.contains("interrupted on fake-mini") }, "\(waits)")
+    XCTAssertGreaterThanOrEqual(x.screen?.pairs.compactMap(\.interruptions).reduce(0, +) ?? 0, 1)
+  }
+
   func testDirectLaunchAndRunVia() throws {
     try baseline()
     let e = try candidate()
@@ -110,6 +146,18 @@ final class RunnerTests: FakeBenchCase {
     setenv("FAKE_SSH_FAIL", "timeout", 1)
     let res = try loop.queueRun(on: try sshRunner(), until: nil)
     XCTAssertEqual(loop.queue.items().map(\.state), ["failed"]); XCTAssertNotNil(res.stopped)
+  }
+
+  func testPathsInEverySpellingOfTheStoreMapToTheRunners() throws {
+    // /private/tmp/x and /tmp/x are one directory; Foundation standardizes the first into the second.
+    store = Store(root: URL(fileURLWithPath: "/private/tmp/pl-\(UUID().uuidString)/home/fake-app"))
+    let r = try sshRunner(); r.remoteRoot = "/Users/mar/.perfloop/fake-app"
+    let p = store.root.path
+    XCTAssertEqual(r.map(p + "/builds/ab/X"), "/Users/mar/.perfloop/fake-app/builds/ab/X")
+    XCTAssertEqual(r.map(String(p.dropFirst(8)) + "/exp/0001/screen"), "/Users/mar/.perfloop/fake-app/exp/0001/screen")
+    XCTAssertEqual(r.map("--out=" + p + "/exp/1/p1.json"), "--out=/Users/mar/.perfloop/fake-app/exp/1/p1.json")
+    XCTAssertEqual(r.map("/elsewhere/x"), "/elsewhere/x")
+    XCTAssertEqual(r.unmap("{\"a\": \"/Users/mar/.perfloop/fake-app/exp/1/p1.json\"}"), "{\"a\": \"\(p)/exp/1/p1.json\"}")
   }
 
   func testRunnerSpecs() {

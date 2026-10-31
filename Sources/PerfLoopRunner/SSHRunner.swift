@@ -41,20 +41,30 @@ public final class SSHRunner: Runner {
 
   struct Info { var home = "", model: String?, os: String?, host: String?, user: String?, console: String?, arch: String? }
   var info: Info?
-  public private(set) var remoteRoot = ""
+  public internal(set) var remoteRoot = ""
   var prepared: [String: String] = [:]
   let controlPath: String
 
   public init(spec: RunnerSpec, user: String?, host: String, port: Int?, root: String?, store: Store) {
     self.spec = spec; self.user = user; self.host = host; self.port = port; rootOverride = root; self.store = store
-    // A unix socket path is at most 104 bytes: %C is 40 hex characters.
+    // A unix socket path is at most 104 bytes: %C is 40 hex characters, and ssh adds a 17-character suffix while it
+    // binds. macOS's per-user temporary directory is already ~49.
     let t = FileManager.default.temporaryDirectory.path
-    controlPath = (t.count + 48 < 100 ? t : "/tmp") + "/plssh-%C"
+    controlPath = (t.count + 64 < 104 ? t : "/tmp") + "/plssh-%C"
   }
 
   public var name: String { spec.name }
   var target: String { user.map { "\($0)@\(host)" } ?? host }
-  var localRoot: String { store.root.standardizedFileURL.path }
+  /// The store root as the loop writes its paths (what comes back is rewritten to this).
+  var localRoot: String { store.root.path }
+  /// Every spelling of the store root a path may arrive in: as given, standardized (Foundation drops /private from
+  /// /private/tmp and /private/var), with symlinks resolved, with and without /private. Longest first.
+  var localRoots: [String] {
+    let base = [store.root.path, store.root.standardizedFileURL.path, store.root.resolvingSymlinksInPath().path]
+    var all = Set(base)
+    for b in base { if b.hasPrefix("/private/") { all.insert(String(b.dropFirst(8))) } else if ["/tmp/", "/var/", "/etc/"].contains(where: b.hasPrefix) { all.insert("/private" + b) } }
+    return all.filter { $0.count > 1 }.sorted { $0.count > $1.count }
+  }
 
   // MARK: ssh plumbing
 
@@ -128,9 +138,13 @@ public final class SSHRunner: Runner {
 
   /// A local path under the store root, as the runner's store has it.
   public func map(_ s: String) -> String {
-    guard !remoteRoot.isEmpty, remoteRoot != localRoot else { return s }
-    if s == localRoot { return remoteRoot }
-    return s.replacingOccurrences(of: localRoot + "/", with: remoteRoot + "/")
+    guard !remoteRoot.isEmpty else { return s }
+    var t = s
+    for r in localRoots where r != remoteRoot {
+      if t == r { return remoteRoot }
+      t = t.replacingOccurrences(of: r + "/", with: remoteRoot + "/")
+    }
+    return t
   }
   /// The reverse, for what comes back.
   public func unmap(_ s: String) -> String {
@@ -223,9 +237,12 @@ public final class SSHRunner: Runner {
 
   public func run(_ exe: String, _ args: [String], env: [String: String], workDir: URL) throws -> Adapter.Output {
     try connect()
-    if let gate { try waitForIdle(gate) }
+    // A window behind the lock screen is occluded and never active: the rep would be untrusted. Wait for the screen to
+    // be unlocked (and, with --idle, for the Mac to be idle).
+    if let gate { try waitForIdle(gate) } else if launch == .gui { try waitForUnlock() }
     if let d = deadline, Date() >= d { throw RunnerStop.deadline(d) }
-    let rwork = map(workDir.standardizedFileURL.path), ctl = rwork + "/.perfloop-run"
+    let rwork = map(workDir.path), ctl = rwork + "/.perfloop-run"
+    guard rwork.hasPrefix(remoteRoot + "/") else { throw PLError.harness("\(name): \(workDir.path) isn't under the store \(localRoot)") }
     let rexe = map(exe), rargs = args.map(map)
     let renv = env.mapValues(map).merging(remoteEnv) { $1 }
     let exports = renv.sorted { $0.key < $1.key }.map { "export \($0.key)=\(Self.q($0.value))" }.joined(separator: "\n")
@@ -254,7 +271,7 @@ public final class SSHRunner: Runner {
       \(wakeCmd)tail -n +1 -f "$c/err" >&2 & t=$!
       o=$(open -W -n -g \(Self.q(launcherApp)) --args "$c/rep.sh" 2>&1); s=$?
       i=0; while [ ! -f "$c/status" ] && [ $i -lt 20 ]; do sleep 0.5; i=$((i+1)); done
-      sleep 0.3; kill $t 2>/dev/null
+      sleep 0.3; kill -PIPE $t 2>/dev/null
       if [ ! -f "$c/status" ]; then echo "perfloop-runner: the launcher didn't run the rep (open exited $s: $o): is \(info?.user ?? "the user") logged in at the console?" >&2; exit 2; fi
       cat "$c/out"; exit $(cat "$c/status")
       """
@@ -293,20 +310,40 @@ public final class SSHRunner: Runner {
     """, check: false)
   }
 
-  /// The remote Mac's HIDIdleTime, through ioreg.
+  /// The remote Mac's HIDIdleTime and whether its console session's screen is locked, both through ioreg (no GUI
+  /// session needed): `IOConsoleUsers` carries `CGSSessionScreenIsLocked`.
   func remoteIdle() throws -> IdleReading {
-    let r = try remote("ioreg -c IOHIDSystem -d 4 -r -k HIDIdleTime 2>/dev/null | awk '/HIDIdleTime/ { print $NF / 1000000000; exit }'", check: false)
-    return IdleReading(idle: Double(r.out.trimmingCharacters(in: .whitespacesAndNewlines)))
+    let r = try remote("""
+    ioreg -c IOHIDSystem -d 4 -r -k HIDIdleTime 2>/dev/null | awk '/HIDIdleTime/ { print "idle=" $NF / 1000000000; exit }'
+    if ioreg -n Root -d1 -a 2>/dev/null | plutil -extract IOConsoleUsers xml1 -o - - 2>/dev/null | grep -A1 CGSSessionScreenIsLocked | grep -q true; then echo locked=1; else echo locked=0; fi
+    """, check: false)
+    return IdleReading(text: r.out)
+  }
+
+  /// Seconds between readings while the runner waits there.
+  public var waitPoll = 15.0
+
+  func waitForUnlock() throws {
+    var said = false
+    while try remoteIdle().locked == true {
+      if !said { let t = "waiting on \(host): its screen is locked: a window behind the lock screen is never active (unlock it, or turn off the screen lock there)"; log(t); onWait(t); said = true }
+      if let d = deadline, Date() >= d { throw RunnerStop.deadline(d) }
+      Thread.sleep(forTimeInterval: waitPoll)
+    }
+    if said { log("\(host): unlocked: starting the rep") }
   }
 
   func waitForIdle(_ gate: IdleGate) throws {
     var lastKind: String?
     while true {
-      if let d = deadline, Date() >= d { throw RunnerStop.deadline(d) }
       let r = try remoteIdle()
       guard let w = gate.wait(r) else { return }
-      if w.kind != lastKind { let t = "waiting on \(host): " + w.text(threshold: gate.threshold); log(t); onWait(t); lastKind = w.kind }
-      Thread.sleep(forTimeInterval: 15)
+      if w.kind != lastKind {
+        let t = "waiting on \(host): " + (w == .locked ? "its screen is locked: a window behind the lock screen is never active (unlock it, or turn off the screen lock there)" : w.text(threshold: gate.threshold))
+        log(t); onWait(t); lastKind = w.kind
+      }
+      if let d = deadline, Date() >= d { throw RunnerStop.deadline(d) }
+      Thread.sleep(forTimeInterval: waitPoll)
     }
   }
 
@@ -314,7 +351,7 @@ public final class SSHRunner: Runner {
   /// (results, guard records), moves it in, and empties the directory there: the runner keeps builds, not results.
   public func fetch(_ workDir: URL) throws {
     try connect()
-    let local = workDir.standardizedFileURL
+    let local = workDir
     let rwork = map(local.path)
     let fm = FileManager.default
     let tmp = local.deletingLastPathComponent().appendingPathComponent(".fetch-\(UUID().uuidString)")
@@ -334,6 +371,7 @@ public final class SSHRunner: Runner {
       try? fm.removeItem(at: dst)
       try fm.moveItem(at: src, to: dst)
     }
+    guard rwork.hasPrefix(remoteRoot + "/") else { throw PLError.harness("\(name): \(local.path) isn't under the store \(localRoot)") }
     if rwork.hasPrefix(remoteRoot + "/exp/") { try remote("rm -rf \(Self.q(rwork))", check: false) }
   }
 
@@ -351,7 +389,11 @@ public final class SSHRunner: Runner {
     let n = r.out.split(separator: "\n").map(String.init)
     o.append("store: \(remoteRoot) (\(n.first.flatMap(Int.init).map { "\($0 / 1024) MB" } ?? "?"), \(n.dropFirst().first ?? "0") build(s))")
     if launch == .gui { o.append("launch: through LaunchServices (open -W -n \(launcherApp))") } else { o.append("launch: direct over ssh (no GUI session: windows won't open)") }
-    if let idle = try? remoteIdle(), let s = idle.idle { o.append("idle: \(Int(s)) s since the last input there") }
+    if let idle = try? remoteIdle() {
+      if let s = idle.idle { o.append("idle: \(Int(s)) s since the last input there") }
+      if idle.locked == true { o.append("screen: LOCKED: a window there is occluded and never active, so reps wait until it is unlocked (or the screen lock is turned off there)") }
+      else if idle.locked == false { o.append("screen: unlocked") }
+    }
     return o
   }
 
