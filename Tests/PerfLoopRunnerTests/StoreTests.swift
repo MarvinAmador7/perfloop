@@ -36,6 +36,9 @@ final class StoreTests: FakeBenchCase {
     XCTAssertThrowsError(try Store.locate(store: nil, app: nil, env: ["PERFLOOP_HOME": home.path]))   // no app yet
     let base = try baseline()
     XCTAssertEqual(try Store.locate(store: nil, app: nil, env: ["PERFLOOP_HOME": home.path]).root.path, store.root.path)  // the only one
+    // importedAt has 1 s resolution: within one second the builds tie, and the order falls to directory listing
+    // order (their hashes), which put the champion among the newest once the fake adapter's text changed.
+    Thread.sleep(forTimeInterval: 1.1)
     for i in 0..<4 { _ = try store.add(try bench("b\(i)", ["CPU": "\(30 + i)"])) }
     let removed = store.gc(keep: 2)
     XCTAssertEqual(removed.count, 2)                                    // the champion is kept although it is the oldest
