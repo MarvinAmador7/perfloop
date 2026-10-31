@@ -33,6 +33,9 @@ perfloop: an agent-first performance loop (design/perf-loop/SPEC.md; the adapter
   diff A B [--exp ID] [--allow-stale]       the adapter's differential call tree; refuses traces of other builds
   trace register TRACE --build HASH         record which build a trace was recorded on (the path only)
   ledger [--json]                           every state change, oldest first
+  sweep SCENARIO --set NAME=4..64/4 [--set …] [--bench PATH] [--fixture F] [--reps N] [--dry-run] [--lock DIR] [--json]
+                                            a grid over fixture parameters, knobs and params: the objective per point
+                                            and fitted cost curves (perfloop.sweep/1); `perfloop sweep --help` for more
   session start                             the stopping rules (SPEC §5.3) count from here
 
 store: --store DIR, else ${PERFLOOP_HOME:-~/.perfloop}/<app>, app from --app or $PERFLOOP_APP
@@ -174,8 +177,11 @@ func run(_ args: Args) throws -> Int32 {
     out("replay: \(r.mismatches == 0 ? "every step as expected" : "\(r.mismatches) step(s) not as expected")")
     return r.mismatches == 0 ? 0 : 4
 
+  case ("sweep", _): return try SweepCommand.run(Array(CommandLine.arguments.dropFirst(2)))
+
   case ("explain", _):
     guard let id = args[1] else { throw PLError.usage("usage: perfloop explain exp/ID") }
+    if SweepCommand.isSweep(id) { out(Sweep.text(try SweepCommand.read(id))); return 0 }
     let l = try loop(); out(l.explain(try l.store.experiment(id)).trimmingCharacters(in: .newlines)); return 0
 
   case ("diff", _):
