@@ -7,13 +7,16 @@ import PerfLoopKit
 /// toolchain, no perfloop. The store directory there is `~/.perfloop/<app>` unless the URL names one; the runner touches
 /// nothing outside it (and `~/.perfloop/.runner`, where its launcher app lives).
 ///
-/// Windows over SSH: a process started by sshd is in a background login session, not the console user's GUI session,
-/// so it can't reach the WindowServer. With `launch = .gui` (the default) the runner starts the adapter through
-/// LaunchServices instead: `open -W -n` on a tiny launcher app (a shell script as its executable) that runs the
-/// rep's script. LaunchServices starts it in the GUI session of the logged-in user, so the adapter's windows open on
-/// that Mac's screen, as if started from its Terminal. It needs that user logged in at the console (checked: the
-/// owner of /dev/console), the display awake (`caffeinate -u` before a run, `-di` during it) and preferably the
-/// screen unlocked; a pair whose window wasn't active and key is unusable and redone, as anywhere.
+/// Windows over SSH: a process started by sshd belongs to a background login session, not the console user's GUI
+/// session (Apple TN2083); whether it may still talk to the WindowServer depends on the macOS version (on the mini's
+/// 26.6, as the user logged in at the console, a plain-ssh start did get a window, occluded behind the lock screen like
+/// every other). With `launch = .gui` (the default) the runner doesn't depend on that: it starts the adapter through
+/// LaunchServices, `open -W -n` on a tiny launcher app (a shell script as its executable) that runs the rep's script,
+/// so the adapter runs in the logged-in user's GUI session as if started from that Mac's Terminal. It needs that user
+/// logged in at the console (checked: the owner of /dev/console), the screen unlocked (checked before every rep:
+/// `CGSSessionScreenIsLocked` in ioreg's IOConsoleUsers; the runner waits while it is locked, since a window behind the
+/// lock screen is occluded and never active) and the display awake (`caffeinate -u` before a rep, `-di` during it).
+/// A pair whose window still wasn't active and key is unusable and redone, as anywhere.
 public final class SSHRunner: Runner {
   public enum Launch: String { case gui, direct }
 

@@ -244,6 +244,23 @@ final class RunnerTests: FakeBenchCase {
     XCTAssertEqual(loop.queue.items().first?.state, "done")
   }
 
+  func testTheWindowLockIsHeldOnlyAroundAShortRep() throws {
+    try baseline()
+    let e = try candidate()
+    let lock = tmp.appendingPathComponent("window.lock")
+    try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
+    try "other-agent".write(to: lock.appendingPathComponent("owner"), atomically: true, encoding: .utf8)
+    let idle = FakeIdle()
+    let r = gated(idle); r.lockDir = lock.path
+    var waits: [String] = []
+    r.onWait = { waits.append($0) }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 1) { try? FileManager.default.removeItem(at: lock) }   // the other agent finishes
+    loop.runner = r
+    XCTAssertEqual(try loop.screen(e.id).state, .promising)
+    XCTAssertEqual(waits.filter { $0.contains("window lock") && $0.contains("other-agent") }.count, 1, "\(waits)")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: lock.path))             // released after each rep
+  }
+
   func testOneQueueRunPerRunner() throws {
     try baseline()
     let lock = try RunnerLock.acquire(store: store, runner: "local")

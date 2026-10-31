@@ -165,7 +165,8 @@ public final class LocalRunner: Runner {
       if !said { let who = (try? String(contentsOfFile: l + "/owner", encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "?"; let t = "waiting: the window lock \(l) is held (\(who))"; log(t); onWait(t); said = true }
       Thread.sleep(forTimeInterval: 2)
     }
-    try? "perfloop pid \(ProcessInfo.processInfo.processIdentifier)".write(toFile: l + "/owner", atomically: true, encoding: .utf8)
+    let who = ProcessInfo.processInfo.environment["PERFLOOP_LOCK_OWNER"].map { $0 + " " } ?? ""
+    try? "\(who)perfloop pid \(ProcessInfo.processInfo.processIdentifier)".write(toFile: l + "/owner", atomically: true, encoding: .utf8)
     return { try? FileManager.default.removeItem(atPath: l) }
   }
 
