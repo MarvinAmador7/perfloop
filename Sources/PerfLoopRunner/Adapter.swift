@@ -5,7 +5,11 @@ import PerfLoopKit
 /// (`list`, `describe`, `diff`) are safe anywhere; `ab` and `run` open the app's window.
 public struct Adapter {
   public let exe: String
+  /// Where the call runs (C10) and the directory its outputs land in; nil: here, as a plain child.
+  public var runner: Runner?
+  public var workDir: URL?
   public init(exe: String) { self.exe = exe }
+  public init(exe: String, runner: Runner?, workDir: URL?) { self.exe = exe; self.runner = runner; self.workDir = workDir }
 
   public struct Output {
     public var status: Int32
@@ -29,7 +33,12 @@ public struct Adapter {
     return Output(status: p.terminationStatus, stdout: String(decoding: data, as: UTF8.self))
   }
 
-  func call(_ args: [String], env: [String: String] = [:], quiet: Bool = false) throws -> Output { try Self.spawn(exe, args, env: env, quiet: quiet) }
+  func call(_ args: [String], env: [String: String] = [:], quiet: Bool = false) throws -> Output {
+    guard let r = runner, let w = workDir else { return try Self.spawn(exe, args, env: env, quiet: quiet) }
+    let o = try r.run(exe, args, env: env, workDir: w)
+    if o.status != interruptedStatus { try r.fetch(w) }
+    return o
+  }
 
   /// `list --json`: scenarios, fixtures, and `tool.build` (the stamp).
   public func list() throws -> JSONValue {
