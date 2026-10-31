@@ -136,4 +136,5 @@ public struct SecondFixture: Codable, Sendable, Equatable {
   public var fixture: String
   public var stage: Stage
   public var notWorse: Bool
+  public init(fixture: String, stage: Stage, notWorse: Bool) { self.fixture = fixture; self.stage = stage; self.notWorse = notWorse }
 }

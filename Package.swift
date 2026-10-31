@@ -24,5 +24,5 @@ let package = Package(
     .executableTarget(name: "perfloop", dependencies: ["PerfLoopKit", "PerfLoopRunner"]),
     .testTarget(name: "PerfLoopKitTests", dependencies: ["PerfLoopKit"]),
     // Drives the runner against a fake adapter (a shell script with canned `list`/`ab`/`run` output): no window.
-    .testTarget(name: "PerfLoopRunnerTests", dependencies: ["PerfLoopKit", "PerfLoopRunner"]),
+    .testTarget(name: "PerfLoopRunnerTests", dependencies: ["PerfLoopKit", "PerfLoopRunner"], exclude: ["Fixtures"]),
   ])
