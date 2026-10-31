@@ -170,6 +170,17 @@ public struct Knob<Value: KnobValue>: Sendable {
   }
 }
 
+/// Any knob, whatever its value type: what an adapter lists its own knobs as.
+public protocol AnyKnob: Sendable {
+  var info: KnobInfo { get }
+  /// The value this process runs with, as text.
+  var valueText: String { get }
+}
+
+extension Knob: AnyKnob {
+  public var valueText: String { value.knobText }
+}
+
 /// The registry and the environment.
 public enum Knobs {
   /// The environment variable a bench sets for its child: `name=value,name=value`.
