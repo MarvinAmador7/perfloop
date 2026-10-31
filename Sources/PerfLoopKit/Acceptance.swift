@@ -35,14 +35,16 @@ public enum Acceptance {
     return nil
   }
 
-  /// Correctness guards: a check the candidate fails while the champion passes it in the same pair. `guards` are
-  /// the champion manifest's names for the scenario ("checks" = all of its checks), never the candidate's.
+  /// Correctness guards: a check the candidate fails while the champion passes it in the same pair, and a guard the
+  /// candidate fails (or drops) that the champion passes (Guards.swift). `guards` are the champion manifest's names
+  /// for the scenario ("checks" = all of its checks), never the candidate's.
   public static func guardFailures(_ pairs: [Pair], guards: [String]) -> [String] {
     var out: [String] = []
     for p in pairs where p.failure == nil {
       for c in p.b.checksFailed where !p.a.checksFailed.contains(c) && (guards.isEmpty || guards.contains("checks") || guards.contains(c)) {
         out.append("\(c) failed on the candidate in pair \(p.index + 1) (passed on the champion)")
       }
+      out += guardResultFailures(p, guards: guards)
     }
     return out
   }
@@ -61,11 +63,13 @@ public enum Acceptance {
     if st.wins < use.count { r.append("the candidate won \(st.wins) of \(use.count) pairs (a screen needs all)") }
     if med < threshold { r.append("median gain \(med) % is under max(\(Int(minGainPct)) %, band \(st.band ?? 0) %)") }
     if !st.guardsPassed { r += st.guardFailures }
+    let reviews = st.guardReviews ?? []
+    r += reviews.map { "needs review: " + $0 }
     if use.count < pairs.count { r.append("\(pairs.count - use.count) pair(s) unusable: " + pairs.compactMap(unusable).joined(separator: "; ")) }
     // Three pairs can't call a regression either: a screen only filters. "Slower in every pair" is said, not judged.
     if st.wins == 0 && -med > (st.band ?? 0) { r.append("slower in every pair (median \(med) %): a full would be needed to call it a regression") }
-    st.verdict = r.isEmpty && use.count >= screenPairs ? "promising" : "rejected"
-    if st.verdict == "promising" { r.append("won \(st.wins)/\(use.count) pairs, median gain \(med) % ≥ \(threshold) %") }
+    st.verdict = r.count == reviews.count && use.count >= screenPairs ? (reviews.isEmpty ? "promising" : "needsReview") : "rejected"
+    if st.verdict != "rejected" { r.append("won \(st.wins)/\(use.count) pairs, median gain \(med) % ≥ \(threshold) %") }
     st.reasons = r
     return st
   }
@@ -97,7 +101,11 @@ public enum Acceptance {
     var r: [String] = ["\(use.count) + \(use.count): Mann-Whitney p = \(mwu.p)\(mwu.exact ? " (exact)" : ""), effect \(effect) % (band \(band) %)"]
     st.regression = mwu.p < alpha && -effect >= band
     if mwu.p < alpha {
-      if effect >= max(band, minGainPct) && st.guardsPassed && frameFailed.isEmpty { st.verdict = "won" }
+      if effect >= max(band, minGainPct) && st.guardsPassed && frameFailed.isEmpty {
+        // A snapshot unlike the champion's is never a win: the owner looks first (C6).
+        st.verdict = (st.guardReviews ?? []).isEmpty ? "won" : "needsReview"
+        r += (st.guardReviews ?? []).map { "needs review: " + $0 }
+      }
       else {
         st.verdict = "lost"
         if effect < 0 { r.append(st.regression == true ? "the candidate is slower beyond the band" : "the candidate is slower, inside the band") }
@@ -118,7 +126,7 @@ public enum Acceptance {
   /// The second fixture's screen after a win: not worse means the median gain is above −band (SPEC §5.5).
   public static func notWorse(_ pairs: [Pair], metric: String, guards: [String]) -> (Stage, Bool) {
     var st = screen(pairs, metric: metric, guards: guards)
-    let ok = st.verdict != "error" && (st.medianGainPct ?? -100) > -(st.band ?? 0) && st.guardsPassed
+    let ok = st.verdict != "error" && (st.medianGainPct ?? -100) > -(st.band ?? 0) && st.guardsPassed && (st.guardReviews ?? []).isEmpty
     st.reasons.append(ok ? "not worse on this fixture" : "worse on this fixture beyond the band, or a guard failed")
     return (st, ok)
   }
@@ -135,6 +143,7 @@ public enum Acceptance {
     let f = floors(metric)
     if !a.isEmpty { st.band = Band(champion: a, candidate: b, floorPct: f.pct, absoluteFloor: f.absolute).pct }
     st.guardFailures = guardFailures(pairs, guards: guards); st.guardsPassed = st.guardFailures.isEmpty
+    let reviews = guardReviews(pairs, guards: guards); st.guardReviews = reviews.isEmpty ? nil : reviews
     return st
   }
 }

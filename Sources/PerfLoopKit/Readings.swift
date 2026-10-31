@@ -28,6 +28,7 @@ public enum Readings {
     }
     s.steadyHz = r.at("frames.steadyHz")?.double; s.lateFrames = r.at("frames.late")?.double
     s.worstStretch = worst(r["worstStretches"]?.array ?? [])
+    s.guards = r["guards"]?.array.map { $0.compactMap(GuardResult.init(json:)) }
     return s
   }
 
@@ -58,7 +59,10 @@ public enum Readings {
     if let rs = v["reps"]?.array?.filter({ $0["variant"]?.string == label }), !rs.isEmpty { return rs.map { side(rep: $0, metric: metric) } }
     guard let s = v["summary" + label] else { return [] }
     if (s["reps"]?.double ?? 1) == 0 { return [] }
-    return [side(summary: s, metric: metric)]
+    var one = side(summary: s, metric: metric)
+    // The side's guards, every rep's (deskbench `guardsA`/`guardsB`).
+    one.guards = v["guards" + label]?.array.map { $0.compactMap(GuardResult.init(json:)) }
+    return [one]
   }
 
   /// What went wrong in an `ab`, if anything (its `failures[]`).

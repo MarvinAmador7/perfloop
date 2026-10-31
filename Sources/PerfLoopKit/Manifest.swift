@@ -17,6 +17,8 @@ public struct Manifest: Codable, Sendable, Equatable {
   public var defaultHost: String?
   public var probes: [String]?
   public var exitCodes: [String: Int]?
+  /// Scenarios whose checks run on every promotion, whatever the experiment climbs (C6: isolation).
+  public var isolationGuards: [String]?
   /// "describe" when the adapter printed it; "list" when the runner derived it from an older adapter's `list --json`.
   public var source: String?
 
@@ -25,7 +27,7 @@ public struct Manifest: Codable, Sendable, Equatable {
     self.scenarios = scenarios; self.fixtures = fixtures; self.knobs = knobs; self.source = source
   }
 
-  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source }
+  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, isolationGuards }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     schema = try c.decodeIfPresent(String.self, forKey: .schema) ?? "perfloop.manifest/1"
@@ -39,6 +41,7 @@ public struct Manifest: Codable, Sendable, Equatable {
     hosts = try c.decodeIfPresent([String].self, forKey: .hosts); defaultHost = try c.decodeIfPresent(String.self, forKey: .defaultHost)
     probes = try c.decodeIfPresent([String].self, forKey: .probes); exitCodes = try c.decodeIfPresent([String: Int].self, forKey: .exitCodes)
     source = try c.decodeIfPresent(String.self, forKey: .source)
+    isolationGuards = try? c.decodeIfPresent([String].self, forKey: .isolationGuards)
   }
 
   public func scenario(_ name: String) -> ScenarioEntry? { scenarios.first { $0.name == name } }
@@ -70,7 +73,7 @@ public struct Manifest: Codable, Sendable, Equatable {
     let s = scenarios.sorted { $0.name < $1.name }.map { e in
       "\(e.name):\(e.objective ?? "-"):\(e.guards.sorted().joined(separator: "+")):\(PLJSON.line(e.guardParams ?? [:])):\(e.secondFixture ?? "-")"
     }
-    return (s + ["fixtures:" + fixtureNames.sorted().joined(separator: ",")]).joined(separator: "\n")
+    return (s + ["fixtures:" + fixtureNames.sorted().joined(separator: ",")] + (isolationGuards.map { ["isolation:" + $0.joined(separator: ",")] } ?? [])).joined(separator: "\n")
   }
 }
 
@@ -90,11 +93,13 @@ public struct ScenarioEntry: Codable, Sendable, Equatable {
   public var guardParams: [String: JSONValue]?
   /// Promotion needs not-worse here (SPEC §5.5, over-fitting one fixture).
   public var secondFixture: String?
+  /// Metrics that may not get worse beyond their band (Acceptance judges them as frame guards).
+  public var frameGuards: [String]?
 
   public init(name: String, kind: String, objective: String?, guards: [String] = [], params: [String: String] = [:], secondFixture: String? = nil) {
     self.name = name; self.kind = kind; self.objective = objective; self.guards = guards; self.params = params; self.secondFixture = secondFixture
   }
-  enum CodingKeys: String, CodingKey { case name, summary, kind, budget, rule, latencyBudgetMs, params, objective, guards, guardParams, secondFixture }
+  enum CodingKeys: String, CodingKey { case name, summary, kind, budget, rule, latencyBudgetMs, params, objective, guards, guardParams, secondFixture, frameGuards }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     name = try c.decode(String.self, forKey: .name)
@@ -104,6 +109,7 @@ public struct ScenarioEntry: Codable, Sendable, Equatable {
     params = (try? c.decodeIfPresent([String: String].self, forKey: .params)) ?? [:]
     objective = try c.decodeIfPresent(String.self, forKey: .objective); guards = try c.decodeIfPresent([String].self, forKey: .guards) ?? []
     guardParams = try c.decodeIfPresent([String: JSONValue].self, forKey: .guardParams); secondFixture = try c.decodeIfPresent(String.self, forKey: .secondFixture)
+    frameGuards = try? c.decodeIfPresent([String].self, forKey: .frameGuards)
   }
 }
 

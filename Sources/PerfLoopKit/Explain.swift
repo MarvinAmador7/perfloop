@@ -15,6 +15,7 @@ public enum Explain {
     if let s = e.screen { o += stage("screen", s) }
     if let f = e.full { o += stage("full", f) }
     if let s = e.secondScreen { o.append("second fixture \(s.fixture): \(s.notWorse ? "not worse" : "WORSE") (median gain \(s.stage.medianGainPct.map { "\($0) %" } ?? "-"), band \(s.stage.band.map { "\($0) %" } ?? "-"))") }
+    o += guardSections(e)
     if let last = e.full ?? e.screen { o += look(last) }
     for n in e.notes { o.append("note: " + n) }
     for s in stop { o.append("stop: " + s) }
@@ -37,6 +38,7 @@ public enum Explain {
       o.append("  pair \(p.index + 1) \(p.order): champion \(fmt(p.a.objective)) · candidate \(fmt(p.b.objective)) (\(Stats.round(-Acceptance.gainPct(p.a.objective!, p.b.objective!), 1)) %)")
     }
     for (k, g) in (s.frameGuards ?? [:]).sorted(by: { $0.key < $1.key }) { o.append("  guard \(k): \(g.a) → \(g.b) (band ±\(g.bandPct) %) \(g.pass ? "pass" : "FAIL")") }
+    o += guardLines(s)
     for r in s.reasons { o.append("  · " + r) }
     return o
   }
@@ -68,7 +70,11 @@ public enum Explain {
     case .full: return "perfloop exp full \(e.id) (resumes at the first missing pair)"
     case .rejected: return "drop it and try the next idea; the worst stretch above is where the time went"
     case .lost: return e.full?.regression == true ? "drop it: the candidate is slower" : "drop it, or narrow the hypothesis and try again"
-    case .needsReview: return "the owner decides (no decision at 10 + 10, or a guard asks for review); perfloop exp promote \(e.id) --owner, or abandon it"
+    case .needsReview:
+      if let r = (e.full ?? e.screen)?.guardReviews, !r.isEmpty {
+        return "the owner looks at the snapshots (the guards lines above list both PNGs and the diff): perfloop guards --exp \(e.id) --guard-tolerance X --owner to accept the look, or abandon it"
+      }
+      return "the owner decides (no decision at 10 + 10, or a guard asks for review); perfloop exp promote \(e.id) --owner, or abandon it"
     case .won:
       var s = "perfloop exp promote \(e.id)"
       if e.behaviourChange { s += " --owner (behaviour change: the owner approves)" }

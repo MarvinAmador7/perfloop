@@ -59,10 +59,18 @@ public struct Adapter {
   }
 
   /// One rep of a scenario in this binary (`run --reps 1 --json`), knobs in `PERFLOOP_KNOBS`.
-  public func run(scenario: String, fixture: String, params: [String: String], knobs: [String: String]) throws -> Output {
+  public func run(scenario: String, fixture: String, params: [String: String], knobs: [String: String], env: [String: String] = [:]) throws -> Output {
     var args = ["run", scenario, "--fixture", fixture, "--reps", "1", "--json", "--quiet-check", "0"]
     for (k, v) in params.sorted(by: { $0.key < $1.key }) { args += ["--set", "\(k)=\(v)"] }
-    return try call(args, env: knobs.isEmpty ? [:] : ["PERFLOOP_KNOBS": Self.knobString(knobs)])
+    return try call(args, env: (knobs.isEmpty ? [:] : ["PERFLOOP_KNOBS": Self.knobString(knobs)]).merging(env) { $1 })
+  }
+
+  /// `snapdiff A.png B.png --json`: the snapshot-diff guard, headless, in this (the champion's) adapter. Exit 0 within
+  /// tolerance, 3 over it; the guard record is the output's `guard`.
+  public func snapdiff(_ a: String, _ b: String, params: String, diffOut: String) throws -> Output {
+    var args = ["snapdiff", a, b, "--json", "--diff-out", diffOut]
+    for kv in params.split(separator: ",") { args += ["--guard-param", String(kv)] }
+    return try call(args, quiet: true)
   }
 
   /// `diff A B --json`: the differential call tree of two profiles (headless).
