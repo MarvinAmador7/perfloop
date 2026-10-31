@@ -33,6 +33,10 @@ public enum Explain {
     if let p = s.mwuP { head += ", MWU p=\(p)" }
     if let p = s.signP { head += ", sign p=\(p)" }
     o.append(head)
+    if let r = s.runner {
+      let n = s.pairs.compactMap(\.interruptions).reduce(0, +)
+      o.append("  ran on \(r.line)" + (n > 0 ? "; \(n) rep(s) interrupted by input and redone" : ""))
+    }
     for p in s.pairs {
       if let why = Acceptance.unusable(p) { o.append("  pair \(p.index + 1) \(p.order): unusable: \(why)"); continue }
       o.append("  pair \(p.index + 1) \(p.order): champion \(fmt(p.a.objective)) · candidate \(fmt(p.b.objective)) (\(Stats.round(-Acceptance.gainPct(p.a.objective!, p.b.objective!), 1)) %)")

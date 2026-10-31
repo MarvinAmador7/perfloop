@@ -72,6 +72,12 @@ public struct Pair: Codable, Sendable, Equatable {
   public var b: Side
   /// Why the pair has no numbers (the child failed); a failed pair is re-run on resume.
   public var failure: String?
+  /// Where it ran (C10): a stage's pairs all come from one runner.
+  public var runner: RunnerIdentity?
+  /// The runner aborted a rep of this pair on input (the local runner's idle gate) and the pair was redone this many times.
+  public var interruptions: Int?
+  /// This record is an aborted rep (input arrived): never judged, always redone.
+  public var interrupted: Bool?
   public init(index: Int, order: String, result: String?, a: Side, b: Side, failure: String? = nil) {
     self.index = index; self.order = order; self.result = result; self.a = a; self.b = b; self.failure = failure
   }
@@ -134,6 +140,8 @@ public struct Stage: Codable, Sendable, Equatable {
   public var signP: Double?
   public var effectPct: Double?
   public var frameGuards: [String: FrameGuard]?
+  /// The runner every pair ran on (C10).
+  public var runner: RunnerIdentity?
   public init(metric: String, pairs: [Pair], verdict: String) {
     self.metric = metric; self.pairs = pairs; objective = ["a": [], "b": []]; wins = 0; guardsPassed = true; guardFailures = []
     self.verdict = verdict; reasons = []
