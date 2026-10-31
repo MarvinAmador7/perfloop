@@ -1,2 +1,5 @@
 .build/
 .swiftpm/
+# A store never lives in the repo; a project-local one is allowed but ignored (SPEC §4.3).
+.perfloop/
+*.trace
