@@ -92,7 +92,7 @@ ab)
       --reps|--set|--objective) shift 2 ;; --*) shift ;; *) sc=$1; shift ;;
     esac
   done
-  log "ab $sc $fixture A=$a B=$b guards=$PERFLOOP_GUARDS params=$PERFLOOP_GUARD_PARAMS"
+  log "ab $sc $fixture guards=$PERFLOOP_GUARDS params=$PERFLOOP_GUARD_PARAMS A=$a B=$b"
   if [ "$(val "$b" FAKE_AB_FAIL)" = 1 ] || [ "$(val "$a" FAKE_AB_FAIL)" = 1 ]; then echo "ab: child crashed" >&2; exit 2; fi
   s=$$
   ca=$(cpu_of "$a" "$fixture" "" "$s"); cb=$(cpu_of "$b" "$fixture" "" "$((s + 7))")
