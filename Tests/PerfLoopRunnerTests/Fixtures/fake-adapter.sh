@@ -20,6 +20,7 @@ FAKE_BLANK=0
 FAKE_SNAP=same
 FAKE_NOGUARDS=0
 FAKE_ISO_FAIL=0
+FAKE_SLEEP=0
 
 self="$0"
 log() { if [ -n "$FAKE_LOG" ]; then echo "$*" >> "$FAKE_LOG"; fi; }
@@ -94,6 +95,7 @@ ab)
   done
   log "ab $sc $fixture guards=$PERFLOOP_GUARDS params=$PERFLOOP_GUARD_PARAMS A=$a B=$b"
   if [ "$(val "$b" FAKE_AB_FAIL)" = 1 ] || [ "$(val "$a" FAKE_AB_FAIL)" = 1 ]; then echo "ab: child crashed" >&2; exit 2; fi
+  if [ "$FAKE_SLEEP" != 0 ]; then sleep "$FAKE_SLEEP"; fi
   s=$$
   ca=$(cpu_of "$a" "$fixture" "" "$s"); cb=$(cpu_of "$b" "$fixture" "" "$((s + 7))")
   summ() { echo "{ \"reps\": 1, \"objective\": { \"name\": \"mainThreadCpuMsPerStep\", \"value\": $2 }, \"mainThreadCpuMsPerStep\": { \"n\": 1, \"median\": $2 },
