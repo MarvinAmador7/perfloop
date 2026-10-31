@@ -78,6 +78,8 @@ public enum Readings {
         return s
       }
     }
-    return StretchNote(durationMs: d, step: w["step"]?.string, topOurs: names("topOurs"), topFramework: names("topFramework"))
+    var n = StretchNote(durationMs: d, step: w["step"]?.string, topOurs: names("topOurs"), topFramework: names("topFramework"))
+    n.causes = CauseTable.rows(w["causes"]).map { CauseTable.line($0, groups: 3) }
+    return n
   }
 }

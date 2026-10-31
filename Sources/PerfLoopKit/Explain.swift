@@ -56,6 +56,7 @@ public enum Explain {
       o.append("candidate's worst stretch: \(fmt(w.durationMs)) ms" + (w.step.map { " in \($0)" } ?? ""))
       if !w.topOurs.isEmpty { o.append("  ours: " + w.topOurs.joined(separator: "; ")) }
       if !w.topFramework.isEmpty { o.append("  framework: " + w.topFramework.joined(separator: "; ")) }
+      if let c = w.causes { o.append("  causes: " + c) }
     }
     return o
   }

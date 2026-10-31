@@ -93,6 +93,8 @@ public struct StretchNote: Codable, Sendable, Equatable {
   public var step: String?
   public var topOurs: [String]
   public var topFramework: [String]
+  /// What the stretch's bodies followed (`causes[]`, C7), as `CauseTable.line` writes it; nil when the adapter records none.
+  public var causes: String? = nil
 }
 
 /// A screen or full stage's record (SCHEMAS.md §6 `screen` / `full`, both kept in one shape).

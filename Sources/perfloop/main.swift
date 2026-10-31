@@ -30,6 +30,8 @@ perfloop: an agent-first performance loop (design/perf-loop/SPEC.md; the adapter
   exp abandon ID [--note "…"]
   exp replay PLAN.json [--dry-run | --go]   a past session as experiments (SPEC §6.1); --go opens windows
   explain exp/ID                            exp/ID/explain.txt: everything needed to decide the next step
+  causes RESULT.json [--json]               why bodies ran: the model mutations each step's and long stretch's bodies
+                                            followed (the adapter's mutation records, CAPABILITIES.md C7)
   diff A B [--exp ID] [--allow-stale]       the adapter's differential call tree; refuses traces of other builds
   trace register TRACE --build HASH         record which build a trace was recorded on (the path only)
   ledger [--json]                           every state change, oldest first
@@ -177,6 +179,15 @@ func run(_ args: Args) throws -> Int32 {
   case ("explain", _):
     guard let id = args[1] else { throw PLError.usage("usage: perfloop explain exp/ID") }
     let l = try loop(); out(l.explain(try l.store.experiment(id)).trimmingCharacters(in: .newlines)); return 0
+
+  case ("causes", _):
+    guard let p = args[1] else { throw PLError.usage("usage: perfloop causes RESULT.json [--json]") }
+    let v = try PLJSON.read(JSONValue.self, path: p)
+    if json {
+      guard let t = CauseTable.table(v) else { throw PLError.usage("\(p): no causes recorded in this result") }
+      out(PLJSON.encode(t))
+    } else { out(CauseTable.text(v)) }
+    return 0
 
   case ("diff", _):
     guard let a = args[1], let b = args[2] else { throw PLError.usage("usage: perfloop diff A B [--exp ID] [--allow-stale]") }
