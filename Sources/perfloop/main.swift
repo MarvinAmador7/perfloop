@@ -46,8 +46,8 @@ perfloop: an agent-first performance loop (design/perf-loop/SPEC.md; the adapter
 
 runners and the queue (C10): where windowed reps run; results never mix runners
   exp screen|full ID --runner R [--idle S]  R: local (default; idle-gated only with --idle S), ssh://[user@]host[/dir]
-  queue add ID [--stage auto|screen|full] [--runner R]
-                                            auto: the screen, then the full when promising
+  queue add ID [--stage auto|screen|full] [--runner R] [--force]
+                                            auto: the screen, then the full when promising (--force: the full anyway)
   queue list [--json] | queue remove QID
   queue run --runner R [--until HH:MM] [--idle S] [--force]
                                             runs queued stages on R while it is free: local waits until nobody has
@@ -206,8 +206,8 @@ func run(_ args: Args) throws -> Int32 {
 
   case ("queue", "add"):
     guard let id = args[2] else { throw PLError.usage("usage: perfloop queue add ID [--stage auto|screen|full] [--runner R]") }
-    let it = try loop().queueAdd(id, stage: args.one("stage") ?? "auto", runner: args.one("runner"), note: args.one("note"))
-    out("queued \(it.id): exp \(it.experiment) \(it.stage) on \(it.runner ?? "any runner")"); return 0
+    let it = try loop().queueAdd(id, stage: args.one("stage") ?? "auto", runner: args.one("runner"), note: args.one("note"), force: args.has("force"))
+    out("queued \(it.id): exp \(it.experiment) \(it.stage)\(it.force ? " --force" : "") on \(it.runner ?? "any runner")"); return 0
   case ("queue", "list"), ("queue", nil):
     let items = try loop().queue.items().filter { args.has("all") || $0.state != "removed" }
     out(json ? PLJSON.encode(items.map { ["id": $0.id, "experiment": $0.experiment, "stage": $0.stage, "runner": $0.runner ?? "", "state": $0.state, "addedAt": $0.addedAt, "note": $0.note ?? "", "lastWait": $0.lastWait ?? "", "ranOn": $0.ranOn ?? ""] }) : Queue.text(items))

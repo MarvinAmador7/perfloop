@@ -175,8 +175,10 @@ public struct QueueEvent: Codable, Sendable, Equatable {
   /// The runner it must run on (nil: whichever runs the queue); on running/done lines, the one it ran on.
   public var runner: String?
   public var note: String?
-  public init(item: String, state: String, experiment: String? = nil, stage: String? = nil, runner: String? = nil, note: String? = nil, at: String = Clock.now()) {
-    self.at = at; self.item = item; self.state = state; self.experiment = experiment; self.stage = stage; self.runner = runner; self.note = note
+  /// `queue add --force`: run the full even when the screen rejected it (`exp full --force`).
+  public var force: Bool?
+  public init(item: String, state: String, experiment: String? = nil, stage: String? = nil, runner: String? = nil, note: String? = nil, force: Bool? = nil, at: String = Clock.now()) {
+    self.at = at; self.item = item; self.state = state; self.experiment = experiment; self.stage = stage; self.runner = runner; self.note = note; self.force = force
   }
 }
 
@@ -193,6 +195,7 @@ public struct QueueItem: Sendable, Equatable {
   /// The newest reason it waited, and when.
   public var lastWait: String?
   public var ranOn: String?
+  public var force = false
   public var pending: Bool { state == "queued" }
 }
 
@@ -222,7 +225,7 @@ public struct Queue: Sendable {
         d[e.item] = it
       } else if e.state == "queued", let x = e.experiment {
         order.append(e.item)
-        d[e.item] = QueueItem(id: e.item, experiment: x, stage: e.stage ?? "auto", runner: e.runner, addedAt: e.at, state: "queued", updatedAt: e.at, note: e.note)
+        d[e.item] = QueueItem(id: e.item, experiment: x, stage: e.stage ?? "auto", runner: e.runner, addedAt: e.at, state: "queued", updatedAt: e.at, note: e.note, force: e.force == true)
       }
     }
     return order.compactMap { d[$0] }
@@ -242,7 +245,7 @@ public struct Queue: Sendable {
   public static func text(_ items: [QueueItem]) -> String {
     if items.isEmpty { return "the queue is empty" }
     return items.map { it in
-      var l = "\(it.id.padding(toLength: 4, withPad: " ", startingAt: 0)) \(it.state.padding(toLength: 8, withPad: " ", startingAt: 0)) exp \(it.experiment) \(it.stage) on \(it.runner ?? "any runner") · added \(it.addedAt)"
+      var l = "\(it.id.padding(toLength: 4, withPad: " ", startingAt: 0)) \(it.state.padding(toLength: 8, withPad: " ", startingAt: 0)) exp \(it.experiment) \(it.stage)\(it.force ? " --force" : "") on \(it.runner ?? "any runner") · added \(it.addedAt)"
       if let r = it.ranOn, it.state != "queued" { l += " · ran on \(r)" }
       if let n = it.note { l += "\n       \(n)" }
       if let w = it.lastWait, it.state == "queued" || it.state == "running" { l += "\n       waited: \(w)" }

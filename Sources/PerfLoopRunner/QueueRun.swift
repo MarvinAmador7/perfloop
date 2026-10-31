@@ -14,12 +14,13 @@ extension Loop {
   public var queue: Queue { Queue(path: store.root.appendingPathComponent("queue.jsonl").path) }
 
   @discardableResult
-  public func queueAdd(_ exp: String, stage: String = "auto", runner: String? = nil, note: String? = nil) throws -> QueueItem {
+  public func queueAdd(_ exp: String, stage: String = "auto", runner: String? = nil, note: String? = nil, force: Bool = false) throws -> QueueItem {
     guard Queue.stages.contains(stage) else { throw PLError.usage("--stage screen|full|auto") }
     if let r = runner, RunnerSpec(r) == nil { throw PLError.usage("unknown runner '\(r)'") }
     let e = try store.experiment(exp)
     guard e.kind != "baseline" else { throw PLError.usage("exp \(e.id) is the baseline") }
     if e.state.terminal { throw PLError.refused("exp \(e.id) is \(e.state.rawValue): nothing left to run") }
+    if e.state == .rejected && !force && stage != "screen" { throw PLError.refused("exp \(e.id) was rejected by its screen; --force queues its full anyway") }
     if stage == "full" && e.state == .built { throw PLError.usage("exp \(e.id) isn't screened: queue it with --stage auto (screen, then full when promising)") }
     let q = queue
     if let dup = q.items().first(where: { $0.experiment == e.id && ($0.state == "queued" || $0.state == "running") }) {
@@ -27,7 +28,7 @@ extension Loop {
     }
     let id = q.nextID()
     let name = runner.flatMap { RunnerSpec($0)?.name }
-    try q.append(QueueEvent(item: id, state: "queued", experiment: e.id, stage: stage, runner: name, note: note))
+    try q.append(QueueEvent(item: id, state: "queued", experiment: e.id, stage: stage, runner: name, note: note, force: force ? true : nil))
     return q.items().first { $0.id == id }!
   }
 
@@ -87,10 +88,10 @@ extension Loop {
     var e = try store.experiment(it.experiment)
     switch it.stage {
     case "screen": return try screen(e.id)
-    case "full": return try full(e.id)
+    case "full": return try full(e.id, force: it.force)
     default:
       if e.screen == nil || e.screen?.verdict == "error" { e = try screen(e.id) }
-      if [.promising, .full].contains(e.state) { e = try full(e.id) }
+      if [.promising, .full].contains(e.state) || (it.force && e.state == .rejected) { e = try full(e.id, force: it.force) }
       return e
     }
   }
