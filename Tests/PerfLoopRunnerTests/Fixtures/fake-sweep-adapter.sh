@@ -18,6 +18,7 @@ run)
   sc=$1; shift; fixture=crew17; reps=1; sets=""
   while [ $# -gt 0 ]; do case "$1" in --fixture) fixture=$2; shift 2 ;; --reps) reps=$2; shift 2 ;; --set) sets="$sets $2"; shift 2 ;; *) shift ;; esac; done
   log "run $sc $fixture reps=$reps knobs=$PERFLOOP_KNOBS sets=$sets"
+  if [ -n "$FAKE_SLEEP" ]; then sleep "$FAKE_SLEEP"; fi
   agents=17; items=90
   case "$fixture" in *@*) for kv in $(echo "${fixture#*@}" | tr ',' ' '); do
     case "$kv" in agents=*) agents=${kv#agents=} ;; items=*) items=${kv#items=} ;; esac; done ;; esac

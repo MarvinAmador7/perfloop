@@ -309,7 +309,8 @@ public enum Interrupts {
       let s = DispatchSource.makeSignalSource(signal: sig, queue: .global())
       s.setEventHandler {
         mutex.lock(); let c = child; mutex.unlock()
-        if let c, c.isRunning { c.terminate() }
+        // SIGKILL: the child may have inherited our ignored SIGTERM/SIGINT (posix_spawn keeps ignored signals).
+        if let c, c.isRunning { kill(c.processIdentifier, SIGKILL) }
         release()
         FileHandle.standardError.write(Data("perfloop: interrupted (signal \(sig)); finished points are kept, run the same command to resume\n".utf8))
         exit(7)
