@@ -35,6 +35,7 @@ public enum Acceptance {
     if p.a.objective == nil || p.b.objective == nil { return "the objective is missing on \(p.a.objective == nil ? "the champion" : "the candidate")" }
     if p.a.profiled == true || p.b.profiled == true { return "a profiler was attached: profiled runs never feed the objective" }
     if p.a.trustworthy == false || p.b.trustworthy == false { return "the window was not active, key and unoccluded: rerun" }
+    if p.interrupted == true { return "interrupted: input during the rep (redo it)" }
     return nil
   }
 
@@ -56,6 +57,7 @@ public enum Acceptance {
   /// guard failed. Three pairs can't reach significance (sign test p = 0.125): this filters, it doesn't decide.
   public static func screen(_ pairs: [Pair], metric: String, guards: [String]) -> Stage {
     var st = base(pairs, metric: metric, guards: guards)
+    if let m = RunnerIdentity.mixed(pairs) { st.verdict = "error"; st.reasons = [m]; return st }
     let use = pairs.filter { unusable($0) == nil }
     guard !use.isEmpty else { st.verdict = "error"; st.reasons = ["no pair produced the objective \(metric)"] + pairs.compactMap(unusable); return st }
     let gains = use.map { gainPct($0.a.objective!, $0.b.objective!) }
@@ -84,6 +86,7 @@ public enum Acceptance {
   /// worse beyond the band: a same-build comparison is never one.
   public static func full(_ pairs: [Pair], metric: String, guards: [String], lastLook: Bool) -> Stage {
     var st = base(pairs, metric: metric, guards: guards)
+    if let m = RunnerIdentity.mixed(pairs) { st.verdict = "error"; st.reasons = [m]; return st }
     let use = pairs.filter { unusable($0) == nil }
     st.repsPerSide = use.count
     guard use.count >= 2 else { st.verdict = "error"; st.reasons = ["fewer than 2 usable pairs"] + pairs.compactMap(unusable); return st }
@@ -143,6 +146,7 @@ public enum Acceptance {
 
   static func base(_ pairs: [Pair], metric: String, guards: [String]) -> Stage {
     var st = Stage(metric: metric, pairs: pairs, verdict: "pending")
+    st.runner = pairs.first(where: { $0.failure == nil })?.runner ?? pairs.first?.runner
     let use = pairs.filter { unusable($0) == nil }
     let a = use.map { $0.a.objective! }, b = use.map { $0.b.objective! }
     st.objective = ["a": a, "b": b]

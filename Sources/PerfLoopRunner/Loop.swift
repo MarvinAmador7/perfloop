@@ -21,6 +21,10 @@ public final class Loop {
   public var by = "agent"
   /// Guard parameters on top of the champion manifest's: only `perfloop guards --guard-tolerance` (the owner's) sets one.
   var guardOverride: [String: JSONValue] = [:]
+  /// Where windowed reps run (C10, Runner.swift): this Mac, ungated, unless `--runner` / the queue says otherwise.
+  public var runner: Runner = LocalRunner()
+  /// An interrupted rep is redone at most this many times in a row before the pair is given up (resume redoes it).
+  public var maxRedo = 50
 
   public init(store: Store) { self.store = store }
 
@@ -186,18 +190,40 @@ public final class Loop {
     let dir = store.expDir(e.id).appendingPathComponent(stage)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     var out: [Pair] = []
+    let here = try runner.identity()
     for i in 0..<count {
       let rec = dir.appendingPathComponent("p\(i + 1).pair.json")
-      if let p = try? PLJSON.read(Pair.self, path: rec.path), Acceptance.unusable(p) == nil { out.append(p); continue }
-      var p = try measure(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric, scenario: scenario)
-      if Acceptance.unusable(p) != nil, p.failure != nil {
-        log("exp \(e.id) \(stage) pair \(i + 1): \(p.failure!); once more")
-        p = try measure(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric, scenario: scenario)
+      if let p = try? PLJSON.read(Pair.self, path: rec.path), Acceptance.unusable(p) == nil {
+        // A stage's pairs come from one runner (C10): finish it where it started.
+        let there = p.runner ?? .legacy
+        guard there.sameMachine(as: here) else {
+          throw PLError.refused("exp \(e.id) \(stage): pair \(i + 1) ran on \(there.line), this runner is \(here.line): results never mix runners; finish the stage on \(there.runner), or measure the build again in a new experiment (perfloop exp new --build \(Build.short(e.build?.hash ?? "")))")
+        }
+        out.append(p); continue
       }
+      var p = try measureRedoingInterrupts(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric, scenario: scenario)
+      if Acceptance.unusable(p) != nil, p.failure != nil, p.interrupted != true {
+        log("exp \(e.id) \(stage) pair \(i + 1): \(p.failure!); once more")
+        let n = p.interruptions
+        p = try measureRedoingInterrupts(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric, scenario: scenario)
+        if let n { p.interruptions = (p.interruptions ?? 0) + n }
+      }
+      p.runner = here
       try PLJSON.write(p, path: rec.path)
       out.append(p)
     }
     return out
+  }
+
+  /// A pair, redone while the runner aborts it on input (the local runner's idle gate): an interrupted rep never counts.
+  func measureRedoingInterrupts(_ e: Experiment, index i: Int, stage: String, fixture: String, dir: URL, sides s: Sides, metric: String, scenario: String? = nil) throws -> Pair {
+    var n = 0
+    while true {
+      var p = try measure(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric, scenario: scenario)
+      guard p.interrupted == true, n < maxRedo else { if n > 0 { p.interruptions = n }; return p }
+      n += 1
+      log("exp \(e.id) \(stage) pair \(i + 1): interrupted by input; redoing it (\(n))")
+    }
   }
 
   func measure(_ e: Experiment, index i: Int, stage: String, fixture: String, dir: URL, sides s: Sides, metric: String, scenario: String? = nil) throws -> Pair {
@@ -209,11 +235,18 @@ public final class Loop {
     log("exp \(e.id) \(stage) pair \(i + 1) (\(first ? "champion first" : "candidate first")) on \(fixture)\(sc == e.scenario ? "" : ", scenario \(sc)")")
     let ok: Set<Int32> = [0, 3, 4, 5]                      // pass, budget failed, regression, untrusted: all carry numbers
     let params = e.params ?? [:]
+    try runner.prepare(s.champion); try runner.prepare(s.candidate)
+    func interrupted() -> Pair {
+      var p = Pair(index: i, order: order, result: nil, a: Side(objective: nil), b: Side(objective: nil), failure: "interrupted: input during the rep")
+      p.interrupted = true
+      return p
+    }
     if e.via == "run" {
       var got: [String: JSONValue] = ["order": .string(order)]
       var failure: String?
       for (label, entry, knobs) in first ? [("a", s.champion, s.championKnobs), ("b", s.candidate, s.candidateKnobs)] : [("b", s.candidate, s.candidateKnobs), ("a", s.champion, s.championKnobs)] {
-        let o = try Adapter(exe: entry.executable).run(scenario: sc, fixture: fixture, params: sc == e.scenario ? params : [:], knobs: knobs, env: guardEnv(g, dir: pdir.appendingPathComponent(label)))
+        let o = try Adapter(exe: entry.executable, runner: runner, workDir: dir).run(scenario: sc, fixture: fixture, params: sc == e.scenario ? params : [:], knobs: knobs, env: guardEnv(g, dir: pdir.appendingPathComponent(label)))
+        if o.status == interruptedStatus { return interrupted() }
         if let v = o.json, ok.contains(o.status) { got[label] = v } else { failure = "\(label == "a" ? "champion" : "candidate") run exited \(o.status)"; break }
       }
       try PLJSON.write(JSONValue.object(got), path: raw.path)
@@ -223,8 +256,9 @@ public final class Loop {
       return p
     }
     let firstExe = first ? s.champion.executable : s.candidate.executable, secondExe = first ? s.candidate.executable : s.champion.executable
-    let o = try Adapter(exe: s.champion.executable).ab(first: firstExe, second: secondExe, scenario: sc, fixture: fixture, params: sc == e.scenario ? params : [:], out: raw.path,
+    let o = try Adapter(exe: s.champion.executable, runner: runner, workDir: dir).ab(first: firstExe, second: secondExe, scenario: sc, fixture: fixture, params: sc == e.scenario ? params : [:], out: raw.path,
                                                       env: guardEnv(g, dir: pdir))
+    if o.status == interruptedStatus { return interrupted() }
     let v = o.json ?? (try? PLJSON.read(JSONValue.self, path: raw.path))
     guard let v, ok.contains(o.status) else { return Pair(index: i, order: order, result: store.rel(raw), a: Side(objective: nil), b: Side(objective: nil), failure: "ab exited \(o.status)") }
     if !FileManager.default.fileExists(atPath: raw.path) { try PLJSON.write(v, path: raw.path) }
@@ -373,7 +407,7 @@ public final class Loop {
     e.explain = store.rel(store.expDir(e.id).appendingPathComponent("explain.txt"))
     try store.save(e)
     try store.ledger.append(LedgerEntry(experiment: e.id, state: e.state.rawValue, objective: .init(before: a.isEmpty ? nil : Stats.median(a), after: b.isEmpty ? nil : Stats.median(b)),
-                                        build: e.build?.hash, by: by, note: "\(st.verdict): " + (st.reasons.first ?? "")))
+                                        build: e.build?.hash, by: by, note: "\(st.verdict): " + (st.reasons.first ?? ""), runner: st.runner))
     _ = explain(e)
   }
 

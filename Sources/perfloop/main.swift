@@ -47,6 +47,20 @@ perfloop: an agent-first performance loop (design/perf-loop/SPEC.md; the adapter
                                             scenario: the store's gestures/, each --dir, the adapter's built-in ones
   session start                             the stopping rules (SPEC §5.3) count from here
 
+runners and the queue (C10): where windowed reps run; results never mix runners
+  exp screen|full ID --runner R [--idle S]  R: local (default; idle-gated only with --idle S), ssh://[user@]host[/dir]
+  queue add ID [--stage auto|screen|full] [--runner R] [--force]
+                                            auto: the screen, then the full when promising (--force: the full anyway)
+  queue list [--json] | queue remove QID
+  queue run --runner R [--until HH:MM] [--idle S] [--force]
+                                            runs queued stages on R while it is free: local waits until nobody has
+                                            touched this Mac for S s (120) and aborts a rep on input (redone); no rep
+                                            starts after --until; ssh:// copies the build there and opens the window
+                                            in the logged-in user's session (--launch direct: plain ssh)
+  runner check R | runner clean R           the runner's machine, session and store there; clean removes that store
+  ssh runner flags: --accept-new-host-key, --remote-env K=V, --launch gui|direct
+  local runner flags: --lock DIR (a mkdir lock held around each rep), --busy-apps A,B, --idle-from FILE (testing)
+
 store: --store DIR, else ${PERFLOOP_HOME:-~/.perfloop}/<app>, app from --app or $PERFLOOP_APP
 exit codes  0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner needed)
 """
@@ -55,7 +69,8 @@ struct Args {
   var positional: [String] = []
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
-                                    "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir"]
+                                    "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir",
+                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -164,10 +179,12 @@ func run(_ args: Args) throws -> Int32 {
     return 0
   case ("exp", "screen"):
     guard let id = args[2] else { throw PLError.usage("usage: perfloop exp screen ID") }
-    let l = try loop(); show(try l.screen(id), l); return 0
+    let l = try loop(); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
+    show(try l.screen(id), l); return 0
   case ("exp", "full"):
     guard let id = args[2] else { throw PLError.usage("usage: perfloop exp full ID") }
-    let l = try loop(); show(try l.full(id, force: args.has("force")), l); return 0
+    let l = try loop(); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
+    show(try l.full(id, force: args.has("force")), l); return 0
   case ("exp", "promote"):
     guard let id = args[2] else { throw PLError.usage("usage: perfloop exp promote ID [--owner]") }
     var o = Loop.PromoteOptions(); o.owner = args.has("owner"); o.allowDirty = args.has("allow-dirty"); o.pr = args.one("pr")
@@ -190,6 +207,47 @@ func run(_ args: Args) throws -> Int32 {
     r.lines.forEach(out)
     out("replay: \(r.mismatches == 0 ? "every step as expected" : "\(r.mismatches) step(s) not as expected")")
     return r.mismatches == 0 ? 0 : 4
+
+  case ("queue", "add"):
+    guard let id = args[2] else { throw PLError.usage("usage: perfloop queue add ID [--stage auto|screen|full] [--runner R]") }
+    let it = try loop().queueAdd(id, stage: args.one("stage") ?? "auto", runner: args.one("runner"), note: args.one("note"), force: args.has("force"))
+    out("queued \(it.id): exp \(it.experiment) \(it.stage)\(it.force ? " --force" : "") on \(it.runner ?? "any runner")"); return 0
+  case ("queue", "list"), ("queue", nil):
+    let items = try loop().queue.items().filter { args.has("all") || $0.state != "removed" }
+    out(json ? PLJSON.encode(items.map { ["id": $0.id, "experiment": $0.experiment, "stage": $0.stage, "runner": $0.runner ?? "", "state": $0.state, "addedAt": $0.addedAt, "note": $0.note ?? "", "lastWait": $0.lastWait ?? "", "ranOn": $0.ranOn ?? ""] }) : Queue.text(items))
+    return 0
+  case ("queue", "remove"):
+    guard let id = args[2] else { throw PLError.usage("usage: perfloop queue remove QID") }
+    try loop().queueRemove(id); out("removed \(id)"); return 0
+  case ("queue", "run"):
+    guard let spec = args.one("runner") else { throw PLError.usage("usage: perfloop queue run --runner R [--until HH:MM] [--idle S] [--force]") }
+    var until: Date?
+    if let u = args.one("until") { guard let d = Until.parse(u) else { throw PLError.usage("--until HH:MM (24 h)") }; until = d }
+    let l = try loop()
+    let r = try Runners.make(spec, store: l.store, options: runnerOptions(args, gatedByDefault: true))
+    r.log = { err($0) }
+    trapSignals()
+    let res = try l.queueRun(on: r, until: until)
+    res.lines.forEach(out)
+    if let s = res.stopped { out("stopped: \(s)") }
+    return 0
+  case ("runner", "check"), ("runner", "clean"):
+    guard let spec = args[2] else { throw PLError.usage("usage: perfloop runner check|clean R") }
+    let r = try Runners.make(spec, store: try store(), options: runnerOptions(args, gatedByDefault: false))
+    defer { r.close() }
+    if args[1] == "clean" {
+      guard let s = r as? SSHRunner else { out("\(r.name): nothing to clean (the store is this one)"); return 0 }
+      out(try s.clean()); return 0
+    }
+    if let s = r as? SSHRunner { try s.check().forEach(out); return 0 }
+    let i = try r.identity()
+    out("\(i.line), macOS \(i.os ?? "?")")
+    if let lr = r as? LocalRunner, let g = lr.gate {
+      let reading = lr.idle.read()
+      out("idle: \(reading.idle.map { "\(Int($0)) s" } ?? "unknown")\(reading.frontmost.map { ", frontmost \($0)" } ?? "")\(reading.locked == true ? ", screen locked" : "")")
+      out(g.wait(reading).map { "would wait: " + $0.text(threshold: g.threshold) } ?? "would start a rep now (idle ≥ \(Int(g.threshold)) s)")
+    }
+    return 0
 
   case ("sweep", _): return try SweepCommand.run(Array(CommandLine.arguments.dropFirst(2)))
   case ("gestures", _): return try GesturesCommand.run(args)
@@ -233,6 +291,7 @@ func run(_ args: Args) throws -> Int32 {
     if json { out(PLJSON.encode(es)); return 0 }
     for e in es {
       var line = "\(e.at) \(e.experiment) \(e.state.padding(toLength: 11, withPad: " ", startingAt: 0)) by \(e.by)"
+      if let r = e.runner { line += " on \(r)\(e.machine.map { " (\($0))" } ?? "")" }
       if let o = e.objective { line += " · \(o.before.map { String($0) } ?? "-") → \(o.after.map { String($0) } ?? "-")" }
       if let n = e.note { line += " · \(n)" }
       out(line)
@@ -245,6 +304,34 @@ func run(_ args: Args) throws -> Int32 {
   default:
     throw PLError.usage("unknown command '\(args.positional.joined(separator: " "))'\n\n" + help)
   }
+}
+
+/// The runner flags (C10). `exp screen/full` run ungated unless --idle is given; `queue run --runner local` is gated
+/// (--idle 120) unless --force.
+func runnerOptions(_ args: Args, gatedByDefault: Bool) throws -> RunnerOptions {
+  var o = RunnerOptions()
+  if let i = args.one("idle") { guard let x = Double(i), x >= 0 else { throw PLError.usage("--idle takes seconds") }; o.idle = x }
+  o.force = args.has("force") || (!gatedByDefault && o.idle == nil)
+  o.busyApps = args.one("busy-apps").map { $0.split(separator: ",").map(String.init) }
+  o.idleFrom = args.one("idle-from") ?? ProcessInfo.processInfo.environment["PERFLOOP_IDLE_FROM"]
+  o.acceptNewHostKey = args.has("accept-new-host-key")
+  o.launch = args.one("launch")
+  o.lock = args.one("lock")
+  for kv in args.all("remote-env") { let p = kv.split(separator: "=", maxSplits: 1).map(String.init); if p.count == 2 { o.remoteEnv[p[0]] = p[1] } }
+  return o
+}
+
+func useRunner(_ l: Loop, _ args: Args, gatedByDefault: Bool) throws {
+  guard let spec = args.one("runner") ?? (args.has("idle") ? "local" : nil) else { return }
+  let r = try Runners.make(spec, store: l.store, options: runnerOptions(args, gatedByDefault: gatedByDefault))
+  r.log = { err($0) }
+  l.runner = r
+  trapSignals()
+}
+
+/// ^C or a kill during a rep: take the bench's windows down with us.
+func trapSignals() {
+  for s in [SIGINT, SIGTERM, SIGHUP] { signal(s) { sig in Child.killAll(); exit(128 + sig) } }
 }
 
 do { exit(try run(Args(Array(CommandLine.arguments.dropFirst())))) }

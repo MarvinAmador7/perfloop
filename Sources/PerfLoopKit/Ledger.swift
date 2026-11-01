@@ -14,6 +14,9 @@ public struct LedgerEntry: Codable, Sendable, Equatable {
   /// agent | owner.
   public var by: String
   public var note: String?
+  /// Where a stage's numbers came from (C10): the runner and the machine model. Results are keyed by both.
+  public var runner: String?
+  public var machine: String?
 
   public struct Before: Codable, Sendable, Equatable {
     public var before: Double?
@@ -21,8 +24,10 @@ public struct LedgerEntry: Codable, Sendable, Equatable {
     public init(before: Double?, after: Double?) { self.before = before; self.after = after }
   }
 
-  public init(experiment: String, state: String, objective: Before? = nil, build: String? = nil, by: String = "agent", note: String? = nil, at: String = Clock.now()) {
+  public init(experiment: String, state: String, objective: Before? = nil, build: String? = nil, by: String = "agent", note: String? = nil, at: String = Clock.now(),
+              runner: RunnerIdentity? = nil) {
     self.at = at; self.experiment = experiment; self.state = state; self.objective = objective; self.build = build; self.by = by; self.note = note
+    self.runner = runner?.runner; machine = runner?.model
   }
 }
 
