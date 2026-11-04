@@ -26,6 +26,7 @@ import PerfLoopProbe
   let recorder: Recorder
   let activate: Bool
   let sampler: MainThreadSampler?
+  var appearance: NSAppearance.Name? = .aqua
   var steps: [StepRecord] = []
   var checks: [CheckResult] = []
   var notes: [String] = []
@@ -59,6 +60,8 @@ import PerfLoopProbe
     let w = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
     w.title = title ?? "\(scenario) (perfloop bench)"
     w.isReleasedWhenClosed = false
+    // One appearance on every machine, so snapshots of the champion and the candidate compare (Bench.appearance).
+    if let a = appearance { w.appearance = NSAppearance(named: a) }
     w.contentView = view
     w.center()
     window = w
@@ -144,6 +147,11 @@ import PerfLoopProbe
 
   /// Waits until `check` holds (checked every frame, probe event and main-thread stretch); false at the timeout.
   public func wait(timeoutMs: Double = 3000, _ check: @escaping () -> Bool) async -> Bool { await recorder.wait(timeoutMs: timeoutMs, check) }
+
+  /// How many times a view's body ran in this rep (`Probe.body`), and for which ids: what a guard of the bench's own
+  /// checks ("every row on screen was built").
+  public func bodyCount(of view: String, since: Double = 0) -> Int { recorder.timeline.bodies.filter { $0.view == view && $0.atMs >= since }.count }
+  public func bodyIDs(of view: String, since: Double = 0) -> Set<String> { Set(recorder.timeline.bodies.filter { $0.view == view && $0.atMs >= since }.compactMap(\.id)) }
 
   /// The newest value the app reported for a probe event (`Probe.event`), if any.
   public func lastEvent(_ name: String) -> Int? { recorder.events.last { $0.name == name }?.value }

@@ -9,11 +9,21 @@ import PerfLoopKit
 /// second later (`.later.png`) so what moves by itself (a caret, a spinner) is left out of the comparison. The runner
 /// hands the champion's and the candidate's pictures to the champion's `snapdiff`, so a candidate can't judge itself.
 public enum Snapshot {
-  /// The window's content view drawn into a bitmap (no screen-recording permission: the view draws itself).
+  /// The window's content view drawn into a bitmap (no screen-recording permission: the view draws itself), over the
+  /// window's background colour, which `cacheDisplay` leaves out (text would be drawn on transparency).
   @MainActor public static func png(of window: NSWindow) -> Data? {
     guard let v = window.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return nil }
     v.cacheDisplay(in: v.bounds, to: rep)
-    return rep.representation(using: .png, properties: [:])
+    guard let content = rep.cgImage else { return rep.representation(using: .png, properties: [:]) }
+    let w = content.width, h = content.height
+    guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    var bg = NSColor.windowBackgroundColor.cgColor
+    window.effectiveAppearance.performAsCurrentDrawingAppearance { bg = (window.backgroundColor ?? .windowBackgroundColor).cgColor }
+    ctx.setFillColor(bg); ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+    ctx.draw(content, in: CGRect(x: 0, y: 0, width: w, height: h))
+    guard let img = ctx.makeImage() else { return nil }
+    return NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])
   }
 
   /// RGBA8 pixels of a PNG (or any image ImageIO reads), drawn at its own size.

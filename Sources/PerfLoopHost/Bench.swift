@@ -85,6 +85,9 @@ public final class Bench: @unchecked Sendable {
   public var appModules: [String] = []
   public var defaultFixture: String?
   public var windowSize = CGSize(width: 900, height: 700)
+  /// The bench window's appearance (light by default), whatever the Mac's setting: snapshots compare across machines.
+  /// nil follows the system.
+  public var appearance: NSAppearance.Name? = .aqua
 
   /// `stamp` is `perfLoopBuildStamp` from the PerfLoopStamp plugin; nil leaves the bench unstamped, which
   /// `perfloop store add` refuses.
@@ -337,6 +340,7 @@ public final class Bench: @unchecked Sendable {
       let recorder = Recorder(nominalHz: Double(NSScreen.main?.maximumFramesPerSecond ?? 60))
       Probe.sink = recorder; Mutations.sink = recorder.causes
       let run = Run(scenario: name, fixture: fixture, params: params, rep: i, recorder: recorder, activate: activate, sampler: sampler)
+      run.appearance = appearance
       defer { run.close(); Probe.sink = nil; Mutations.sink = nil }
       try await body(run)
       let window = run.windowState()
