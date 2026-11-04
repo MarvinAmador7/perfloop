@@ -1,3 +1,6 @@
+// swift-corelibs-xctest can't run a @MainActor test class (its discovery force-casts the test methods and traps), so
+// these run on macOS only; the recorder is the same code on both.
+#if canImport(Darwin)
 import XCTest
 @testable import PerfLoopProbe
 
@@ -88,3 +91,4 @@ import XCTest
     XCTAssertNil(bare.ids); XCTAssertNil(bare.objects); XCTAssertEqual(bare.bodyTotal, 2)
   }
 }
+#endif

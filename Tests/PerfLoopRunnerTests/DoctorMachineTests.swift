@@ -23,8 +23,12 @@ final class DoctorMachineTests: XCTestCase {
   func testAFreeMacIsAllOk() {
     let r = report(probe())
     XCTAssertTrue(r.ok, r.text)
+    #if os(macOS)
     XCTAssertFalse(r.lines.contains { $0.status != .ok }, r.text)
     XCTAssertTrue(r.text.contains("macOS 26.1 on Mac16,10"))
+    #else
+    XCTAssertEqual(r.lines.filter { $0.status != .ok }.map(\.check), ["platform"], "elsewhere: only the headless verbs")
+    #endif
   }
 
   func testALockedScreenFails() {
@@ -53,7 +57,10 @@ final class DoctorMachineTests: XCTestCase {
   func testOptionalToolsOnlyWarn() {
     let r = report(probe(xctrace: nil, devTools: false, load: (7, 8), arm: false))
     XCTAssertTrue(r.ok, r.text)
-    for c in ["xctrace", "developer tools", "load", "sampler"] { XCTAssertEqual(status(r, c), .warn, c) }
+    for c in ["xctrace", "developer tools", "load"] { XCTAssertEqual(status(r, c), .warn, c) }
+    #if os(macOS)
+    XCTAssertEqual(status(r, "sampler"), .warn)
+    #endif
   }
 
   func testOldMacOSFails() {

@@ -156,6 +156,16 @@ final class LoopTests: FakeBenchCase {
     XCTAssertThrowsError(try loop.checkPatch("diff --git a/.relay/token b/.relay/token\n+x\n"))
     XCTAssertThrowsError(try loop.checkPatch("diff --git a/bench/x.trace b/bench/x.trace\n"))
     XCTAssertNoThrow(try loop.checkPatch("diff --git a/Sources/Reel.swift b/Sources/Reel.swift\n+x\n"))
+    // An app's own private paths come from the champion's manifest; a manifest with verbs and no list has none but
+    // the store's and traces.
+    var m = Manifest(app: "a", adapter: "a", build: nil, scenarios: [])
+    m.verbs = ["run"]; m.privatePaths = ["Secrets/"]
+    XCTAssertThrowsError(try loop.checkPatch("diff --git a/Secrets/key b/Secrets/key\n", privatePaths: Loop.privatePaths(m)))
+    XCTAssertNoThrow(try loop.checkPatch("diff --git a/.relay/x b/.relay/x\n", privatePaths: Loop.privatePaths(m)))
+    XCTAssertThrowsError(try loop.checkPatch("diff --git a/.perfloop/ledger.jsonl b/.perfloop/ledger.jsonl\n", privatePaths: Loop.privatePaths(m)))
+    m.privatePaths = nil
+    XCTAssertEqual(Loop.privatePaths(m), [".perfloop/"])
+    XCTAssertEqual(Loop.privatePaths(nil), [".relay/", ".traces/", ".capcomd", ".perfloop/"], "deskbench-era manifests keep capcomd's list")
   }
 
   func testReplayAgainstFakes() throws {

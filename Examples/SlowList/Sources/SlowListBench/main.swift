@@ -10,6 +10,7 @@ import SlowListKit
 let bench = Bench(app: "slowlist", stamp: perfLoopBuildStamp)
 bench.appModules = ["SlowList"]
 bench.probes = ["List", "Row", "RowContent"]
+bench.privatePaths = ["Secrets/"]            // never recorded in an experiment's patch (traces and stores never are)
 bench.fixture("rows1000", summary: "1,000 items (the default)", params: ["rows": "1000"], parametric: ["rows": 10...50_000])
 bench.fixture("rows300", summary: "300 items: the second fixture a win must not be worse on", params: ["rows": "300"], parametric: ["rows": 10...50_000])
 bench.knobs { [ListKnobs.rank] }

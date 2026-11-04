@@ -83,7 +83,10 @@ public enum MannWhitney {
       return Result(u: u, p: Stats.round(Double(hits) / Double(total), 6), exact: true)
     }
     let N = Double(m + n)
-    let ties = Dictionary(grouping: a + b, by: { $0 }).values.map { Double($0.count) }.reduce(0) { $0 + ($1 * $1 * $1 - $1) }
+    // Typed step by step: the one-expression form took Linux's type checker past its time limit.
+    let groups: [Double: [Double]] = Dictionary(grouping: a + b, by: { $0 })
+    let counts: [Double] = groups.values.map { Double($0.count) }
+    let ties: Double = counts.reduce(0.0) { (acc: Double, t: Double) -> Double in acc + (t * t * t - t) }
     let variance = Double(m) * Double(n) / 12 * ((N + 1) - ties / (N * (N - 1)))
     guard variance > 0 else { return Result(u: u, p: 1, exact: false) }
     let z = max(0, abs(u - Double(m) * Double(n) / 2) - 0.5) / variance.squareRoot()

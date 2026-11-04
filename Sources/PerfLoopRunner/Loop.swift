@@ -161,10 +161,21 @@ public final class Loop {
     try text.write(to: p, atomically: true, encoding: .utf8)
     return store.rel(p)
   }
-  /// The repo's rule (AGENTS.md): never .relay/, .traces/, ~/.capcomd, nor a trace.
-  public func checkPatch(_ text: String) throws {
+  /// What a patch may never touch: a `.trace` file and a store (`.perfloop/`), always; the paths the champion's
+  /// manifest lists (`privatePaths`); for a manifest from before that field (no `verbs` either: capcomd's deskbench), the
+  /// paths capcomd's AGENTS.md names, so stores made then keep their protection.
+  public static func privatePaths(_ m: Manifest?) -> [String] {
+    let always = [".perfloop/"]
+    if let p = m?.privatePaths { return p + always }
+    return (m == nil || m?.verbs == nil ? legacyPrivatePaths : []) + always
+  }
+  static let legacyPrivatePaths = [".relay/", ".traces/", ".capcomd"]
+
+  /// Refuses a patch whose files include a private path (`privatePaths`) or a trace (they carry the environment).
+  public func checkPatch(_ text: String, privatePaths paths: [String]? = nil) throws {
+    let ps = paths ?? Self.privatePaths(store.champion().flatMap { try? store.entry($0.build.hash ?? "").manifest })
     let bad = text.split(separator: "\n").filter { $0.hasPrefix("diff --git ") }.filter { l in
-      [".relay/", ".traces/", ".capcomd"].contains { l.contains($0) } || l.hasSuffix(".trace")
+      ps.contains { l.contains($0) } || l.hasSuffix(".trace")
     }
     if !bad.isEmpty { throw PLError.refused("the patch touches paths that are never recorded: " + bad.joined(separator: "; ")) }
   }

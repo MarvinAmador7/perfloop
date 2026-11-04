@@ -90,6 +90,10 @@ final class RunnerTests: FakeBenchCase {
   }
 
   func testALockedRemoteScreenWaitsUntilUnlocked() throws {
+    #if !canImport(Darwin)
+    // The runner reads the remote lock with ioreg | plutil, run here as "the remote Mac": plutil is macOS-only.
+    throw XCTSkip("the fake remote Mac needs plutil")
+    #endif
     try baseline()
     let e = try candidate(); try loop.queueAdd(e.id, stage: "screen")
     let locked = tmp.appendingPathComponent("mini-locked")
