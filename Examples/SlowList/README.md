@@ -29,7 +29,7 @@ And one cheat (`-DSLOWLIST_CHEAT`): rows draw nothing. It is very fast and wrong
 swift build -c release --product SlowListBench
 B=.build/release/SlowListBench
 $B describe                                  # the manifest the runner reads
-../../.build/release/perfloop doctor --bench $B   # (build the runner first: swift build -c release in tools/perfloop)
+../../.build/release/perfloop doctor --bench $B   # (build the runner first: swift build -c release at the repository root)
 $B run select --reps 1                       # opens a window for ~3 s; prints where the time went
 PERFLOOP_KNOBS=rows.rank=index $B run select --reps 1
 ./walkthrough.sh --dry-run                   # the whole loop, printed

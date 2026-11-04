@@ -58,7 +58,7 @@ public typealias ScenarioBody = @MainActor (Run) async throws -> Void
 public typealias GuardBody = @MainActor (Run, [String: Double]) async -> GuardResult
 
 /// An app's bench: register fixtures, scenarios, knobs and guards, then `bench.main()`. The library answers the
-/// runner's whole contract (tools/perfloop/ADAPTER.md): `list`, `describe`, `run`, `snapdiff`, `knobs`, `help`.
+/// runner's whole contract (ADAPTER.md in the PerfLoop repository): `list`, `describe`, `run`, `snapdiff`, `knobs`, `help`.
 ///
 ///     let bench = Bench(app: "slowlist", stamp: perfLoopBuildStamp)   // the PerfLoopStamp plugin writes the stamp
 ///     bench.fixture("rows500", params: ["rows": "500"])
@@ -188,7 +188,7 @@ public final class Bench: @unchecked Sendable {
   @MainActor
   public var help: String {
     """
-    \(adapter): the PerfLoop bench of \(app) (PerfLoopHost; the contract is tools/perfloop/ADAPTER.md)
+    \(adapter): the PerfLoop bench of \(app) (PerfLoopHost; the contract is ADAPTER.md in the PerfLoop repository)
 
       list [--json]                         scenarios, fixtures and the build stamp
       describe [--json]                     the perfloop.manifest/1 a runner reads

@@ -1,11 +1,11 @@
 import XCTest
 @testable import PerfLoopKit
 
-/// design/perf-loop/replay.json (SPEC §6.1) decodes and its budget meets the replay's acceptance: at most a third
+/// docs/design/replay.json (SPEC §6.1) decodes and its budget meets the replay's acceptance: at most a third
 /// of the session's bench minutes.
 final class ReplayTests: XCTestCase {
   static let plan = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("design/perf-loop/replay.json")
+    .appendingPathComponent("docs/design/replay.json")
 
   func testThePlanDecodesAndFitsTheBudget() throws {
     let p = try PLJSON.read(ReplayPlan.self, path: Self.plan.path)

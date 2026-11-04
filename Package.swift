@@ -1,7 +1,7 @@
 // swift-tools-version:5.9
 import PackageDescription
 
-// PerfLoop: an agent-first performance loop for native macOS apps (design/perf-loop/SPEC.md). Generic: nothing here
+// PerfLoop: an agent-first performance loop for native macOS apps (docs/design/SPEC.md). Generic: nothing here
 // knows what capcomd is. An app's adapter (capcomd's is `deskbench`) describes its scenarios, knobs and guards in a
 // manifest; the `perfloop` runner drives it as a child process and never links it. scripts/check-imports.sh (and
 // ImportGuardTests) fail on any capcomd import under Sources/.

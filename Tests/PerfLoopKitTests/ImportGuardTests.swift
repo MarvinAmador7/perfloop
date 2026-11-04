@@ -1,6 +1,6 @@
 import XCTest
 
-/// The genericity gate (SPEC §2.2): no capcomd module is imported under tools/perfloop/Sources. Same rule as
+/// The genericity gate (SPEC §2.2): no capcomd module is imported under Sources. Same rule as
 /// scripts/check-imports.sh, which CI runs on its own.
 final class ImportGuardTests: XCTestCase {
   static let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

@@ -4,7 +4,7 @@ import PerfLoopProbe
 import SlowListKit
 
 // SlowList's bench: the app's own window content (ListContainerView) on fixture data, two scenarios, one knob, one
-// guard of its own. PerfLoopHost answers the runner's contract (tools/perfloop/ADAPTER.md); this file only says what to
+// guard of its own. PerfLoopHost answers the runner's contract (ADAPTER.md in the PerfLoop repository); this file only says what to
 // measure. An agent improving SlowList never edits this file inside an experiment (AGENTS.md).
 
 let bench = Bench(app: "slowlist", stamp: perfLoopBuildStamp)

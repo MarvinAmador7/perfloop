@@ -42,7 +42,7 @@ perfloop ledger                              # what was tried, by whom, with wha
 ## Never
 
 - **Never edit what judges you**: the bench target (scenarios, fixtures, guards, checks), the manifest, PROGRAM.md, the
-  store (`~/.perfloop`), `tools/perfloop`. The runner reads the rules from the *champion's* manifest, so a candidate
+  store (`~/.perfloop`), the PerfLoop package itself. The runner reads the rules from the *champion's* manifest, so a candidate
   that changes them is judged by the old ones anyway; changes to the bench are their own PR for the owner.
 - **Never make the app aware of the bench**: no `PERFLOOP_` checks outside knobs, no fixture names, no "if measured"
   branches. A blank row that is fast is still a blank row; the guards exist because the search will find it.

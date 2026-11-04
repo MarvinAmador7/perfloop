@@ -1,6 +1,6 @@
 import Foundation
 
-// Correctness guards (design/perf-loop CAPABILITIES.md C6), as the runner sees them: names in the champion's manifest
+// Correctness guards (docs/design/CAPABILITIES.md C6), as the runner sees them: names in the champion's manifest
 // (never the candidate's), results the adapter reports per rep (`reps[].guards[]`), and one the runner judges itself
 // per pair from the two sides' snapshots (`snapshot-diff`, through the champion adapter's `snapdiff`). A guard that
 // fails on the candidate while it passes on the champion vetoes a win; a snapshot over tolerance sends the experiment

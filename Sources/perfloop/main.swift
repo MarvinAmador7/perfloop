@@ -2,7 +2,7 @@ import Foundation
 import PerfLoopKit
 import PerfLoopRunner
 
-// perfloop: the runner of an app's performance loop (design/perf-loop/SPEC.md). It drives the app's bench adapter as a
+// perfloop: the runner of an app's performance loop (docs/design/SPEC.md). It drives the app's bench adapter as a
 // child (`describe`, `ab`, `run`, `diff`), keeps builds, experiments and the ledger in a store, and decides with the
 // acceptance rule of SPEC §5.1. The adapter folder's PROGRAM.md is the procedure an agent follows.
 
@@ -126,7 +126,7 @@ func run(_ args: Args) throws -> Int32 {
     let dir = URL(fileURLWithPath: Store.tilde(args.one("dir") ?? FileManager.default.currentDirectoryPath)).standardizedFileURL
     var dep = args.one("perfloop")
     if dep == nil, let root = Scaffold.packageRoot(of: CommandLine.arguments[0]) { dep = Scaffold.relativePath(from: dir, to: root) }
-    guard let d = dep else { throw PLError.usage("where is the PerfLoop package? pass --perfloop PATH (a checkout of tools/perfloop) or a git URL") }
+    guard let d = dep else { throw PLError.usage("where is the PerfLoop package? pass --perfloop PATH (a checkout of the perfloop repository) or a git URL") }
     var sc = Scaffold(app: app, dir: dir, target: args.one("target"), perfloop: d)
     sc.package = args.has("package")
     let w = try sc.write()

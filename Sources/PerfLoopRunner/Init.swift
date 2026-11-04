@@ -114,7 +114,7 @@ public struct Scaffold {
     import PerfLoopProbe
     // import YourAppKit       // the module that has your app's views and model
 
-    // \(app)'s PerfLoop bench (perfloop init). The contract with the runner is tools/perfloop/ADAPTER.md; PerfLoopHost
+    // \(app)'s PerfLoop bench (perfloop init). The contract with the runner is ADAPTER.md in the PerfLoop repository; PerfLoopHost
     // answers it. This file says what to measure: fixtures (the data), scenarios (what the user does), knobs, guards.
     // An agent running the loop never edits this file inside an experiment (AGENTS.md): it is how builds are judged.
 
@@ -168,7 +168,7 @@ public struct Scaffold {
       4. \(bench) run select --reps 1                       (opens a window for a few seconds)
       5. export PERFLOOP_APP=\(Self.appName(app)); perfloop store add \(bench)
          perfloop champion set <hash from store add> --merged
-      6. hand PROGRAM.md and tools/perfloop/AGENTS.md to your coding agent
+      6. hand PROGRAM.md and PerfLoop's AGENTS.md to your coding agent
     """
   }
 
@@ -177,7 +177,7 @@ public struct Scaffold {
     return """
     # PROGRAM: making \(app) faster with perfloop
 
-    You are a coding agent improving \(app)'s performance. This file is your procedure; tools/perfloop/AGENTS.md has the
+    You are a coding agent improving \(app)'s performance. This file is your procedure; PerfLoop's AGENTS.md has the
     rules every PerfLoop agent follows. The bench (`\(target)`) measures; `perfloop` decides and remembers. You change
     the app's code, one idea at a time, and keep a change only when the loop says it won and nothing visible broke.
 

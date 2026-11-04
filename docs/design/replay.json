@@ -1,0 +1,53 @@
+{
+  "schema": "perfloop.replay/1",
+  "app": "capcomd-desktop-replay",
+  "root": "/private/tmp/claude-501/-Users-dnamic-Developer-capcomd/8e65df3c-21ce-4bf7-8751-efb172299806/scratchpad",
+  "fixture": "crew17",
+  "via": "run",
+  "builds": [
+    { "name": "base", "dir": "bench/base-dir", "commit": "3a6b5b7", "dirty": false, "confirmed": true,
+      "note": "the reel before the session: SwiftUI ScrollView, snapping and position tracking off the per-frame path (3a6b5b7's views, c79350e's bench)" },
+    { "name": "v1", "dir": "bench/v1-dir", "commit": "c79350e", "dirty": true, "confirmed": false,
+      "note": "H1: per-column focused/onScreen flags, so a tab click invalidates one column instead of every Column body" },
+    { "name": "v2", "dir": "bench/v2-dir", "commit": "c79350e", "dirty": true, "confirmed": false,
+      "note": "H2: a non-movable window with a custom drag area, to remove a per-frame focus walk seen in a stale trace; reverted" },
+    { "name": "v3", "dir": "bench/v3-dir", "commit": "c79350e", "dirty": true, "confirmed": false,
+      "note": "H3: the first AppKit reel (NSScrollView of hosting views); Auto Layout's sizeThatFits on 16 hosting views is the new wall" },
+    { "name": "v4", "dir": "bench/v4-dir", "commit": "c79350e", "dirty": true, "confirmed": false,
+      "note": "H4: the representable answers sizeThatFits itself, so Auto Layout never sizes the hosting views" },
+    { "name": "v5", "dir": "bench/v5-dir", "commit": "9bcd41a", "dirty": false, "confirmed": true,
+      "note": "H5/H6: slides as additive Core Animation in the render server (e6d3625) and heads-first open (9bcd41a)" }
+  ],
+  "champion": "base",
+  "steps": [
+    { "do": "exp", "build": "v1", "scenario": "step", "expect": "rejected",
+      "hypothesis": "per-column focused/onScreen flags: a step invalidates only the columns whose flags changed",
+      "why": "ab-flags-step: every metric inside the noise band; the session kept it for its body counts, the loop drops it" },
+    { "do": "exp", "build": "v2", "scenario": "step", "expect": "rejected",
+      "hypothesis": "a non-movable window removes the per-frame focus walk",
+      "why": "the walk was already gone in the champion: no gain, and the replay shows the screen saying so in 40 s" },
+    { "do": "exp", "build": "v3", "scenario": "step", "expect": "won|lost",
+      "hypothesis": "an AppKit NSScrollView reel takes SwiftUI's scroll machinery off the per-frame path",
+      "why": "the find to make: the screen's worst-stretch stacks name LayoutEngineBox.sizeThatFits → PlatformViewLayoutEngine.sizeThatFits, without xctrace" },
+    { "do": "check", "a": "v1", "b": "v3", "scenario": "step", "expect": "lateFrames up, not a regression; explain reports the rate change",
+      "why": "wrong turn 2 (H5): 8 → 30 late frames read as +275 % because the panel went from 24 to 48 Hz; the hitch ratio and CPU ms decide" },
+    { "do": "exp", "build": "v4", "scenario": "step", "expect": "won",
+      "hypothesis": "the representable answers sizeThatFits itself, so Auto Layout never sizes the 16 hosting views" },
+    { "do": "diff", "build": "base", "a": "trace:bench/deep/base-step-time/step-time.trace", "b": "champion", "scenario": "step", "expect": "refused",
+      "why": "wrong turn 1 (H2): a trace recorded on base-dir must not drive an experiment on a later champion (v3 or v4); refused unless --allow-stale" },
+    { "do": "diff", "a": "v4", "b": "champion", "scenario": "step", "expect": "NSScrollAnimationHelper / ViewGraph.invalidateTransform is the largest remaining attributable subtree",
+      "why": "the render-server slide find: what v5 removed" },
+    { "do": "exp", "build": "v5", "scenario": "step", "expect": "won",
+      "hypothesis": "slides as additive Core Animation in the render server, and a project opens heads-first" },
+    { "do": "exp", "build": "v5", "scenario": "switch", "screenOnly": true, "expect": "promising",
+      "hypothesis": "heads-first open: a switch shows the new columns' heads before their threads",
+      "why": "the second scenario: the same build must not be worse on switch (it was 544 → 153 ms by hand)" }
+  ],
+  "session": { "abRuns": 16, "abMinutes": 48, "recordings": 40, "recordingMinutes": 10, "promotions": ["v3 or v4", "v5"] },
+  "costs": { "screenS": 40, "fullS": 180, "confirmationS": 60, "diffS": 15 },
+  "notes": [
+    "v1–v4 were built from uncommitted working trees on c79350e; their mapping to hypotheses comes from the ab-*.txt names and the essay, and the agent that built them should confirm it (SPEC §6.1)",
+    "the builds predate the stamp: they enter the store with perfloop store import, and promotions of dirty imports pass --allow-dirty (a replay, not a release)",
+    "via run: one child per side reads CPU ms per step from each rep's mainThread.cpuMs, which the session's binaries already record; their ab predates the objective"
+  ]
+}

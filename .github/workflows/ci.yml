@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # The package's tests, the genericity gate, and the example app that depends on it as an outside app would. No
+  # window opens: the tests use fake adapters, fake ssh and scripted idle readings.
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package tests
+        run: swift build && swift test && scripts/check-imports.sh
+      - name: Example app (SlowList)
+        working-directory: Examples/SlowList
+        run: swift build && swift test && ./walkthrough.sh --dry-run > /dev/null
+  # PerfLoopKit and the runner build and test on Linux (docs/design/SPEC.md §2.2); PerfLoopHost is macOS-only and
+  # compiles to an empty module there.
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: swift:6.1
+    steps:
+      - uses: actions/checkout@v4
+      # The ssh runner's tests copy builds with rsync, as the real runner does.
+      - run: apt-get update -qq && apt-get install -y -qq rsync
+      - name: Package tests (Linux)
+        run: swift build && swift test

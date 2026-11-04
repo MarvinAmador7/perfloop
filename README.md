@@ -12,7 +12,7 @@ uses Instruments for, as JSON it can read, and a loop that keeps it honest:
 - **Runners.** This Mac only while nobody is using it, a spare Mac over `ssh://`, an overnight queue.
 
 The agent's view is a CLI, JSON files with versioned schemas, and the ledger (`AGENTS.md`). The design and its
-history are in `design/perf-loop/` (SPEC.md, CAPABILITIES.md, SCHEMAS.md, JOURNEY.md, TOOL.md).
+history are in [`docs/design/`](docs/design/) (SPEC.md, CAPABILITIES.md, SCHEMAS.md, JOURNEY.md, TOOL.md).
 
 ## Requirements
 
@@ -22,7 +22,7 @@ Xcode's `xctrace` only for profiles. No root, no Developer Mode, no screen-recor
 ## Quickstart: the example app
 
 ```sh
-cd tools/perfloop && swift build -c release && alias perfloop=$PWD/.build/release/perfloop
+git clone https://github.com/MarvinAmador7/perfloop && cd perfloop && swift build -c release && alias perfloop=$PWD/.build/release/perfloop
 cd Examples/SlowList
 swift build -c release --product SlowListBench
 perfloop doctor --bench .build/release/SlowListBench          # is this Mac and this bench ready?
@@ -47,7 +47,7 @@ perfloop doctor --bench .build/release/MyAppBench
 export PERFLOOP_APP=myapp
 perfloop store add .build/release/MyAppBench
 perfloop champion set <hash> --merged
-# hand PROGRAM.md and tools/perfloop/AGENTS.md to your coding agent
+# hand PROGRAM.md and PerfLoop's AGENTS.md to your coding agent
 ```
 
 What your app adds, beside the bench target:
@@ -123,6 +123,10 @@ package free of any app's modules. `Examples/SlowList` has its own `swift test`.
 
 ## Status
 
-Built and used on capcomd Desktop (`apps/menubar/app`, adapter `deskbench`) and on `Examples/SlowList`. Not yet in
+Built and used on [capcomd](https://github.com/MarvinAmador7/capcomd) Desktop (adapter `deskbench`, where PerfLoop started) and on `Examples/SlowList`. Not yet in
 PerfLoopHost: xctrace profiles and `diff` (deskbench has them), gesture replay drivers, the VM runner. See
-`design/perf-loop/TOOL.md` for what's left.
+[`docs/design/TOOL.md`](docs/design/TOOL.md) for what's left.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

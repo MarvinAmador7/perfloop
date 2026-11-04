@@ -1,5 +1,5 @@
 #!/bin/sh
-# The genericity gate (design/perf-loop/SPEC.md §2.2): nothing under tools/perfloop/Sources may import a capcomd
+# The genericity gate (docs/design/SPEC.md §2.2): nothing under Sources may import a capcomd
 # module (Capcomd*, or the bench's DeskBenchKit). Usage: check-imports.sh [SOURCES_DIR]; exit 1 with the offending
 # lines when one does.
 dir=${1:-"$(cd "$(dirname "$0")/.." && pwd)/Sources"}
