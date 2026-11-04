@@ -53,3 +53,18 @@ What the bench said, without a profiler: the champion's worst stretch was `ListM
 showing the filter field's completion list (`SPCompletionListRemoteViewController resizeRemoteWindow`) and the focus
 ring: the next real cost in this app, found the same way. These numbers are from a developer's Mac in use (last input
 0 s before the run), which the noise bands absorbed here because the effect is 85 %; smaller effects want a free Mac.
+
+A sweep over the list's size and the knob, the same day (1 rep a point, so a cost curve, not a verdict):
+
+```sh
+perfloop sweep select --bench .build/release/SlowListBench --set rows=200..1000/400 --set rows.rank=sort,index --reps 1 --lock /tmp/window.lock
+```
+
+| rows | `sort` ms/step | `index` ms/step |
+|---:|---:|---:|
+| 200 | 27.2 | 15.8 |
+| 600 | 36.8 | 15.9 |
+| 1000 | 83.5 | 3.7 |
+
+`fit: ms/step grows 0.07 ms per row at rows.rank=sort (r² 0.87)`; with `index` the cost doesn't grow with the list
+(the slope the fit reports there, −0.015, is noise on a Mac in use).
