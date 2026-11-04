@@ -126,6 +126,31 @@ final class LoopTests: FakeBenchCase {
     XCTAssertThrowsError(try loop.diff(tmp.appendingPathComponent("unknown.trace").path, mine, exp: nil, allowStale: false))
   }
 
+  /// `perfloop profile champion|exp/ID` records through the build's own adapter (with the experiment's knobs) and
+  /// indexes the profile; `diff champion exp/ID` finds both by name, and says what to run when one is missing.
+  func testProfilesByNameFeedDiff() throws {
+    try baseline()
+    var o = Loop.NewOptions(hypothesis: "clip slide"); o.knobs = ["reel.slide": "clip"]; o.screen = false
+    let e = try loop.new(o)
+    XCTAssertThrowsError(try loop.diff("champion", "exp/\(e.id)", exp: nil, allowStale: false)) { XCTAssertTrue("\($0)".contains("perfloop profile champion"), "\($0)") }
+    let c = try loop.profile("champion")
+    XCTAssertTrue(c.path.hasPrefix(store.root.appendingPathComponent("profiles").path)); XCTAssertEqual(c.doc.scenario, "step")
+    let x = try loop.profile("exp/\(e.id)")
+    XCTAssertEqual(x.doc.notes, ["fake knobs=reel.slide=clip,"], "the experiment's knobs reach the recording")
+    let calls = adapterCalls("profile")
+    XCTAssertEqual(calls.count, 2); XCTAssertTrue(calls[1].contains("knobs=reel.slide=clip"))
+    XCTAssertEqual(loop.latestProfile(try loop.profileTarget("champion")), c.path)
+    XCTAssertEqual(loop.latestProfile(try loop.profileTarget("exp/\(e.id)")), x.path, "same binary, other knobs: its own profile")
+    XCTAssertTrue(try loop.diff("champion", "exp/\(e.id)", exp: nil, allowStale: false).contains("deskbench.diff/1"))
+    XCTAssertEqual(adapterCalls("diff").last, "diff \(c.path) \(x.path)")
+    XCTAssertEqual(try store.experiment(e.id).diff, "exp/\(e.id)/diff.json")
+    // An adapter without the verb says so.
+    let verbs = ["VERBS": "help,list,describe,knobs,run,snapdiff"]
+    let old = try store.add(try bench("old", verbs))
+    try loop.setChampion(build: old.build.hash!, merged: true, scenario: "step", fixture: "crew17")
+    XCTAssertThrowsError(try loop.profile("champion")) { XCTAssertTrue("\($0)".contains("no `profile` verb"), "\($0)") }
+  }
+
   func testPairsAreCounterbalanced() {
     let l = Loop(store: store)
     for key in ["0001/screen", "0002/screen", "0001/full"] {

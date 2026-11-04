@@ -78,7 +78,7 @@ bench.main()
 
 `run.step` runs the action and waits until the window is at rest, then records main-thread CPU, instructions,
 latency (to the first frame after an `until:` condition holds), frames, stretches with stacks, bodies and causes. The
-host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `run`, `snapdiff`, `knobs`.
+host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `run`, `snapdiff`, `knobs`, `profile`, `diff`.
 
 ## Commands
 
@@ -96,7 +96,9 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 | `session start` | the stopping rules (2 h, 20 candidates, 5 non-promising in a row) count from here |
 | `sweep SCENARIO --set rows=100..5000/500` | a cost curve over a fixture parameter or knob, with a fitted slope |
 | `queue add ID` · `queue list` · `queue remove QID` · `queue run --runner R` · `runner check R` · `runner clean R` | runners: `local` (idle-gated), `ssh://host` |
-| `diff A B` · `trace register` · `gestures list` · `exp replay` | deskbench's profiles and gestures; not yet in PerfLoopHost |
+| `profile champion\|exp/ID [--template time\|hitches\|swiftui]` | the build under xctrace (opens a window): call trees per step, hitches, hangs, SwiftUI tables; kept in the store, never an objective |
+| `diff champion exp/ID` (or two profile JSONs / traces) · `trace register` | what grew and shrank between two builds, ms per step, main thread; refuses traces of other builds |
+| `gestures list` · `exp replay` | recorded and synthetic gestures; a past session as experiments |
 
 `perfloop help` has every flag. Exit codes: 0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner).
 

@@ -146,7 +146,7 @@ public final class Bench: @unchecked Sendable {
 
   var tool: ToolInfo { let b = build; return ToolInfo(name: adapter, version: version, configuration: Self.configuration, commit: b.commit, build: b) }
 
-  public static let verbs = ["help", "list", "describe", "knobs", "run", "snapdiff"]
+  public static let verbs = ["help", "list", "describe", "knobs", "run", "snapdiff", "profile", "diff"]
   public static let exitCodes = ["ok": 0, "usage": 1, "harness": 2, "budget": 3, "regression": 4, "untrusted": 5]
 
   /// `describe --json`: the `perfloop.manifest/1` the runner does everything from.
@@ -198,6 +198,11 @@ public final class Bench: @unchecked Sendable {
                                             drive a scenario in a window of this process; the result is perfloop.result/2
       snapdiff A.png B.png [--diff-out D.png] [--guard-param snapshot-diff.tolerance=X] [--json]
                                             the snapshot-diff guard, headless (exit 3 over tolerance)
+      profile SCENARIO [--template time|hitches|swiftui] [--fixture F] [--reps N] [--set k=v] [--out DIR] [--keep-trace] [--json]
+                                            the scenario under xctrace (Xcode): call trees per step, hitches, hangs, SwiftUI
+                                            tables, as perfloop.profile/2; the trace is deleted unless --keep-trace
+      diff A B [--top N] [--per step|run] [--champion BUILD] [--allow-stale] [--allow-cross-os] [--json]
+                                            two profiles (JSON or .trace): what grew and shrank, ms per step (perfloop.diff/1)
 
     scenarios: \(scenarios.map(\.name).joined(separator: ", "))
     fixtures: \(fixtures.map(\.name).joined(separator: ", "))
@@ -263,6 +268,8 @@ public final class Bench: @unchecked Sendable {
         return (code, PLJSON.encode(["schema": .string("perfloop.snapdiff/1"), "guard": gj] as [String: JSONValue]))
       }
       return (code, "snapshot-diff: \(g.pass ? "PASS" : "OVER TOLERANCE") · \(g.detail)")
+    case "profile": return ProfileVerb.record(self, a)
+    case "diff": return ProfileVerb.diff(a)
     case "run": return (1, "run needs the app's run loop: call bench.main()")
     case let v: return (1, "\(adapter): unknown command '\(v)'\n\n" + help)
     }
@@ -334,6 +341,8 @@ public final class Bench: @unchecked Sendable {
     Symbols.appModulePrefixes = appModules
     let activate = !a.has("no-activate")
     let startedAt = Clock.now()
+    // `profile`'s child: the first rep's window waits for the go file once it is up, and the run says when it is done.
+    let waitFor = a.one("wait-for")
 
     var records: [RepRecord] = []
     for i in 0..<reps {
@@ -341,6 +350,7 @@ public final class Bench: @unchecked Sendable {
       Probe.sink = recorder; Mutations.sink = recorder.causes
       let run = Run(scenario: name, fixture: fixture, params: params, rep: i, recorder: recorder, activate: activate, sampler: sampler)
       run.appearance = appearance
+      if i == 0 { run.waitFor = waitFor }
       defer { run.close(); Probe.sink = nil; Mutations.sink = nil }
       try await body(run)
       // Let the stretch the last step ended in close first: the guards' own work (snapshots) never lands in a stretch
@@ -365,6 +375,11 @@ public final class Bench: @unchecked Sendable {
       if let s = sampler, let last = recorder.timeline.stretches.last { s.discard(beforeStretch: last.id + 1) }
     }
     sampler?.stop()
+    if let wf = waitFor {
+      FileManager.default.createFile(atPath: wf + ".done", contents: Data())
+      // The profiler stops its recording now, while the process is still there.
+      try? await Task.sleep(nanoseconds: UInt64((Double(a.one("hold") ?? "1") ?? 1) * 1e9))
+    }
 
     let summary = ResultSummary(reps: records, metric: spec.objective.rawValue)
     var notes: [String] = []
@@ -376,8 +391,9 @@ public final class Bench: @unchecked Sendable {
     let code: Int32 = untrusted ? 5 : failed ? 3 : 0
     var pj: [String: JSONValue] = params.mapValues { .string($0) }
     pj["knobs"] = .object(Dictionary(uniqueKeysWithValues: ks.map { ($0.info.name, JSONValue.string($0.valueText)) }))
-    let result = HostResult(tool: tool, app: app, adapter: adapter, scenario: name, fixture: fixture.name, params: pj, startedAt: startedAt, reps: records,
+    var result = HostResult(tool: tool, app: app, adapter: adapter, scenario: name, fixture: fixture.name, params: pj, startedAt: startedAt, reps: records,
                             summary: summary, verdict: verdict, exitCode: Int(code), notes: notes)
+    if a.has("profiled") { result.profiled = true; result.notes.append("recorded under a profiler: these numbers never decide") }
     let text = PLJSON.encode(result)
     if let o = a.one("out") { try text.write(toFile: o, atomically: true, encoding: .utf8) }
     return (code, a.has("json") ? text : explain(result))
@@ -434,7 +450,8 @@ final class LaunchDelegate: NSObject, NSApplicationDelegate {
 struct HostArgs {
   var positional: [String] = []
   var flags: [String: [String]] = [:]
-  static let valued: Set<String> = ["fixture", "reps", "set", "out", "artifacts", "guards", "guard-param", "diff-out", "sampler", "quiet-check", "knob", "host", "objective"]
+  static let valued: Set<String> = ["fixture", "reps", "set", "out", "artifacts", "guards", "guard-param", "diff-out", "sampler", "quiet-check", "knob", "host", "objective",
+                                    "wait-for", "template", "seconds", "top", "per", "min-ms", "process", "champion", "hold"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {

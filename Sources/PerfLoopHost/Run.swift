@@ -31,6 +31,9 @@ import PerfLoopProbe
   var checks: [CheckResult] = []
   var notes: [String] = []
   var activity: NSObjectProtocol?
+  /// `profile`'s child: once the window is up and at rest, write `<file>.waiting` and wait for `<file>` (the profiler
+  /// has attached).
+  var waitFor: String?
 
   init(scenario: String, fixture: Fixture, params: [String: String], rep: Int, recorder: Recorder, activate: Bool, sampler: MainThreadSampler?) {
     self.scenario = scenario; self.fixture = fixture; self.params = params; self.rep = rep; self.recorder = recorder; self.activate = activate; self.sampler = sampler
@@ -80,6 +83,14 @@ import PerfLoopProbe
       throw HostError.harness("the window drew no frame in 5 s: is the screen locked, or is this an ssh session without the console?")
     }
     if !(await settle(timeoutMs: 3000)) { notes.append("the window was still busy 3 s after it opened") }
+    if let wf = waitFor {
+      waitFor = nil
+      FileManager.default.createFile(atPath: wf + ".waiting", contents: Data())
+      FileHandle.standardError.write(Data("waiting for \(wf) (a profiler attaches to pid \(ProcessInfo.processInfo.processIdentifier))\n".utf8))
+      let until = Date().addingTimeInterval(120)
+      while !FileManager.default.fileExists(atPath: wf), Date() < until { await sleep(ms: 50) }
+      _ = await settle(timeoutMs: 1000)
+    }
   }
 
   /// The window's state now: a rep whose window wasn't active, key, visible and unoccluded is untrusted.
@@ -106,6 +117,10 @@ import PerfLoopProbe
   @discardableResult
   public func step(_ name: String, timeoutMs: Double = 5000, quietMs: Double = 100, until: (() -> Bool)? = nil, _ action: () -> Void) async -> StepRecord {
     let at = now
+    // The `step` signpost a profile's per-step call trees are cut on (cheap when nothing records it).
+    let sp = StepSignposts.poster, spID = sp.makeSignpostID()
+    let spState = sp.beginInterval("step", id: spID, "\(name, privacy: .public)")
+    defer { sp.endInterval("step", spState) }
     let cpu0 = KernelCounters.threadCpuMs(), ins0 = KernelCounters.instructions()
     recorder.lastBusyEnd = at
     action()

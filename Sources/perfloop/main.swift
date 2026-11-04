@@ -44,7 +44,11 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
   explain exp/ID                            exp/ID/explain.txt: everything needed to decide the next step
   causes RESULT.json [--json]               why bodies ran: the model mutations each step's and long stretch's bodies
                                             followed (the adapter's mutation records, CAPABILITIES.md C7)
-  diff A B [--exp ID] [--allow-stale]       the adapter's differential call tree; refuses traces of other builds
+  profile champion|exp/ID [--template time|hitches|swiftui] [--scenario S] [--fixture F] [--keep-trace] [--lock DIR] [--idle S]
+                                            the build under xctrace (the adapter's `profile`; opens a window on this Mac):
+                                            call trees per step, hitches, hangs; kept in the store, never an objective
+  diff A B [--exp ID] [--allow-stale]       the adapter's differential call tree, ms per step: A and B are champion, exp/ID
+                                            (their newest profile), profile JSONs or traces; refuses other builds' traces
   trace register TRACE --build HASH         record which build a trace was recorded on (the path only)
   ledger [--json]                           every state change, oldest first
   sweep SCENARIO --set NAME=4..64/4 [--set …] [--bench PATH] [--fixture F] [--reps N] [--dry-run] [--lock DIR] [--json]
@@ -78,7 +82,7 @@ struct Args {
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
                                     "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir",
-                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop"]
+                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop", "template"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -313,9 +317,21 @@ func run(_ args: Args) throws -> Int32 {
     } else { out(CauseTable.text(v)) }
     return 0
 
+  case ("profile", _):
+    guard let t = args[1] else { throw PLError.usage("usage: perfloop profile champion|exp/ID [--template time|hitches|swiftui] [--scenario S] [--fixture F] [--keep-trace]") }
+    let l = try loop()
+    if args.has("runner") || args.has("idle") || args.has("lock") {
+      var o = try runnerOptions(args, gatedByDefault: false); if args.one("runner") == nil && !args.has("idle") { o.force = true }
+      l.runner = try Runners.make(args.one("runner") ?? "local", store: l.store, options: o); l.runner.log = { err($0) }; trapSignals()
+    }
+    let r = try l.profile(t, template: args.one("template") ?? "time", scenario: args.one("scenario"), fixture: args.one("fixture"), keepTrace: args.has("keep-trace"))
+    out(json ? PLJSON.encode(r.doc) : r.doc.text + "\nprofile: \(r.path)\nnext: perfloop diff champion exp/ID (once both have a profile)"); return 0
   case ("diff", _):
     guard let a = args[1], let b = args[2] else { throw PLError.usage("usage: perfloop diff A B [--exp ID] [--allow-stale]") }
-    out(try loop().diff(a, b, exp: args.one("exp"), allowStale: args.has("allow-stale")).trimmingCharacters(in: .newlines)); return 0
+    let raw = try loop().diff(a, b, exp: args.one("exp"), allowStale: args.has("allow-stale"))
+    // The adapter answers in JSON; a perfloop.diff/1 is printed as text unless --json (another schema as it came).
+    if !json, let d = try? PLJSON.decode(DiffResult.self, from: Data(raw.utf8)) { out(Explain.diffText(d)) } else { out(raw.trimmingCharacters(in: .newlines)) }
+    return 0
   case ("trace", "register"):
     guard let t = args[2], let b = args.one("build") else { throw PLError.usage("usage: perfloop trace register TRACE --build HASH") }
     try loop().register(trace: t, build: b); out("registered \(t)"); return 0
