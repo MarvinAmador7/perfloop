@@ -17,11 +17,12 @@ final class RunnerTests: FakeBenchCase {
     try FileManager.default.createDirectory(at: remoteHome, withIntermediateDirectories: true)
     try? FileManager.default.createSymbolicLink(at: bin.appendingPathComponent("open"), withDestinationURL: Self.fixtures.appendingPathComponent("fake-open.sh"))
     try? FileManager.default.createSymbolicLink(at: bin.appendingPathComponent("ioreg"), withDestinationURL: Self.fixtures.appendingPathComponent("fake-ioreg.sh"))
+    try? FileManager.default.createSymbolicLink(at: bin.appendingPathComponent("sysctl"), withDestinationURL: Self.fixtures.appendingPathComponent("fake-sysctl.sh"))
     setenv("FAKE_REMOTE_LOCKED", tmp.appendingPathComponent("mini-locked").path, 1)
     setenv("FAKE_REMOTE_HOME", remoteHome.path, 1); setenv("FAKE_BIN", bin.path, 1); setenv("FAKE_SSH_LOG", sshLog.path, 1)
   }
   override func tearDownWithError() throws {
-    for k in ["FAKE_REMOTE_HOME", "FAKE_BIN", "FAKE_SSH_LOG", "FAKE_SSH_FAIL", "FAKE_REMOTE_LOCKED", "FAKE_REMOTE_IDLE"] { unsetenv(k) }
+    for k in ["FAKE_REMOTE_HOME", "FAKE_BIN", "FAKE_SSH_LOG", "FAKE_SSH_FAIL", "FAKE_REMOTE_LOCKED", "FAKE_REMOTE_IDLE", "FAKE_REMOTE_TOUCH"] { unsetenv(k) }
     try super.tearDownWithError()
   }
 
@@ -56,13 +57,13 @@ final class RunnerTests: FakeBenchCase {
     let done = try store.experiment(e.id)
     XCTAssertEqual(done.state, .won, "\(done.full?.reasons ?? [])")
     XCTAssertEqual(done.screen?.runner?.runner, "ssh://fake-mini")
-    XCTAssertEqual(done.full?.runner?.model, MachineModel.local())
+    XCTAssertEqual(done.full?.runner?.model, "FakeMac1,1", "the remote Mac's model, not this machine's")
     XCTAssertTrue(done.full!.pairs.allSatisfy { $0.runner?.runner == "ssh://fake-mini" })
 
     // The ledger keys the stages by runner and machine.
     let stages = store.ledger.entries().filter { ["promising", "won"].contains($0.state) }
     XCTAssertEqual(stages.count, 2)
-    XCTAssertTrue(stages.allSatisfy { $0.runner == "ssh://fake-mini" && $0.machine == MachineModel.local() })
+    XCTAssertTrue(stages.allSatisfy { $0.runner == "ssh://fake-mini" && $0.machine == "FakeMac1,1" })
 
     // The adapter ran there, on the runner's copies of the builds, in the GUI-session launcher.
     let remoteRoot = remoteHome.appendingPathComponent(".perfloop/fake-app").path
@@ -114,12 +115,13 @@ final class RunnerTests: FakeBenchCase {
     let e = try candidate(values: ["SLEEP": "2"])
     let r = try sshRunner(); r.gate = IdleGate(threshold: 5)
     setenv("FAKE_REMOTE_IDLE", "100", 1)
+    // Someone touches the mini during the first rep (the fake adapter does it once the runner has read the idle time
+    // since the rep started, so the rep is surely running), then leaves it alone: no timing involved.
+    let touch = tmp.appendingPathComponent("mini-touch").path
+    FileManager.default.createFile(atPath: touch + ".reads", contents: Data())
+    setenv("FAKE_REMOTE_TOUCH", touch, 1)
     var waits: [String] = []
     r.onWait = { waits.append($0) }
-    var once = false
-    r.log = { line in if line.contains("copying") { return }; if !once, line.hasPrefix("ssh://fake-mini: mar") { once = true } }
-    DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) { setenv("FAKE_REMOTE_IDLE", "0.5", 1) }       // someone sits down at the mini
-    DispatchQueue.global().asyncAfter(deadline: .now() + 2.5) { setenv("FAKE_REMOTE_IDLE", "100", 1) }       // and leaves
     loop.runner = r
     let x = try loop.screen(e.id)
     XCTAssertEqual(x.state, .promising, "\(x.screen?.reasons ?? [])")

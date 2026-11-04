@@ -99,6 +99,14 @@ ab)
   done
   log "ab $sc $fixture guards=$PERFLOOP_GUARDS params=$PERFLOOP_GUARD_PARAMS A=$a B=$b"
   if [ "$(val "$b" FAKE_AB_FAIL)" = 1 ] || [ "$(val "$a" FAKE_AB_FAIL)" = 1 ]; then echo "ab: child crashed" >&2; exit 2; fi
+  # FAKE_REMOTE_TOUCH (the remote idle test): on the first rep only, once the runner has read the idle time since this
+  # rep started, "someone touches the Mac": the fake ioreg's next reading is 0 s. No timing involved.
+  if [ -n "$FAKE_REMOTE_TOUCH" ] && [ ! -f "$FAKE_REMOTE_TOUCH.done" ]; then
+    : > "$FAKE_REMOTE_TOUCH.done"
+    n=$(( $(wc -l < "$FAKE_REMOTE_TOUCH.reads") )); i=0
+    while [ $(( $(wc -l < "$FAKE_REMOTE_TOUCH.reads") )) -le $n ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i + 1)); done
+    : > "$FAKE_REMOTE_TOUCH"
+  fi
   if [ "$FAKE_SLEEP" != 0 ]; then sleep "$FAKE_SLEEP"; fi
   s=$$
   ca=$(cpu_of "$a" "$fixture" "" "$s"); cb=$(cpu_of "$b" "$fixture" "" "$((s + 7))")
