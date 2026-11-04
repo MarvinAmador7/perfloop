@@ -7,7 +7,7 @@ import PerfLoopRunner
 // acceptance rule of SPEC §5.1. The adapter folder's PROGRAM.md is the procedure an agent follows.
 
 let help = """
-perfloop: an agent-first performance loop (design/perf-loop/SPEC.md; the adapter's PROGRAM.md is the procedure)
+perfloop: an agent-first performance loop for native macOS apps (README.md; agents: AGENTS.md and the app's PROGRAM.md)
 
   doctor [--bench PATH] [--json]            what stands between this Mac and numbers that decide (screen lock, idle,
                                             load, disk, the store's place, xctrace) and, with --bench, the adapter's
