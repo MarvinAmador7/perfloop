@@ -147,7 +147,7 @@ final class RunnerTests: FakeBenchCase {
     try baseline()
     let e = try candidate()
     let v = try XCTUnwrap(try Runners.make("vm:tart/pl", store: store) as? VMRunner)
-    v.ssh = Self.fixtures.appendingPathComponent("fake-ssh.sh").path; v.rsync = Self.fixtures.appendingPathComponent("fake-rsync.sh").path; v.wake = false
+    v.ssh = Self.fixtures.appendingPathComponent("fake-ssh.sh").path; v.rsync = Self.fixtures.appendingPathComponent("fake-rsync.sh").path; v.wake = false; v.settleS = 0; v.bootTimeout = 5
     XCTAssertEqual(v.name, "vm:tart/pl")
     let lines = try v.check()
     XCTAssertTrue(lines[0].hasPrefix("vm:tart/pl: ") && lines[0].contains("FakeMac1,1"), "\(lines)"); XCTAssertTrue(lines.last!.contains("booted by this check"))

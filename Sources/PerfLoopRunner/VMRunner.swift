@@ -23,6 +23,8 @@ public final class VMRunner: Runner {
   /// Where the VM's key, known_hosts and boot log live.
   public let stateDir: URL
   public var bootTimeout: Double = 180
+  /// Seconds to wait after a boot's automatic login before the first rep.
+  public var settleS: Double = Double(ProcessInfo.processInfo.environment["PERFLOOP_VM_SETTLE_S"] ?? "") ?? 20
   public var log: (String) -> Void = { _ in } { didSet { inner?.log = log } }
   public var onWait: (String) -> Void = { _ in } { didSet { inner?.onWait = onWait } }
   public var deadline: Date? { didSet { inner?.deadline = deadline } }
@@ -91,6 +93,14 @@ public final class VMRunner: Runner {
       if Date() >= until { throw PLError.harness("\(name): ssh to \(ip) didn't come up in \(Int(bootTimeout)) s: \(t.err.trimmingCharacters(in: .whitespacesAndNewlines))") }
       Thread.sleep(forTimeInterval: 2)
     }
+    // A guest that just booted logs its user in (automatic login) a little after sshd is up: wait for the console.
+    func console() -> String { (try? r.remote("stat -f %Su /dev/console 2>/dev/null", check: false))?.out.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+    while booted != nil, ["", "root", "?"].contains(console()) {   // root: the login window, nobody in yet
+      if Date() >= until { break }   // connect says what is wrong (nobody at the console)
+      Thread.sleep(forTimeInterval: 2)
+    }
+    // Just logged in, the session is still starting (the Dock, Spotlight): the first window there wasn't active. Settle.
+    if booted != nil { log("\(name): letting the guest's session settle (\(Int(settleS)) s)"); Thread.sleep(forTimeInterval: settleS) }
     inner = r
     return r
   }

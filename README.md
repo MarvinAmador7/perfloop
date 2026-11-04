@@ -143,6 +143,18 @@ walkthrough (`./walkthrough.sh --runner ssh://…`, 34 windows), with every rep'
 4. The display it has decides the frame numbers: the mini drove a 60 Hz, 1× panel, so its hitch figures aren't a
    ProMotion MacBook's. Results never mix runners.
 
+## A macOS VM as the runner
+
+`--runner vm:tart/NAME` boots a Tart VM on this Mac headless, finds its address, installs a key of its own in the guest
+once (with the image's password: `PERFLOOP_VM_USER`/`PERFLOOP_VM_PASSWORD`, admin/admin in Cirrus Labs' images), waits
+for its automatic login, runs the windows there, and stops the VM it booted. Verified on 4 November 2026 with
+`ghcr.io/cirruslabs/macos-tahoe-vanilla` (macOS 26.6.2 guest, 4 vCPUs, 8 GB, 24 GB to download, 26 GB on disk) on a
+MacBook Pro M1 Pro: `runner check` in 22 s from cold, and a SlowList knob screen with 3 of 3 pairs trusted (champion
+93.8–115.5 ms, candidate 15.5–17.3 ms, band ±11 %, against ±5 % on the mini). As SPEC §4.2 expected, the guest reads no
+instruction counts and runs at 60 Hz, so a VM screens and never decides a full (`exp full` refuses it). Needs Tart
+(`brew install cirruslabs/cli/tart`, or `PERFLOOP_TART=PATH`; its licence is free for personal use and small
+organisations) and an image: `tart clone ghcr.io/cirruslabs/macos-tahoe-vanilla:latest NAME`.
+
 ## Where things live
 
 - The store: `${PERFLOOP_HOME:-~/.perfloop}/<app>/` (builds by sha256, experiments, `ledger.jsonl`, `champion.json`).
@@ -166,9 +178,15 @@ package free of any app's modules. `Examples/SlowList` has its own `swift test`.
 
 ## Status
 
-Built and used on [capcomd](https://github.com/MarvinAmador7/capcomd) Desktop (adapter `deskbench`, where PerfLoop started) and on `Examples/SlowList`. Not yet in
-PerfLoopHost: xctrace profiles and `diff` (deskbench has them), gesture replay drivers, the VM runner. See
-[`docs/design/TOOL.md`](docs/design/TOOL.md) for what's left.
+Built and used on [capcomd](https://github.com/MarvinAmador7/capcomd) Desktop (adapter `deskbench`, where PerfLoop
+started) and on `Examples/SlowList`. PerfLoopHost now has what deskbench had beyond the loop itself: xctrace profiles
+and `diff` per step, gesture replay with the smoothness meter, and a recorder for a real hand. Runners: this Mac
+(idle-gated), a spare Mac over ssh (verified on a Mac mini, trusted runs), a macOS VM with Tart (`vm:tart/NAME`, screens
+only). For agents: `perfloop mcp` and `perfloop suggest` (docs/BEYOND.md says why and what not to claim).
+
+Still open: deskbench itself moving onto PerfLoopHost (capcomd's side); a gesture recorded by a real hand (the recorder is
+built and was checked by feeding it a synthetic gesture; feel stays the owner's call); the design history in
+[`docs/design/`](docs/design/) is kept as it was, so TOOL.md's G8 line is now out of date.
 
 ## License
 

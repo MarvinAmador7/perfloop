@@ -224,7 +224,9 @@ public final class SSHRunner: Runner {
   var launcherApp: String { "\(info?.home ?? "~")/.perfloop/.runner/PerfLoopLauncher.app" }
 
   /// The launcher: an app bundle whose executable is `exec /bin/sh "$1"`, so `open -W -n APP --args SCRIPT` runs the
-  /// script in the console user's GUI session and returns when it ends. Background-only: no Dock icon, no menu.
+  /// script in the console user's GUI session and returns when it ends. Background-only: no Dock icon, no menu. Its
+  /// architecture is said outright (arm64 first): LaunchServices can't tell a script's, and on a Mac without Rosetta
+  /// (a fresh VM) it refused to start it as an Intel app (error -10669).
   func ensureLauncher() throws {
     let app = launcherApp
     let plist = """
@@ -237,10 +239,11 @@ public final class SSHRunner: Runner {
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1</string>
     <key>LSBackgroundOnly</key><true/>
+    <key>LSArchitecturePriority</key><array><string>arm64</string><string>x86_64</string></array>
     </dict></plist>
     """
     try remote("""
-    a=\(Self.q(app)); if grep -q dev.perfloop.launcher "$a/Contents/Info.plist" 2>/dev/null && [ -x "$a/Contents/MacOS/launch" ]; then exit 0; fi
+    a=\(Self.q(app)); if grep -q LSArchitecturePriority "$a/Contents/Info.plist" 2>/dev/null && [ -x "$a/Contents/MacOS/launch" ]; then exit 0; fi
     mkdir -p "$a/Contents/MacOS" && cat > "$a/Contents/Info.plist" && printf '#!/bin/sh\\nexec /bin/sh "$1"\\n' > "$a/Contents/MacOS/launch" && chmod 755 "$a/Contents/MacOS/launch"
     """, stdin: plist)
   }
