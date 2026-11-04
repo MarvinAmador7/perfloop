@@ -26,13 +26,19 @@ public struct Manifest: Codable, Sendable, Equatable {
   /// Gestures the adapter has built in (C9): names its gesture-replay scenario takes for its `gesture` parameter
   /// without a file (`synthetic:flick-forward`); recorded ones are `perfloop.gesture/1` files.
   public var gestures: [String]?
+  /// The verbs the adapter answers (`list`, `describe`, `run`, `ab`, `snapdiff`, `diff`, …). nil: an adapter from
+  /// before the field, which has deskbench's (`ab` included). Without `ab` the runner measures pairs through `run`.
+  public var verbs: [String]?
+  /// Paths (substrings of a patch's file names) that must never be recorded in an experiment's patch: the app's
+  /// secrets and private state. `.trace` files are refused whatever this says.
+  public var privatePaths: [String]?
 
   public init(app: String, adapter: String, build: Build?, scenarios: [ScenarioEntry], fixtures: [JSONValue] = [], knobs: [KnobEntry] = [], source: String? = "describe") {
     schema = "perfloop.manifest/1"; self.protocol = 1; self.app = app; self.adapter = adapter; self.build = build
     self.scenarios = scenarios; self.fixtures = fixtures; self.knobs = knobs; self.source = source
   }
 
-  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards, gestures }
+  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards, gestures, verbs, privatePaths }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     schema = try c.decodeIfPresent(String.self, forKey: .schema) ?? "perfloop.manifest/1"
@@ -49,7 +55,15 @@ public struct Manifest: Codable, Sendable, Equatable {
     source = try c.decodeIfPresent(String.self, forKey: .source)
     defaultFixture = try c.decodeIfPresent(String.self, forKey: .defaultFixture)
     isolationGuards = try? c.decodeIfPresent([String].self, forKey: .isolationGuards)
+    verbs = try? c.decodeIfPresent([String].self, forKey: .verbs)
+    privatePaths = try? c.decodeIfPresent([String].self, forKey: .privatePaths)
   }
+
+  /// Whether the adapter answers `verb` (adapters from before `verbs` answer deskbench's).
+  public func has(verb: String) -> Bool { verbs?.contains(verb) ?? true }
+
+  /// How pairs are measured when nobody says: the adapter's own `ab` when it has one, else two `run`s.
+  public var defaultVia: String { has(verb: "ab") ? "ab" : "run" }
 
   public func scenario(_ name: String) -> ScenarioEntry? { scenarios.first { $0.name == name } }
   public var fixtureNames: [String] { fixtures.compactMap { $0["name"]?.string } }

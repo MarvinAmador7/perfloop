@@ -21,6 +21,7 @@ FAKE_SNAP=same
 FAKE_NOGUARDS=0
 FAKE_ISO_FAIL=0
 FAKE_SLEEP=0
+FAKE_VERBS=
 
 self="$0"
 log() { if [ -n "$FAKE_LOG" ]; then echo "$*" >> "$FAKE_LOG"; fi; }
@@ -77,8 +78,9 @@ describe)
 JSON
   exit 0
   fi
+  verbs=""; if [ -n "$FAKE_VERBS" ]; then verbs="\"verbs\": [\"$(echo "$FAKE_VERBS" | sed 's/,/", "/g')\"],"; fi
   cat <<JSON
-{ "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench",
+{ "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench", $verbs
   "scenarios": [ { "name": "step", "kind": "smooth", "params": { "steps": "8" }, "objective": "mainThreadCpuMsPerStep", "guards": ["landed"], "secondFixture": "swarm64" },
                  { "name": "switch", "kind": "latency", "objective": "latencyMs", "guards": ["checks"] } ],
   "fixtures": [ { "name": "crew17" }, { "name": "swarm64" } ],

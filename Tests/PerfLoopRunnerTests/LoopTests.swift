@@ -137,6 +137,21 @@ final class LoopTests: FakeBenchCase {
     XCTAssertTrue(starts.contains(true) && starts.contains(false))     // the first side varies across experiments
   }
 
+  /// An adapter without `ab` (a PerfLoopHost bench): pairs are measured through `run`, no `--via` needed.
+  func testAnAdapterWithoutAbIsMeasuredThroughRun() throws {
+    let verbs = ["VERBS": "help,list,describe,knobs,run,snapdiff"]
+    try baseline(verbs)
+    var o = Loop.NewOptions(hypothesis: "rows rank from an index"); o.bench = try bench("fast", verbs.merging(["CPU": "20"]) { $1 })
+    let e = try loop.new(o)
+    XCTAssertEqual(e.via, "run")
+    XCTAssertEqual(e.state, .promising)
+    XCTAssertTrue(adapterCalls("ab").isEmpty)
+    XCTAssertEqual(adapterCalls("run").count, 6, "3 pairs, one child per side")
+    // deskbench's manifest has no `verbs`: it keeps its own ab.
+    XCTAssertEqual(store.champion().flatMap { try? store.entry($0.build.hash!).manifest?.defaultVia }, "run")
+    XCTAssertEqual(Manifest(app: "a", adapter: "a", build: nil, scenarios: []).defaultVia, "ab")
+  }
+
   func testPatchesNeverCarrySecrets() {
     XCTAssertThrowsError(try loop.checkPatch("diff --git a/.relay/token b/.relay/token\n+x\n"))
     XCTAssertThrowsError(try loop.checkPatch("diff --git a/bench/x.trace b/bench/x.trace\n"))

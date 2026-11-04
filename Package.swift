@@ -13,6 +13,11 @@ let package = Package(
     .library(name: "PerfLoopKit", targets: ["PerfLoopKit"]),
     // Linked by the app itself (macOS): knobs, probe seam, stamp reader. Tiny, Foundation only.
     .library(name: "PerfLoopProbe", targets: ["PerfLoopProbe"]),
+    // Linked by an app's bench executable (macOS): fixtures, scenarios, knobs and guards registered in a few lines, the
+    // runner's whole adapter contract (ADAPTER.md) answered by the library. An empty module on Linux.
+    .library(name: "PerfLoopHost", targets: ["PerfLoopHost"]),
+    // Build-tool plugin for the bench target: embeds the commit, dirty flag and build time (`perfLoopBuildStamp`).
+    .plugin(name: "PerfLoopStamp", targets: ["PerfLoopStamp"]),
     .executable(name: "perfloop", targets: ["perfloop"]),
   ],
   targets: [
@@ -20,12 +25,18 @@ let package = Package(
     // Runtime knobs (C4), mutation records and their attribution to bodies (C7); later the probe seam, the stretch
     // sampler and the build stamp reader.
     .target(name: "PerfLoopProbe"),
+    // The adapter host: window, display link, stretch clock, main-thread sampler, counters, snapshots, the result JSON
+    // and the bench's command line.
+    .target(name: "PerfLoopHost", dependencies: ["PerfLoopKit", "PerfLoopProbe"]),
+    .plugin(name: "PerfLoopStamp", capability: .buildTool()),
     // The runner's file and process plumbing: the content-addressed store, the adapter as a child, the experiment
     // verbs. Foundation only (Process, FileManager), so it builds on Linux too; `perfloop` is a thin main over it.
     .target(name: "PerfLoopRunner", dependencies: ["PerfLoopKit"]),
     .executableTarget(name: "perfloop", dependencies: ["PerfLoopKit", "PerfLoopRunner"]),
     .testTarget(name: "PerfLoopKitTests", dependencies: ["PerfLoopKit"]),
     .testTarget(name: "PerfLoopProbeTests", dependencies: ["PerfLoopProbe"]),
+    // The host without a window: result arithmetic, the headless verbs, the snapshot diff.
+    .testTarget(name: "PerfLoopHostTests", dependencies: ["PerfLoopHost", "PerfLoopKit", "PerfLoopProbe"]),
     // Drives the runner against a fake adapter (a shell script with canned `list`/`ab`/`run` output): no window.
     .testTarget(name: "PerfLoopRunnerTests", dependencies: ["PerfLoopKit", "PerfLoopRunner"], exclude: ["Fixtures"]),
   ])

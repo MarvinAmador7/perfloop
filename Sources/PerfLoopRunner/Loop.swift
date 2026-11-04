@@ -133,7 +133,7 @@ public final class Loop {
     e.behaviourChange = o.behaviourChange
     e.secondFixture = o.secondFixture ?? m?.scenario(sc)?.secondFixture
     e.params = o.params.isEmpty ? nil : o.params
-    e.via = kind == "knob" ? "run" : (o.via ?? env["PERFLOOP_VIA"] ?? "ab")
+    e.via = kind == "knob" ? "run" : (o.via ?? env["PERFLOOP_VIA"] ?? m?.defaultVia ?? "ab")
     e.patch = patch; e.notes = notes
     if !entry.build.stamp { e.notes.append("the build predates the stamp: imported as \(entry.build.commit ?? "?")\(entry.build.note.map { " (\($0))" } ?? "")") }
     try store.save(e)
