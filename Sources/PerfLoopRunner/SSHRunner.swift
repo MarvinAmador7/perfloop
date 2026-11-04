@@ -29,6 +29,11 @@ public final class SSHRunner: Runner {
   public var ssh = ProcessInfo.processInfo.environment["PERFLOOP_SSH"] ?? "/usr/bin/ssh"
   public var rsync = ProcessInfo.processInfo.environment["PERFLOOP_RSYNC"] ?? "/usr/bin/rsync"
   public var launch: Launch = .gui
+  /// The runner's name in results when it isn't `ssh://host` (a VM: `vm:tart/NAME`).
+  public var nameOverride: String?
+  /// A key of its own (`-i`, IdentitiesOnly) and a known_hosts of its own: a VM's, never the user's.
+  public var identityFile: String?
+  public var knownHostsFile: String?
   /// Trust a host key seen for the first time (`StrictHostKeyChecking=accept-new`); a changed key is always refused.
   public var acceptNewHostKey = false
   /// Added to the adapter's environment there.
@@ -56,7 +61,7 @@ public final class SSHRunner: Runner {
     controlPath = (t.count + 64 < 104 ? t : "/tmp") + "/plssh-%C"
   }
 
-  public var name: String { spec.name }
+  public var name: String { nameOverride ?? spec.name }
   var target: String { user.map { "\($0)@\(host)" } ?? host }
   /// The store root as the loop writes its paths (what comes back is rewritten to this).
   var localRoot: String { store.root.path }
@@ -75,6 +80,8 @@ public final class SSHRunner: Runner {
     var o = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
              "-o", "ControlMaster=auto", "-o", "ControlPath=\(controlPath)", "-o", "ControlPersist=300"]
     if acceptNewHostKey { o += ["-o", "StrictHostKeyChecking=accept-new"] }
+    if let k = identityFile { o += ["-i", k, "-o", "IdentitiesOnly=yes"] }
+    if let k = knownHostsFile { o += ["-o", "UserKnownHostsFile=\(k)"] }
     if let p = port { o += ["-p", String(p)] }
     return o
   }
@@ -217,7 +224,9 @@ public final class SSHRunner: Runner {
   var launcherApp: String { "\(info?.home ?? "~")/.perfloop/.runner/PerfLoopLauncher.app" }
 
   /// The launcher: an app bundle whose executable is `exec /bin/sh "$1"`, so `open -W -n APP --args SCRIPT` runs the
-  /// script in the console user's GUI session and returns when it ends. Background-only: no Dock icon, no menu.
+  /// script in the console user's GUI session and returns when it ends. Background-only: no Dock icon, no menu. Its
+  /// architecture is said outright (arm64 first): LaunchServices can't tell a script's, and on a Mac without Rosetta
+  /// (a fresh VM) it refused to start it as an Intel app (error -10669).
   func ensureLauncher() throws {
     let app = launcherApp
     let plist = """
@@ -230,10 +239,11 @@ public final class SSHRunner: Runner {
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1</string>
     <key>LSBackgroundOnly</key><true/>
+    <key>LSArchitecturePriority</key><array><string>arm64</string><string>x86_64</string></array>
     </dict></plist>
     """
     try remote("""
-    a=\(Self.q(app)); if grep -q dev.perfloop.launcher "$a/Contents/Info.plist" 2>/dev/null && [ -x "$a/Contents/MacOS/launch" ]; then exit 0; fi
+    a=\(Self.q(app)); if grep -q LSArchitecturePriority "$a/Contents/Info.plist" 2>/dev/null && [ -x "$a/Contents/MacOS/launch" ]; then exit 0; fi
     mkdir -p "$a/Contents/MacOS" && cat > "$a/Contents/Info.plist" && printf '#!/bin/sh\\nexec /bin/sh "$1"\\n' > "$a/Contents/MacOS/launch" && chmod 755 "$a/Contents/MacOS/launch"
     """, stdin: plist)
   }
@@ -397,7 +407,31 @@ public final class SSHRunner: Runner {
       if idle.locked == true { o.append("screen: LOCKED: a window there is occluded and never active, so reps wait until it is unlocked (or the screen lock is turned off there)") }
       else if idle.locked == false { o.append("screen: unlocked") }
     }
+    if let r = try? remote("echo cores=$(sysctl -n hw.logicalcpu 2>/dev/null); echo load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}'); ps -Ao pcpu=,comm= -r 2>/dev/null | head -8", check: false),
+       let line = Self.loadLine(r.out) { o.append(line) }
     return o
+  }
+
+  /// `load: …` from the remote's core count, load average and busiest processes: a spare Mac running other work (a VM
+  /// helper, a browser, an agent) is noise in every rep, even with its window trusted. nil when nothing could be read.
+  static func loadLine(_ text: String) -> String? {
+    var cores: Int?, load: Double?, busy: [(String, Double)] = []
+    for l in text.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+      if l.hasPrefix("cores=") { cores = Int(l.dropFirst(6)); continue }
+      if l.hasPrefix("load=") { load = Double(l.dropFirst(5)); continue }
+      let f = l.split(separator: " ", maxSplits: 1)
+      guard f.count == 2, let pct = Double(f[0]), pct >= 20 else { continue }
+      let name = String(f[1].split(separator: "/").last ?? f[1])
+      if ["ps", "sshd", "sshd-session", "sh", "head"].contains(where: { name.hasPrefix($0) }) { continue }
+      busy.append((name, pct))
+    }
+    guard let c = cores, let ld = load else { return nil }
+    var s = "load: \(ld) on \(c) cores"
+    if !busy.isEmpty {
+      s += "; busy there: " + busy.prefix(4).map { "\($0.0) \(Int($0.1.rounded())) %" }.joined(separator: ", ")
+      s += ": other work on that Mac is noise in every rep (quit it, or run the bench as a dedicated user with nothing else open)"
+    }
+    return s
   }
 
   /// `runner clean`: removes the store directory there (builds and any results left), and the launcher.

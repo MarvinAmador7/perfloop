@@ -126,6 +126,46 @@ final class LoopTests: FakeBenchCase {
     XCTAssertThrowsError(try loop.diff(tmp.appendingPathComponent("unknown.trace").path, mine, exp: nil, allowStale: false))
   }
 
+  /// `perfloop profile champion|exp/ID` records through the build's own adapter (with the experiment's knobs) and
+  /// indexes the profile; `diff champion exp/ID` finds both by name, and says what to run when one is missing.
+  func testProfilesByNameFeedDiff() throws {
+    try baseline()
+    var o = Loop.NewOptions(hypothesis: "clip slide"); o.knobs = ["reel.slide": "clip"]; o.screen = false
+    let e = try loop.new(o)
+    XCTAssertThrowsError(try loop.diff("champion", "exp/\(e.id)", exp: nil, allowStale: false)) { XCTAssertTrue("\($0)".contains("perfloop profile champion"), "\($0)") }
+    let c = try loop.profile("champion")
+    XCTAssertTrue(c.path.hasPrefix(store.root.appendingPathComponent("profiles").path)); XCTAssertEqual(c.doc.scenario, "step")
+    let x = try loop.profile("exp/\(e.id)")
+    XCTAssertEqual(x.doc.notes, ["fake knobs=reel.slide=clip,"], "the experiment's knobs reach the recording")
+    let calls = adapterCalls("profile")
+    XCTAssertEqual(calls.count, 2); XCTAssertTrue(calls[1].contains("knobs=reel.slide=clip"))
+    XCTAssertEqual(loop.latestProfile(try loop.profileTarget("champion")), c.path)
+    XCTAssertEqual(loop.latestProfile(try loop.profileTarget("exp/\(e.id)")), x.path, "same binary, other knobs: its own profile")
+    XCTAssertTrue(try loop.diff("champion", "exp/\(e.id)", exp: nil, allowStale: false).contains("deskbench.diff/1"))
+    XCTAssertEqual(adapterCalls("diff").last, "diff \(c.path) \(x.path)")
+    XCTAssertEqual(try store.experiment(e.id).diff, "exp/\(e.id)/diff.json")
+    // An adapter without the verb says so.
+    let verbs = ["VERBS": "help,list,describe,knobs,run,snapdiff"]
+    let old = try store.add(try bench("old", verbs))
+    try loop.setChampion(build: old.build.hash!, merged: true, scenario: "step", fixture: "crew17")
+    XCTAssertThrowsError(try loop.profile("champion")) { XCTAssertTrue("\($0)".contains("no `profile` verb"), "\($0)") }
+  }
+
+  /// `suggest` reads the newest result measured of a target in the store (the champion's side of the newest pair
+  /// against it, an experiment's own side), and says what to do when nothing was measured yet.
+  func testSuggestFindsTheNewestResultOfATarget() throws {
+    let verbs = ["VERBS": "help,list,describe,knobs,run,snapdiff"]   // measured through run: each side's result is kept
+    try baseline(verbs)
+    XCTAssertThrowsError(try loop.suggest("champion")) { XCTAssertTrue("\($0)".contains("nothing measured yet"), "\($0)") }
+    var o = Loop.NewOptions(hypothesis: "faster"); o.bench = try bench("fast", verbs.merging(["CPU": "20"]) { $1 })
+    let e = try loop.new(o)
+    let c = try loop.suggest("champion"), x = try loop.suggest("exp/\(e.id)")
+    XCTAssertTrue(c.sources.first?.contains("champion side") == true, "\(c.sources)")
+    XCTAssertTrue(x.sources.first?.contains("candidate side") == true, "\(x.sources)")
+    XCTAssertEqual(c.schema, "perfloop.suggest/1")
+    XCTAssertTrue(try String(contentsOf: store.expDir(e.id).appendingPathComponent("explain.txt"), encoding: .utf8).contains("next: "))
+  }
+
   func testPairsAreCounterbalanced() {
     let l = Loop(store: store)
     for key in ["0001/screen", "0002/screen", "0001/full"] {

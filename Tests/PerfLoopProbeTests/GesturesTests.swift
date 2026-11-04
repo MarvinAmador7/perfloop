@@ -154,3 +154,18 @@ final class GesturesTests: XCTestCase {
     XCTAssertGreaterThan(SmoothnessMeter.measure(ticks: jumpy, deltas: [], start: 0, fingerFrom: 0, fingerUntil: 0, settled: nil).jerkP95 ?? 0, 10)
   }
 }
+
+final class SyntheticGesturesTests: XCTestCase {
+  func testBuiltInsOnBothAxesInWholePoints() throws {
+    XCTAssertEqual(SyntheticGestures.specs, ["synthetic:flick-forward", "synthetic:flick-back", "synthetic:drag-forward", "synthetic:scroll-down", "synthetic:scroll-up", "synthetic:drag-down"])
+    let down = try SyntheticGestures.load("synthetic:scroll-down"), fwd = try SyntheticGestures.load("synthetic:flick-forward")
+    XCTAssertEqual(down.fingerTravel.dx, 0); XCTAssertEqual(down.fingerTravel.dy, fwd.fingerTravel.dx)
+    XCTAssertEqual(down.momentumTravel.dy, fwd.momentumTravel.dx)
+    XCTAssertTrue(down.events.allSatisfy { $0.dy == $0.dy.rounded() }, "whole points: what a CGEvent carries")
+    XCTAssertEqual(down.problems, []); XCTAssertEqual(down.synthetic, true); XCTAssertEqual(Gesture.rate(down.events), 120)
+    let drag = try SyntheticGestures.load("synthetic:drag-down")
+    XCTAssertEqual(drag.momentumTravel.dy, 0); XCTAssertLessThan(drag.fingerTravel.dy, 0)
+    XCTAssertThrowsError(try SyntheticGestures.load("synthetic:nope")) { XCTAssertTrue("\($0)".contains("there are: synthetic:flick-forward")) }
+    XCTAssertThrowsError(try SyntheticGestures.load("/no/such/gesture.json"))
+  }
+}

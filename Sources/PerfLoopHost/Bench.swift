@@ -83,6 +83,9 @@ public final class Bench: @unchecked Sendable {
   public var privatePaths: [String] = []
   /// Name prefixes of the app's modules: their qualifier is dropped from sampled symbols, and their frames are "ours".
   public var appModules: [String] = []
+  /// The gestures a scenario's `gesture` parameter takes besides files, for the manifest (`perfloop gestures list --bench`):
+  /// usually `SyntheticGestures.specs`.
+  public var gestures: [String] = []
   public var defaultFixture: String?
   public var windowSize = CGSize(width: 900, height: 700)
   /// The bench window's appearance (light by default), whatever the Mac's setting: snapshots compare across machines.
@@ -146,7 +149,7 @@ public final class Bench: @unchecked Sendable {
 
   var tool: ToolInfo { let b = build; return ToolInfo(name: adapter, version: version, configuration: Self.configuration, commit: b.commit, build: b) }
 
-  public static let verbs = ["help", "list", "describe", "knobs", "run", "snapdiff"]
+  public static let verbs = ["help", "list", "describe", "knobs", "run", "snapdiff", "profile", "diff"]
   public static let exitCodes = ["ok": 0, "usage": 1, "harness": 2, "budget": 3, "regression": 4, "untrusted": 5]
 
   /// `describe --json`: the `perfloop.manifest/1` the runner does everything from.
@@ -170,6 +173,7 @@ public final class Bench: @unchecked Sendable {
     m.probes = probes.isEmpty ? nil : probes; m.exitCodes = Self.exitCodes
     m.isolationGuards = isolationScenarios.isEmpty ? nil : isolationScenarios
     m.verbs = Self.verbs; m.privatePaths = privatePaths.isEmpty ? nil : privatePaths
+    m.gestures = gestures.isEmpty ? nil : gestures
     return m
   }
 
@@ -198,6 +202,16 @@ public final class Bench: @unchecked Sendable {
                                             drive a scenario in a window of this process; the result is perfloop.result/2
       snapdiff A.png B.png [--diff-out D.png] [--guard-param snapshot-diff.tolerance=X] [--json]
                                             the snapshot-diff guard, headless (exit 3 over tolerance)
+      profile SCENARIO [--template time|hitches|swiftui] [--fixture F] [--reps N] [--set k=v] [--out DIR] [--keep-trace] [--json]
+                                            the scenario under xctrace (Xcode): call trees per step, hitches, hangs, SwiftUI
+                                            tables, as perfloop.profile/2; the trace is deleted unless --keep-trace
+      diff A B [--top N] [--per step|run] [--champion BUILD] [--allow-stale] [--allow-cross-os] [--json]
+                                            two profiles (JSON or .trace): what grew and shrank, ms per step (perfloop.diff/1)
+      record-gesture SCENARIO [--name NAME] [--out FILE] [--count N] [--timeout S] [--device NAME] [--fixture F]
+                                            the scenario's window, recording your trackpad gestures over it (deltas, phases,
+                                            times; nothing else) as perfloop.gesture/1 files for --set gesture=FILE; by default
+                                            in ${PERFLOOP_HOME:-~/.perfloop}/APP/gestures (never inside a git checkout)
+      gestures [--json]                     the synthetic gestures built in (synthetic:NAME)
 
     scenarios: \(scenarios.map(\.name).joined(separator: ", "))
     fixtures: \(fixtures.map(\.name).joined(separator: ", "))
@@ -216,10 +230,10 @@ public final class Bench: @unchecked Sendable {
       for x in a.all("knob") { k.merge(Knobs.parse(x)) { $1 } }
       setenv(Knobs.variable, Knobs.format(k), 1)
     }
-    if a.positional.first == "run" {
+    if a.positional.first == "run" || a.positional.first == "record-gesture" {
       NSApplication.shared.setActivationPolicy(a.has("no-activate") ? .accessory : .regular)
       let d = LaunchDelegate { [unowned self] in
-        let (code, text) = await runCommand(a)
+        let (code, text) = a.positional.first == "run" ? await runCommand(a) : await recordGesture(a)
         if !text.isEmpty { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
         exit(code)
       }
@@ -263,6 +277,12 @@ public final class Bench: @unchecked Sendable {
         return (code, PLJSON.encode(["schema": .string("perfloop.snapdiff/1"), "guard": gj] as [String: JSONValue]))
       }
       return (code, "snapshot-diff: \(g.pass ? "PASS" : "OVER TOLERANCE") · \(g.detail)")
+    case "profile": return ProfileVerb.record(self, a)
+    case "gestures":
+      if json { return (0, PLJSON.encode(SyntheticGestures.all)) }
+      return (0, SyntheticGestures.all.map { "\(SyntheticGestures.spec($0)): \($0.events.count) events over \(Int($0.durationMs)) ms · \($0.source ?? "")" }.joined(separator: "\n"))
+    case "record-gesture": return (1, "record-gesture needs the app's run loop: call bench.main()")
+    case "diff": return ProfileVerb.diff(a)
     case "run": return (1, "run needs the app's run loop: call bench.main()")
     case let v: return (1, "\(adapter): unknown command '\(v)'\n\n" + help)
     }
@@ -334,6 +354,8 @@ public final class Bench: @unchecked Sendable {
     Symbols.appModulePrefixes = appModules
     let activate = !a.has("no-activate")
     let startedAt = Clock.now()
+    // `profile`'s child: the first rep's window waits for the go file once it is up, and the run says when it is done.
+    let waitFor = a.one("wait-for")
 
     var records: [RepRecord] = []
     for i in 0..<reps {
@@ -341,6 +363,7 @@ public final class Bench: @unchecked Sendable {
       Probe.sink = recorder; Mutations.sink = recorder.causes
       let run = Run(scenario: name, fixture: fixture, params: params, rep: i, recorder: recorder, activate: activate, sampler: sampler)
       run.appearance = appearance
+      if i == 0 { run.waitFor = waitFor }
       defer { run.close(); Probe.sink = nil; Mutations.sink = nil }
       try await body(run)
       // Let the stretch the last step ended in close first: the guards' own work (snapshots) never lands in a stretch
@@ -365,6 +388,11 @@ public final class Bench: @unchecked Sendable {
       if let s = sampler, let last = recorder.timeline.stretches.last { s.discard(beforeStretch: last.id + 1) }
     }
     sampler?.stop()
+    if let wf = waitFor {
+      FileManager.default.createFile(atPath: wf + ".done", contents: Data())
+      // The profiler stops its recording now, while the process is still there.
+      try? await Task.sleep(nanoseconds: UInt64((Double(a.one("hold") ?? "1") ?? 1) * 1e9))
+    }
 
     let summary = ResultSummary(reps: records, metric: spec.objective.rawValue)
     var notes: [String] = []
@@ -376,11 +404,46 @@ public final class Bench: @unchecked Sendable {
     let code: Int32 = untrusted ? 5 : failed ? 3 : 0
     var pj: [String: JSONValue] = params.mapValues { .string($0) }
     pj["knobs"] = .object(Dictionary(uniqueKeysWithValues: ks.map { ($0.info.name, JSONValue.string($0.valueText)) }))
-    let result = HostResult(tool: tool, app: app, adapter: adapter, scenario: name, fixture: fixture.name, params: pj, startedAt: startedAt, reps: records,
+    var result = HostResult(tool: tool, app: app, adapter: adapter, scenario: name, fixture: fixture.name, params: pj, startedAt: startedAt, reps: records,
                             summary: summary, verdict: verdict, exitCode: Int(code), notes: notes)
+    if a.has("profiled") { result.profiled = true; result.notes.append("recorded under a profiler: these numbers never decide") }
     let text = PLJSON.encode(result)
     if let o = a.one("out") { try text.write(toFile: o, atomically: true, encoding: .utf8) }
     return (code, a.has("json") ? text : explain(result))
+  }
+
+  /// `record-gesture SCENARIO`: the scenario's window, a hand's gestures recorded over it. The scenario's body runs up to
+  /// its `run.show`, which records instead of returning; its steps never run.
+  @MainActor
+  func recordGesture(_ a: HostArgs) async -> (Int32, String) {
+    guard let name = a.positional.dropFirst().first, let body = bodies[name] else {
+      return (1, "usage: \(adapter) record-gesture SCENARIO [--name NAME] [--out FILE] [--count N] [--timeout S] (scenarios: \(scenarios.map(\.name).joined(separator: ", ")))")
+    }
+    let gname = a.one("name") ?? "gesture"
+    let env = ProcessInfo.processInfo.environment
+    let home = env["PERFLOOP_HOME"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".perfloop")
+    let url = a.one("out").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) } ?? home.appendingPathComponent(app).appendingPathComponent("gestures").appendingPathComponent("\(gname).json")
+    if let repo = ProfileVerb.checkout(containing: url.deletingLastPathComponent().path), !a.has("allow-in-repo") {
+      return (6, "\(adapter): \(url.path) is inside the git checkout \(repo): a recording of a hand stays out of the repo (--out elsewhere)")
+    }
+    var feed: Gesture?
+    if let f = a.one("feed") { do { feed = try SyntheticGestures.load(f) } catch { return (1, "\(error)") } }
+    do {
+      let fixture = try resolveFixture(a.one("fixture"))
+      let recorder = Recorder(nominalHz: Double(NSScreen.main?.maximumFramesPerSecond ?? 60))
+      Probe.sink = recorder; Mutations.sink = recorder.causes
+      let run = Run(scenario: name, fixture: fixture, params: scenarios.first { $0.name == name }?.params ?? [:], rep: 0, recorder: recorder, activate: !a.has("no-activate"), sampler: nil)
+      run.appearance = appearance
+      run.recordRequest = RecordRequest(url: url, name: a.one("name") ?? url.deletingPathExtension().lastPathComponent, device: a.one("device"),
+                                        count: max(1, Int(a.one("count") ?? "1") ?? 1), timeoutS: Double(a.one("timeout") ?? "60") ?? 60, feed: feed)
+      defer { run.close(); Probe.sink = nil; Mutations.sink = nil }
+      do { try await body(run); return (2, "\(adapter): the scenario never showed a window (record-gesture records once run.show has the window up)") } catch is RecordingDone {}
+      if !run.recordFailures.isEmpty { return (2, "\(adapter): couldn't write a gesture: " + run.recordFailures.joined(separator: "; ")) }
+      if run.recorded.isEmpty { return (2, "\(adapter): no gesture recorded (swipe over the window with two fingers on the trackpad)") }
+      if a.has("json") { return (0, PLJSON.encode(JSONValue.object(["schema": .string("perfloop.recorded/1"), "files": .array(run.recorded.map { .string($0.0) })]))) }
+      return (0, run.recorded.map { "\($0.0)\n  \($0.1.name): \($0.1.events.count) events over \(Int($0.1.durationMs)) ms, \($0.1.device)" }.joined(separator: "\n")
+                 + "\nreplay: \(adapter) run SCENARIO --set gesture=\(run.recorded[0].0)")
+    } catch let e as HostError { return (e.code, "\(adapter): \(e)") } catch { return (2, "\(adapter): \(error)") }
   }
 
   /// A guard after a rep. `snapshot-diff` captures the window (the runner compares the pictures); the others are the
@@ -434,7 +497,9 @@ final class LaunchDelegate: NSObject, NSApplicationDelegate {
 struct HostArgs {
   var positional: [String] = []
   var flags: [String: [String]] = [:]
-  static let valued: Set<String> = ["fixture", "reps", "set", "out", "artifacts", "guards", "guard-param", "diff-out", "sampler", "quiet-check", "knob", "host", "objective"]
+  static let valued: Set<String> = ["fixture", "reps", "set", "out", "artifacts", "guards", "guard-param", "diff-out", "sampler", "quiet-check", "knob", "host", "objective",
+                                    "wait-for", "template", "seconds", "top", "per", "min-ms", "process", "champion", "hold",
+                                    "name", "count", "timeout", "device", "feed"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {

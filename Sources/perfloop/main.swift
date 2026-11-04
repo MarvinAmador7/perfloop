@@ -42,9 +42,17 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             and the isolation scenarios; a failure demotes it, a snapshot over tolerance
                                             asks the owner; only the owner sets a tolerance (never inside exp)
   explain exp/ID                            exp/ID/explain.txt: everything needed to decide the next step
+  suggest [champion|exp/ID|RESULT.json] [--json]
+                                            hypotheses for the next experiment from what was recorded (cause fan-out,
+                                            repeated bodies, hot frames of ours, framework work they ask for, a profile's
+                                            largest subtrees, a sweep's walls), ranked by the share they could remove
   causes RESULT.json [--json]               why bodies ran: the model mutations each step's and long stretch's bodies
                                             followed (the adapter's mutation records, CAPABILITIES.md C7)
-  diff A B [--exp ID] [--allow-stale]       the adapter's differential call tree; refuses traces of other builds
+  profile champion|exp/ID [--template time|hitches|swiftui] [--scenario S] [--fixture F] [--keep-trace] [--lock DIR] [--idle S]
+                                            the build under xctrace (the adapter's `profile`; opens a window on this Mac):
+                                            call trees per step, hitches, hangs; kept in the store, never an objective
+  diff A B [--exp ID] [--allow-stale]       the adapter's differential call tree, ms per step: A and B are champion, exp/ID
+                                            (their newest profile), profile JSONs or traces; refuses other builds' traces
   trace register TRACE --build HASH         record which build a trace was recorded on (the path only)
   ledger [--json]                           every state change, oldest first
   sweep SCENARIO --set NAME=4..64/4 [--set …] [--bench PATH] [--fixture F] [--reps N] [--dry-run] [--lock DIR] [--json]
@@ -54,9 +62,13 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             recorded and synthetic gestures (perfloop.gesture/1) for a gesture-replay
                                             scenario: the store's gestures/, each --dir, the adapter's built-in ones
   session start                             the stopping rules (SPEC §5.3) count from here
+  mcp [--app NAME | --store DIR] [--lock DIR]
+                                            the loop as MCP tools over stdio for a coding agent (README: Agents over MCP):
+                                            stages run as jobs it polls with `job`; no owner flags
 
 runners and the queue (C10): where windowed reps run; results never mix runners
-  exp screen|full ID --runner R [--idle S]  R: local (default; idle-gated only with --idle S), ssh://[user@]host[/dir]
+  exp screen|full ID --runner R [--idle S]  R: local (default; idle-gated only with --idle S), ssh://[user@]host[/dir],
+                                            vm:tart/NAME (a macOS VM on this Mac; screens only)
   queue add ID [--stage auto|screen|full] [--runner R] [--force]
                                             auto: the screen, then the full when promising (--force: the full anyway)
   queue list [--json] | queue remove QID
@@ -78,7 +90,7 @@ struct Args {
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
                                     "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir",
-                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop"]
+                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop", "template", "top"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -205,7 +217,7 @@ func run(_ args: Args) throws -> Int32 {
     o.params = args.all("set").reduce(into: [:]) { d, kv in let p = kv.split(separator: "=", maxSplits: 1).map(String.init); if p.count == 2 { d[p[0]] = p[1] } }
     o.behaviourChange = args.has("behaviour-change") || args.has("behavior-change"); o.via = args.one("via"); o.patch = args.one("patch")
     o.screen = !args.has("no-screen"); o.against = args.one("against")
-    let l = try loop(bench: o.bench)
+    let l = try loop(bench: o.bench); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
     show(try l.new(o), l); return 0
   case ("exp", "status"):
     let l = try loop()
@@ -270,10 +282,12 @@ func run(_ args: Args) throws -> Int32 {
     let r = try Runners.make(spec, store: try store(), options: runnerOptions(args, gatedByDefault: false))
     defer { r.close() }
     if args[1] == "clean" {
+      if let v = r as? VMRunner { out(try v.clean()); return 0 }
       guard let s = r as? SSHRunner else { out("\(r.name): nothing to clean (the store is this one)"); return 0 }
       out(try s.clean()); return 0
     }
     if let s = r as? SSHRunner { try s.check().forEach(out); return 0 }
+    if let v = r as? VMRunner { try v.check().forEach(out); return 0 }
     let i = try r.identity()
     out("\(i.line), macOS \(i.os ?? "?")")
     if let lr = r as? LocalRunner, let g = lr.gate {
@@ -284,12 +298,24 @@ func run(_ args: Args) throws -> Int32 {
     return 0
 
   case ("sweep", _): return try SweepCommand.run(Array(CommandLine.arguments.dropFirst(2)))
+  case ("mcp", _):
+    // The loop as MCP tools over stdio (MCPServer.swift); each tool runs this executable as a child.
+    let exe = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0]).resolvingSymlinksInPath().path
+    var base: [String] = []
+    if let s = args.one("store") { base += ["--store", s] }
+    if let a = args.one("app") { base += ["--app", a] }
+    let jobs = ((try? store())?.root ?? FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-mcp")).appendingPathComponent("jobs")
+    let server = MCPServer(cli: exe, baseArgs: base, jobsDir: jobs, lock: args.one("lock"))
+    for s in [SIGINT, SIGTERM, SIGHUP] { signal(s) { sig in MCPServer.current?.shutdown(); exit(128 + sig) } }
+    MCPServer.current = server
+    server.serve()
+    return 0
   case ("gestures", _): return try GesturesCommand.run(args)
   case ("guards", _):
     guard let id = args.one("exp") ?? args[1] else { throw PLError.usage("usage: perfloop guards --exp ID [--guard-tolerance X --owner]") }
     var tol: Double?
     if let t = args.one("guard-tolerance") { guard let x = Double(t), x >= 0 else { throw PLError.usage("--guard-tolerance takes a share of pixels, e.g. 0.01") }; tol = x }
-    let l = try loop()
+    let l = try loop(); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
     let (e, r) = try l.guards(id, tolerance: tol)
     if json { out(PLJSON.encode(r)) } else {
       out("guards for exp \(e.id) (\(e.scenario) on \(e.fixture))\(r.override.map { ", \($0)" } ?? ""): \(r.pass ? "PASS" : r.failures.isEmpty ? "NEEDS REVIEW" : "FAIL") → \(e.state.rawValue)")
@@ -313,9 +339,26 @@ func run(_ args: Args) throws -> Int32 {
     } else { out(CauseTable.text(v)) }
     return 0
 
+  case ("suggest", _):
+    let t = args[1] ?? "champion"
+    // A result file needs no store.
+    let d = Loop.isProfileTarget(t) ? try loop().suggest(t) : Suggest.make(result: try PLJSON.read(JSONValue.self, path: t), sources: [t])
+    out(json ? PLJSON.encode(d) : Suggest.text(d, top: args.one("top").flatMap(Int.init) ?? 6)); return 0
+  case ("profile", _):
+    guard let t = args[1] else { throw PLError.usage("usage: perfloop profile champion|exp/ID [--template time|hitches|swiftui] [--scenario S] [--fixture F] [--keep-trace]") }
+    let l = try loop()
+    if args.has("runner") || args.has("idle") || args.has("lock") {
+      var o = try runnerOptions(args, gatedByDefault: false); if args.one("runner") == nil && !args.has("idle") { o.force = true }
+      l.runner = try Runners.make(args.one("runner") ?? "local", store: l.store, options: o); l.runner.log = { err($0) }; trapSignals()
+    }
+    let r = try l.profile(t, template: args.one("template") ?? "time", scenario: args.one("scenario"), fixture: args.one("fixture"), keepTrace: args.has("keep-trace"))
+    out(json ? PLJSON.encode(r.doc) : r.doc.text + "\nprofile: \(r.path)\nnext: perfloop diff champion exp/ID (once both have a profile)"); return 0
   case ("diff", _):
     guard let a = args[1], let b = args[2] else { throw PLError.usage("usage: perfloop diff A B [--exp ID] [--allow-stale]") }
-    out(try loop().diff(a, b, exp: args.one("exp"), allowStale: args.has("allow-stale")).trimmingCharacters(in: .newlines)); return 0
+    let raw = try loop().diff(a, b, exp: args.one("exp"), allowStale: args.has("allow-stale"))
+    // The adapter answers in JSON; a perfloop.diff/1 is printed as text unless --json (another schema as it came).
+    if !json, let d = try? PLJSON.decode(DiffResult.self, from: Data(raw.utf8)) { out(Explain.diffText(d)) } else { out(raw.trimmingCharacters(in: .newlines)) }
+    return 0
   case ("trace", "register"):
     guard let t = args[2], let b = args.one("build") else { throw PLError.usage("usage: perfloop trace register TRACE --build HASH") }
     try loop().register(trace: t, build: b); out("registered \(t)"); return 0

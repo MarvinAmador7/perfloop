@@ -5,6 +5,8 @@
 #   ./walkthrough.sh --dry-run          print every command, run nothing (no window)
 #   ./walkthrough.sh [--lock DIR]       run it: builds for ~5 min, then opens a window 34 times over ~2 min, so run it when nobody is using the
 #                                       Mac (or on a spare one). --lock DIR takes turns with other benches on this Mac.
+#   ./walkthrough.sh --runner ssh://user@spare-mac
+#                                       the windows open on a spare Mac instead (perfloop runner check it first); builds stay here
 #   ./walkthrough.sh --keep             keep the scratch store and binaries (default: deleted at the end)
 #   ./walkthrough.sh --reuse            with PERFLOOP_WALK set: reuse the benches a kept run built (the store starts anew)
 #
@@ -14,17 +16,17 @@
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 pkg=$(cd "$here/../.." && pwd)
-dry=0; keep=0; lock=""; reuse=0
+dry=0; keep=0; lock=""; reuse=0; where=local
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run) dry=1; shift ;; --keep) keep=1; shift ;; --reuse) reuse=1; shift ;; --lock) lock=$2; shift 2 ;;
-    *) echo "usage: $0 [--dry-run] [--lock DIR] [--keep] [--reuse]" >&2; exit 1 ;;
+    --dry-run) dry=1; shift ;; --keep) keep=1; shift ;; --reuse) reuse=1; shift ;; --lock) lock=$2; shift 2 ;; --runner) where=$2; shift 2 ;;
+    *) echo "usage: $0 [--dry-run] [--lock DIR] [--runner R] [--keep] [--reuse]" >&2; exit 1 ;;
   esac
 done
 W=${PERFLOOP_WALK:-$( [ $dry = 1 ] && echo /tmp/perfloop-walk || mktemp -d -t perfloop-walk)}
 export PERFLOOP_HOME="$W/home" PERFLOOP_APP=slowlist
 P="$pkg/.build/release/perfloop"
-runner="--runner local"; [ -n "$lock" ] && runner="$runner --lock $lock"
+runner="--runner $where"; [ -n "$lock" ] && [ "$where" = local ] && runner="$runner --lock $lock"
 
 say() { printf '\n## %s\n' "$*"; }
 run() {
@@ -56,6 +58,7 @@ done
 
 say "is this Mac and this bench ready?"
 run "$P" doctor --bench "$W/bench-champion" || true
+[ "$where" = local ] || run "$P" runner check "$where"
 
 say "the champion: the app as it is"
 run "$P" store add "$W/bench-champion"

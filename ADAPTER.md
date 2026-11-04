@@ -42,7 +42,7 @@ candidate's, so an experiment can't change how it is judged. Without `describe`,
   "fixtures": [ { "name": "rows2000", "params": { "rows": "2000" }, "parametric": { "rows": [10, 50000] } } ],
   "knobs": [ { "name": "rows.rank", "type": "choice", "default": "sort", "choices": ["sort", "index"] } ],
   "defaultFixture": "rows2000", "isolationGuards": [],
-  "verbs": ["help", "list", "describe", "knobs", "run", "snapdiff"],   // optional; absent = deskbench's (with ab)
+  "verbs": ["help", "list", "describe", "knobs", "run", "snapdiff", "profile", "diff"],   // optional; absent = deskbench's (with ab)
   "privatePaths": [".secrets/"] }                                      // optional; never recorded in a patch
 ```
 
@@ -96,9 +96,34 @@ Needed when a scenario guards `snapshot-diff`. After each rep the bench writes t
 are left out). Print `{ "guard": { "name": "snapshot-diff", "pass", "detail", "value", "limit", "review" } }`; exit 0
 within tolerance, 3 over it (`review: true`: the owner decides; never a win).
 
-## 6. `diff A B --json` (optional)
+## 6. `profile` and `diff` (optional)
 
-A differential call tree of two profiles (deskbench's, from xctrace). PerfLoopHost benches don't have it yet.
+`profile SCENARIO --template time|hitches|swiftui --fixture F --out DIR --json [--knob k=v] [--keep-trace]` records the
+scenario under xctrace and writes `DIR/SCENARIO-TEMPLATE.json` (`perfloop.profile/2`, SCHEMAS.md §4), the same document
+on stdout. Called by `perfloop profile champion|exp/ID`, which indexes it in the store. PerfLoopHost's does it this way:
+the bench starts itself as a child (`run … --wait-for FILE --profiled --sampler off`, scrubbed environment), the child
+shows the window and writes `FILE.waiting`, `xctrace record --attach PID` attaches, the parent writes `FILE` once
+xctrace says it is recording, the child runs its reps and writes `FILE.done`, and the recording is stopped with SIGINT,
+so every step is inside it. Every `run.step` is a `step` signpost (subsystem `dev.perfloop.bench`, Points of Interest),
+which is what the per-step trees are cut on. The trace is deleted once exported unless `--keep-trace` (it holds the
+recorded process's environment). The document adds, to SCHEMAS.md §4: `traceKept`, `os` and `model` (from the trace's
+TOC), `knobs`, `treeInSteps` (what `diff` compares), and `inProcess` (the run's own `perfloop.result/2`, `profiled: true`).
+
+`diff A B --json [--champion BUILD] [--allow-stale] [--allow-cross-os] [--per step|run]`: A and B are profile JSONs or
+`.trace` files; prints `perfloop.diff/1` (SCHEMAS.md §5), exit 6 when provenance refuses. Called by `perfloop diff`,
+which first resolves `champion` and `exp/ID` to their newest profiles and refuses inputs of other builds.
+
+## 6a. Gestures (optional)
+
+A scenario that replays a gesture takes it as its `gesture` parameter: `synthetic:NAME` (the manifest's `gestures` lists
+the built-in ones) or a `perfloop.gesture/1` file. Its steps carry `smoothness` (SCHEMAS.md §8), the rep the worst of
+them (`reps[].smoothness`), the summary the medians (`summary.smoothness`), which the runner reads as frame guards when
+the scenario lists `positionErrorP95Pt` and `stalls` in `frameGuards`. PerfLoopHost: `run.swipe(gesture)` replays into
+the window's largest NSScrollView (CGEvent-built NSEvents handed to `scrollWheel(with:)` at the recorded times; nothing
+posted to the system). `record-gesture SCENARIO [--name N] [--out FILE] [--count N] [--timeout S]` shows the scenario's
+window and records a hand's gestures over it (a local event monitor: deltas, phases, times) into
+`${PERFLOOP_HOME:-~/.perfloop}/APP/gestures/NAME.json`, where `perfloop gestures list` looks; it refuses a path inside a
+git checkout. `gestures [--json]` lists the built-in ones.
 
 ## 7. Exit codes
 
@@ -114,8 +139,9 @@ A differential call tree of two profiles (deskbench's, from xctrace). PerfLoopHo
 | `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added |
 | `perfloop.snapdiff` | 1 (reads `deskbench.snapdiff/1`) | adapter `snapdiff` | stable |
 | `perfloop.experiment`, `perfloop.ledger`, `perfloop.champion` | 1 | runner (store) | stable since Phase 2 |
-| `perfloop.sweep`, `perfloop.queue`, `perfloop.gesture`, `perfloop.gestures` | 1 | runner / probe | stable since Phase 3–4 |
+| `perfloop.sweep`, `perfloop.queue`, `perfloop.gesture`, `perfloop.gestures` | 1 | runner / probe | stable since Phase 3–4; `perfloop.sweep` gained `walls` (2026-11) |
 | `perfloop.doctor` | 1 | runner `doctor --json` | new |
-| `perfloop.profile` 2, `perfloop.diff` 1 | | deskbench only | not yet in PerfLoopHost |
+| `perfloop.profile` | 2 | adapter `profile` | fields only added; PerfLoopHost's adds `traceKept`, `os`, `model`, `knobs`, `treeInSteps`, `inProcess` (2026-11) |
+| `perfloop.diff` | 1 | adapter `diff` | stable |
 
 Within a version a field is never renamed or removed, only added; a reader of version n reads n−1.

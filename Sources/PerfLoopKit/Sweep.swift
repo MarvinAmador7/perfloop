@@ -177,13 +177,91 @@ public struct SweepDoc: Codable, Sendable, Equatable {
   public var finishedAt: String?
   /// Every point has a usable number (false after a budget stop or failures: rerun the same command to resume).
   public var complete: Bool = false
+  /// Where each one-axis fit crosses a budget (`Sweep.walls`): the size at which the app hits the wall.
+  public var walls: [SweepWall]?
 
   public init(scenario: String, fixture: String, objective: String, build: Build?, axis: [SweepAxis], reps: Int, points: [SweepPoint]) {
     self.scenario = scenario; self.fixture = fixture; self.objective = objective; self.build = build; self.axis = axis; self.reps = reps; self.points = points
   }
 }
 
+/// Where a fitted cost curve crosses a budget: the frame at 120 or 60 Hz for main-thread CPU per step (a step that
+/// needs more than a frame of main-thread time can't keep the panel's rate), or a latency budget. Inside the measured
+/// range it is read off the curve; past it, it is the curve extended, and past 4× the largest measured value it isn't
+/// claimed at all (`beyond`).
+public struct SweepWall: Codable, Sendable, Equatable {
+  public var axis: String
+  /// The fit's other axes, for a slice of a grid.
+  public var at: [String: String]?
+  public var model: String
+  public var budget: Double
+  /// "a 120 Hz frame", "the latency budget".
+  public var budgetName: String
+  /// The axis value at which the fitted objective reaches the budget; nil when it never does in range or `beyond`.
+  public var crossesAt: Double?
+  /// The measured range of the axis.
+  public var measured: [Double]
+  /// inside (between measured points) | extrapolated (past the largest, within 4×) | beyond (past 4×: not claimed) |
+  /// already (over budget at the smallest measured value) | never (the curve doesn't grow).
+  public var kind: String
+  /// crossesAt ÷ the largest measured value, when extrapolated.
+  public var factor: Double?
+  public var r2: Double
+}
+
 public enum Sweep {
+  // MARK: walls
+
+  /// The budgets a sweep's objective is held to by default: two frames for CPU per step, 100 ms for latency.
+  public static func defaultBudgets(objective: String) -> [(Double, String)] {
+    switch objective {
+    case "mainThreadCpuMsPerStep": return [(1000.0 / 120, "a 120 Hz frame"), (1000.0 / 60, "a 60 Hz frame")]
+    case "latencyMs": return [(100, "100 ms (an action that feels instant)")]
+    default: return []
+    }
+  }
+
+  /// Every one-axis fit (linear; the quadratic too when it curves) against every budget.
+  public static func walls(_ d: SweepDoc, budgets: [(Double, String)]? = nil) -> [SweepWall] {
+    let bs = budgets ?? defaultBudgets(objective: d.objective)
+    var out: [SweepWall] = []
+    for f in d.fits where f.model == "linear" || f.model == "quadratic" {
+      if f.model == "quadratic", let l = d.fits.first(where: { $0.model == "linear" && $0.axis == f.axis && $0.at == f.at }), !curves(linear: l, quadratic: f) { continue }
+      let xs = d.points.filter { p in p.objective != nil && (f.at ?? [:]).allSatisfy { p.values[$0.key] == $0.value } }.compactMap { $0.values[f.axis].flatMap(Double.init) }
+      guard let lo = xs.min(), let hi = xs.max(), hi > lo else { continue }
+      func y(_ x: Double) -> Double { f.intercept + f.slope * x + (f.quadratic ?? 0) * x * x }
+      for (b, name) in bs {
+        var w = SweepWall(axis: f.axis, at: f.at, model: f.model, budget: Stats.round(b, 2), budgetName: name, crossesAt: nil, measured: [lo, hi], kind: "never", factor: nil, r2: Stats.round(f.r2, 3))
+        if y(lo) >= b { w.kind = "already"; w.crossesAt = lo; out.append(w); continue }
+        // The first x ≥ lo where the curve reaches b.
+        var x: Double?
+        if let q = f.quadratic, q != 0 {
+          let a = q, bb = f.slope, c = f.intercept - b, disc = bb * bb - 4 * a * c
+          if disc >= 0 { x = [(-bb + disc.squareRoot()) / (2 * a), (-bb - disc.squareRoot()) / (2 * a)].filter { $0 >= lo }.min() }
+        } else if f.slope > 0 { x = (b - f.intercept) / f.slope }
+        guard let at = x, at >= lo else { out.append(w); continue }
+        if at <= hi { w.kind = "inside"; w.crossesAt = Stats.round(at, 1) }
+        else if at <= 4 * hi { w.kind = "extrapolated"; w.crossesAt = Stats.round(at, 1); w.factor = Stats.round(at / hi, 2) }
+        else { w.kind = "beyond"; w.factor = Stats.round(at / hi, 1) }
+        out.append(w)
+      }
+    }
+    return out
+  }
+
+  public static func wallSentence(_ w: SweepWall, objective: String) -> String {
+    let slice = (w.at ?? [:]).isEmpty ? "" : " at " + w.at!.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+    let what = "\(metricWord(objective)) reaches \(fmt(w.budget)) ms (\(w.budgetName))"
+    let r = " (\(w.model), r² \(w.r2); measured \(fmt(w.measured[0]))–\(fmt(w.measured[1])))"
+    switch w.kind {
+    case "already": return "wall: already over \(w.budgetName) at \(w.axis)=\(fmt(w.measured[0]))\(slice), the smallest measured" + r
+    case "inside": return "wall: \(what) at \(w.axis) ≈ \(fmt(w.crossesAt ?? 0))\(slice), inside the measured range" + r
+    case "extrapolated": return "wall: \(what) at \(w.axis) ≈ \(fmt(w.crossesAt ?? 0))\(slice), extrapolated \(fmt(w.factor ?? 0))× past the largest measured" + r
+    case "beyond": return "wall: not within 4× of the measured \(w.axis)\(slice) for \(w.budgetName) (the line would cross at ~\(fmt(w.factor ?? 0))× the largest measured: measure there before claiming it)" + r
+    default: return "wall: \(metricWord(objective)) doesn't grow with \(w.axis)\(slice): no wall for \(w.budgetName)" + r
+    }
+  }
+
   // MARK: grid
 
   /// Every combination of the axes' values, the first axis varying slowest.
@@ -439,6 +517,7 @@ public enum Sweep {
         } else if quads.count == 1 { o.append("  a quadratic in \(singular(a.name)) is no better than the line (adjusted r² \(Stats.round(q.adjustedR2 ?? 0, 2)) vs \(Stats.round(l.adjustedR2 ?? 0, 2)))") }
       }
     }
+    for w in d.walls ?? walls(d) { o.append(wallSentence(w, objective: d.objective)) }
     if let f = d.fit, !f.residuals.isEmpty { o.append("  residuals" + (shortUnit(d.objective).isEmpty ? "" : " (\(shortUnit(d.objective)))") + ": " + f.residuals.map(fmt).joined(separator: " ") + " · rmse \(fmt(f.rmse))") }
     let busy = d.points.filter { $0.busy == true }
     if !busy.isEmpty { o.append("busy machine at \(busy.count) point(s): " + busy.map { key($0.values, axes: d.axis) }.joined(separator: "; ") + " (their numbers may be high; rerun them with --redo KEY)") }

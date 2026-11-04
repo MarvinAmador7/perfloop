@@ -77,8 +77,11 @@ bench.main()
 ```
 
 `run.step` runs the action and waits until the window is at rest, then records main-thread CPU, instructions,
-latency (to the first frame after an `until:` condition holds), frames, stretches with stacks, bodies and causes. The
-host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `run`, `snapdiff`, `knobs`.
+latency (to the first frame after an `until:` condition holds), frames, stretches with stacks, bodies and causes.
+`run.swipe(try run.gesture())` is a step too: a trackpad gesture (`--set gesture=synthetic:scroll-down`, or a file
+recorded by hand with `BENCH record-gesture SCENARIO`) replayed into the window's scroll view with its own timestamps,
+scored for how closely the content followed the fingers (position error, stalls, jerk, latency in frames). The
+host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `run`, `snapdiff`, `knobs`, `profile`, `diff`.
 
 ## Commands
 
@@ -92,13 +95,65 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 | `exp new "<hypothesis>" --bench P \| --build-cmd C --bench P \| --knobs k=v` | a candidate; screens it |
 | `exp status [ID]` · `exp screen ID` · `exp full ID` · `exp promote ID` · `exp abandon ID` | the experiment verbs |
 | `explain exp/ID` · `ledger` · `causes RESULT.json` | what happened, in words |
+| `suggest [champion\|exp/ID\|RESULT.json]` | ranked hypotheses for the next experiment from the cause records, stacks, profile and sweep, each with its evidence and the share it could remove (leads, not conclusions) |
 | `guards --exp ID` | the correctness guards alone |
 | `session start` | the stopping rules (2 h, 20 candidates, 5 non-promising in a row) count from here |
-| `sweep SCENARIO --set rows=100..5000/500` | a cost curve over a fixture parameter or knob, with a fitted slope |
+| `sweep SCENARIO --set rows=100..5000/500 [--budget-ms X]` | a cost curve over a fixture parameter or knob, with a fitted slope and where it crosses the frame (or your) budget: inside the measured range, extrapolated ×k, or not claimed past 4× |
 | `queue add ID` · `queue list` · `queue remove QID` · `queue run --runner R` · `runner check R` · `runner clean R` | runners: `local` (idle-gated), `ssh://host` |
-| `diff A B` · `trace register` · `gestures list` · `exp replay` | deskbench's profiles and gestures; not yet in PerfLoopHost |
+| `mcp [--app NAME]` | the loop as MCP tools for a coding agent, stages as jobs (§ Agents over MCP) |
+| `profile champion\|exp/ID [--template time\|hitches\|swiftui]` | the build under xctrace (opens a window): call trees per step, hitches, hangs, SwiftUI tables; kept in the store, never an objective |
+| `diff champion exp/ID` (or two profile JSONs / traces) · `trace register` | what grew and shrank between two builds, ms per step, main thread; refuses traces of other builds |
+| `gestures list` · `exp replay` | recorded and synthetic gestures; a past session as experiments |
 
 `perfloop help` has every flag. Exit codes: 0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner).
+
+## Agents over MCP
+
+`perfloop mcp` serves the loop as Model Context Protocol tools over stdio, for any agent that speaks MCP:
+
+```sh
+claude mcp add perfloop -- /path/to/perfloop mcp --app myapp          # Claude Code
+# Codex (~/.codex/config.toml):  [mcp_servers.perfloop]  command = "/path/to/perfloop"  args = ["mcp", "--app", "myapp"]
+```
+
+The tools are the agent's verbs (`status`, `explain`, `suggest`, `new_experiment`, `screen`, `full`, `promote`,
+`profile`, `diff`, `sweep`, …) with their schemas. A stage that builds or opens windows returns a job at once; `job`
+waits for it on the server's side (up to 60 s a call), so the agent never writes a sleep loop, and every job still
+running when the session ends is killed with its windows. Local runs hold a window lock (`--lock DIR`, default in the
+temporary directory). The owner's flags (`--force`, `--owner`, `--guard-tolerance`, `--allow-dirty`) are no tool's
+arguments, and no value may start with `-`. Job logs are in the store's `jobs/`. The shell CLI stays the reference;
+the server runs it for every call.
+
+## A spare Mac as the runner
+
+Numbers from a Mac someone is using are noise; a spare Mac reached over ssh gives trusted ones. Verified on a Mac
+mini (Mac16,11, macOS 26.6.2) on 4 November 2026: `perfloop runner check ssh://user@mini`, then a queued knob experiment
+(`queue add ID --runner ssh://…` and `queue run --runner ssh://… --idle 60`, 2 min 13 s) and the whole SlowList
+walkthrough (`./walkthrough.sh --runner ssh://…`, 34 windows), with every rep's window trusted and the champion within
+±1.7 % across 11 pairs (Examples/SlowList/README.md). What that Mac needs, once:
+
+1. **Remote Login** on, and this Mac's key in `~/.ssh/authorized_keys` there (perfloop logs in with keys only).
+2. **The user logged in at the console, the screen unlocked.** A window behind the lock screen is never active: the
+   runner waits while it is locked (that is correct; it is how it behaved on the mini before). For unattended nights:
+   automatic login for that user, the screen lock off ("Require password after screen saver" never), display sleep
+   never (`sudo pmset -a displaysleep 0 sleep 0`).
+3. **Nothing else running in that session.** `runner check` lists what is busy there (`load: … busy there: …`); a VM
+   helper or a browser is noise in every rep even when the window is trusted. Best: a dedicated user for the bench,
+   with nothing else open.
+4. The display it has decides the frame numbers: the mini drove a 60 Hz, 1× panel, so its hitch figures aren't a
+   ProMotion MacBook's. Results never mix runners.
+
+## A macOS VM as the runner
+
+`--runner vm:tart/NAME` boots a Tart VM on this Mac headless, finds its address, installs a key of its own in the guest
+once (with the image's password: `PERFLOOP_VM_USER`/`PERFLOOP_VM_PASSWORD`, admin/admin in Cirrus Labs' images), waits
+for its automatic login, runs the windows there, and stops the VM it booted. Verified on 4 November 2026 with
+`ghcr.io/cirruslabs/macos-tahoe-vanilla` (macOS 26.6.2 guest, 4 vCPUs, 8 GB, 24 GB to download, 26 GB on disk) on a
+MacBook Pro M1 Pro: `runner check` in 22 s from cold, and a SlowList knob screen with 3 of 3 pairs trusted (champion
+93.8–115.5 ms, candidate 15.5–17.3 ms, band ±11 %, against ±5 % on the mini). As SPEC §4.2 expected, the guest reads no
+instruction counts and runs at 60 Hz, so a VM screens and never decides a full (`exp full` refuses it). Needs Tart
+(`brew install cirruslabs/cli/tart`, or `PERFLOOP_TART=PATH`; its licence is free for personal use and small
+organisations) and an image: `tart clone ghcr.io/cirruslabs/macos-tahoe-vanilla:latest NAME`.
 
 ## Where things live
 
@@ -123,9 +178,15 @@ package free of any app's modules. `Examples/SlowList` has its own `swift test`.
 
 ## Status
 
-Built and used on [capcomd](https://github.com/MarvinAmador7/capcomd) Desktop (adapter `deskbench`, where PerfLoop started) and on `Examples/SlowList`. Not yet in
-PerfLoopHost: xctrace profiles and `diff` (deskbench has them), gesture replay drivers, the VM runner. See
-[`docs/design/TOOL.md`](docs/design/TOOL.md) for what's left.
+Built and used on [capcomd](https://github.com/MarvinAmador7/capcomd) Desktop (adapter `deskbench`, where PerfLoop
+started) and on `Examples/SlowList`. PerfLoopHost now has what deskbench had beyond the loop itself: xctrace profiles
+and `diff` per step, gesture replay with the smoothness meter, and a recorder for a real hand. Runners: this Mac
+(idle-gated), a spare Mac over ssh (verified on a Mac mini, trusted runs), a macOS VM with Tart (`vm:tart/NAME`, screens
+only). For agents: `perfloop mcp` and `perfloop suggest` (docs/BEYOND.md says why and what not to claim).
+
+Still open: deskbench itself moving onto PerfLoopHost (capcomd's side); a gesture recorded by a real hand (the recorder is
+built and was checked by feeding it a synthetic gesture; feel stays the owner's call); the design history in
+[`docs/design/`](docs/design/) is kept as it was, so TOOL.md's G8 line is now out of date.
 
 ## License
 

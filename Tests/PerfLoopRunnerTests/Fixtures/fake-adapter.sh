@@ -155,6 +155,17 @@ snapdiff)
   echo "{ \"schema\": \"deskbench.snapdiff/1\", \"guard\": { \"name\": \"snapshot-diff\", \"pass\": $pass, \"detail\": \"fake: $v of the pixels differ\", \"artifacts\": [\"$a\", \"$b\", \"$out\"], \"value\": $v, \"limit\": $tol, \"review\": $rev } }"
   exit $code
   ;;
+profile)
+  sc=$1; shift; out=""; knobs=""; tmpl=time; fixture=crew17
+  while [ $# -gt 0 ]; do
+    case "$1" in --out) out=$2; shift 2 ;; --knob) knobs="$knobs$2,"; shift 2 ;; --template) tmpl=$2; shift 2 ;; --fixture) fixture=$2; shift 2 ;; --*) shift ;; *) shift ;; esac
+  done
+  log "profile $sc $fixture template=$tmpl knobs=$knobs out=$out"
+  mkdir -p "$out"
+  echo "{ \"schema\": \"perfloop.profile/2\", \"template\": \"Time Profiler\", \"scenario\": \"$sc\", \"fixture\": \"$fixture\", \"process\": \"fake\", \"durationS\": 1,
+  \"notes\": [\"fake knobs=$knobs\"], \"build\": $(build "$self"), \"msPerStep\": $FAKE_CPU, \"tree\": { \"n\": \"main thread\", \"v\": 10 } }" > "$out/$sc-$tmpl.json"
+  cat "$out/$sc-$tmpl.json"
+  ;;
 diff)
   log "diff $1 $2"
   echo "{ \"schema\": \"deskbench.diff/1\", \"a\": \"$1\", \"b\": \"$2\", \"gains\": [], \"losses\": [] }"

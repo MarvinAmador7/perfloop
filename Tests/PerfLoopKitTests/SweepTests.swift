@@ -110,4 +110,32 @@ final class SweepTests: XCTestCase {
   func testEstimate() {
     XCTAssertEqual(Sweep.estimate(points: 6, reps: 2, repS: 7, startupS: 6), 6 * 20)
   }
+
+  /// Where a cost curve crosses a frame: read off inside the measured range, extended past it within 4×, never claimed
+  /// beyond; JOURNEY's 3.28 ms per agent from 50 ms at 4 agents is over a 60 Hz frame from the smallest point.
+  func testWallsSayWhereTheBudgetIsCrossedAndHowFarThatIsExtrapolated() throws {
+    func doc(_ f: (Double) -> Double, _ xs: [Double], objective: String = "mainThreadCpuMsPerStep") throws -> SweepDoc {
+      let axes = [SweepAxis(name: "rows", role: "fixture", values: xs.map { String(Int($0)) })]
+      let pts = xs.map { x -> SweepPoint in var p = SweepPoint(values: ["rows": String(Int(x))]); p.objective = f(x); return p }
+      var d = SweepDoc(scenario: "select", fixture: "rows", objective: objective, build: nil, axis: axes, reps: 1, points: pts)
+      (d.fit, d.fits) = Sweep.fits(pts, axes: axes, objective: objective)
+      return d
+    }
+    // 2 ms + 0.01 ms per row: 120 Hz (8.33 ms) at ~633 rows, 60 Hz (16.67 ms) at ~1467.
+    let inside = Sweep.walls(try doc({ 2 + 0.01 * $0 }, [100, 400, 700, 1000]))
+    XCTAssertEqual(inside.map(\.kind), ["inside", "extrapolated"])
+    XCTAssertEqual(inside[0].crossesAt ?? 0, 633.3, accuracy: 0.2); XCTAssertEqual(inside[1].factor ?? 0, 1.47, accuracy: 0.01)
+    XCTAssertTrue(Sweep.wallSentence(inside[1], objective: "mainThreadCpuMsPerStep").contains("extrapolated 1.47× past the largest measured"))
+    // Far away: not claimed.
+    let far = Sweep.walls(try doc({ 1 + 0.0001 * $0 }, [100, 200, 300, 400]))
+    XCTAssertEqual(far.map(\.kind), ["beyond", "beyond"]); XCTAssertNil(far[0].crossesAt)
+    // Already over, flat, and the budget the caller names.
+    XCTAssertEqual(Sweep.walls(try doc({ 50 + 3.28 * $0 }, [4, 16, 28, 40])).map(\.kind), ["already", "already"])
+    XCTAssertEqual(Sweep.walls(try doc({ 5 - 0.001 * $0 }, [100, 200, 300])).map(\.kind), ["never", "never"])
+    let mine = Sweep.walls(try doc({ 2 + 0.01 * $0 }, [100, 400, 700, 1000]), budgets: [(5, "5 ms")])
+    XCTAssertEqual(mine.count, 1); XCTAssertEqual(mine[0].crossesAt ?? 0, 300, accuracy: 0.5)
+    XCTAssertTrue(Sweep.walls(try doc({ 2 + 0.01 * $0 }, [1, 2, 3], objective: "instructionsPerStep")).isEmpty, "no default budget for instructions")
+    let text = Sweep.text(try doc({ 2 + 0.01 * $0 }, [100, 400, 700, 1000]))
+    XCTAssertTrue(text.contains("wall: ms/step reaches 8.33 ms (a 120 Hz frame) at rows ≈ 633, inside the measured range"), text)
+  }
 }

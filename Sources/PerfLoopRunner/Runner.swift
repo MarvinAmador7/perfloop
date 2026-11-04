@@ -67,7 +67,7 @@ public enum Runners {
       if let l = o.launch { guard let m = SSHRunner.Launch(rawValue: l) else { throw PLError.usage("--launch gui|direct") }; r.launch = m }
       if let i = o.idle, !o.force { r.gate = IdleGate(threshold: i, busyApps: o.busyApps ?? IdleGate.defaultBusyApps) }
       return r
-    case .vm(let tool, let name): return try VMRunner.make(tool: tool, name: name)
+    case .vm(let tool, let name): return try VMRunner(tool: tool, name: name, store: store)
     }
   }
 }
@@ -225,7 +225,7 @@ public final class Child {
     return Adapter.Output(status: p.terminationStatus, stdout: String(decoding: data, as: UTF8.self))
   }
 
-  /// SIGTERM to the child and every descendant, SIGKILL to what is left after `grace` seconds.
+  /// SIGTERM to the child and every descendant, SIGKILL to what is left after `grace` seconds (ProcessTree.kill).
   public func kill(grace: Double = 3) { ProcessTree.kill(p.processIdentifier, grace: grace) }
 
   /// Kills every watched child's tree (a signal handler's last act).
@@ -249,9 +249,19 @@ public enum ProcessTree {
     return out
   }
 
+  /// SIGTERM to `pid` and every descendant, SIGKILL to what is left after `grace` seconds. The tree is frozen first
+  /// (SIGSTOP, then read again until no new process appears), so a child forked while the kill runs isn't missed and
+  /// orphaned (a shell about to start `sleep` was, in the MCP server's tests).
   public static func kill(_ pid: Int32, grace: Double = 3) {
-    let all = tree(pid)
+    var all: [Int32] = []
+    for _ in 0..<10 {
+      let now = tree(pid).filter { !all.contains($0) }
+      if now.isEmpty { break }
+      for p in now { _ = sysKill(p, SIGSTOP) }
+      all += now
+    }
     for p in all { _ = sysKill(p, SIGTERM) }
+    for p in all { _ = sysKill(p, SIGCONT) }
     let until = Date().addingTimeInterval(grace)
     while Date() < until, all.contains(where: { sysKill($0, 0) == 0 && !zombie($0) }) { Thread.sleep(forTimeInterval: 0.1) }
     for p in all where sysKill(p, 0) == 0 { _ = sysKill(p, SIGKILL) }

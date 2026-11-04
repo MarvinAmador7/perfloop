@@ -10,7 +10,7 @@ enum GesturesCommand {
   usage: perfloop gestures list [FILE…] [--dir DIR]… [--bench PATH] [--store DIR | --app NAME] [--json]
     gesture files (perfloop.gesture/1) in the store's gestures/ folder and each --dir, and the FILEs named; with
     --bench, the adapter's built-in ones. Replay one: exp new … --scenario swipe --set gesture=FILE (or the adapter's own,
-    deskbench run swipe --gesture FILE). Exit 1 when a named FILE isn't a gesture that can be replayed.
+    BENCH run SCENARIO --set gesture=FILE; record one by hand: BENCH record-gesture SCENARIO). Exit 1 when a named FILE isn't a gesture that can be replayed.
   """
 
   static func run(_ args: Args) throws -> Int32 {

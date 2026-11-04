@@ -304,6 +304,8 @@ public final class Loop {
 
   public func full(_ id: String, force: Bool = false) throws -> Experiment {
     var e = try store.experiment(id)
+    // A VM's frames and counters aren't a panel's: it screens, and never decides (SPEC §4.2).
+    if runner.name.hasPrefix("vm:") { throw PLError.refused("\(runner.name) screens and never decides a full (a guest's frame cadence and counters aren't hardware's): run the full on this Mac or a spare one") }
     if e.state == .rejected && !force { throw PLError.refused("exp \(e.id) was rejected by its screen; --force to run a full anyway") }
     // A screen the owner cleared of its snapshot review goes back to promising (perfloop guards --owner); the owner may
     // also run the full on a screen that still asks for review.
@@ -427,7 +429,10 @@ public final class Loop {
   /// Writes and returns `exp/<id>/explain.txt`.
   @discardableResult
   public func explain(_ e: Experiment) -> String {
-    let text = Explain.experiment(e, champion: store.champion(), stop: Stopping.reasons(StopInput(session: store.ledger.currentSession())))
+    var text = Explain.experiment(e, champion: store.champion(), stop: Stopping.reasons(StopInput(session: store.ledger.currentSession())))
+    // The next ideas, before the `next:` line (which stays last).
+    let s = suggestLines(e)
+    if !s.isEmpty, let r = text.range(of: "\nnext: ", options: .backwards) { text.insert(contentsOf: "\n" + s.joined(separator: "\n"), at: r.lowerBound) }
     let p = store.expDir(e.id).appendingPathComponent("explain.txt")
     try? FileManager.default.createDirectory(at: p.deletingLastPathComponent(), withIntermediateDirectories: true)
     try? text.write(to: p, atomically: true, encoding: .utf8)
@@ -479,15 +484,22 @@ public final class Loop {
   public func diff(_ a: String, _ b: String, exp: String?, allowStale: Bool) throws -> String {
     let (c, cEntry) = try requireChampion()
     if let m = cEntry.manifest, !m.has(verb: "diff") {
-      throw PLError.usage("the champion's adapter (\(m.adapter)) has no `diff`: differential call trees come from xctrace profiles, which PerfLoopHost benches don't record yet; read the stacks in each experiment's explain.txt (worst stretches) instead")
+      throw PLError.usage("the champion's adapter (\(m.adapter)) has no `diff`: rebuild the bench on a PerfLoopHost with profiles (`profile` and `diff` verbs), or read the stacks in each experiment's explain.txt (worst stretches) instead")
     }
+    var exp = exp
+    if exp == nil, let x = [a, b].first(where: { $0.hasPrefix("exp/") }) { exp = String(x.dropFirst(4)) }
     let ex = try exp.map { try store.experiment($0) }
     var allowed: [String: String] = [:]
     if let h = c.build.hash { allowed[h] = "champion \(c.experiment)" }
     if let h = ex?.build?.hash { allowed[h] = "exp \(ex!.id)" }
     var problems: [String] = [], files: [String] = []
-    for x in [a, b] {
-      if x == "champion" || x.hasPrefix("exp/") { problems.append("\(x) has no recorded profile yet (confirmation traces come with the profile step); pass a profile or trace file"); continue }
+    for var x in [a, b] {
+      if Self.isProfileTarget(x) {
+        // champion, exp/ID: the newest profile `perfloop profile` recorded of that build with those knobs.
+        let t = try profileTarget(x, scenario: ex?.scenario)
+        guard let p = latestProfile(t) else { problems.append("\(x) has no profile of \(t.scenario) yet: perfloop profile \(x)\(ex == nil ? "" : " --scenario \(t.scenario)")"); continue }
+        x = p
+      }
       files.append(x)
       guard let h = provenance(of: x) else { problems.append("\(x): unknown provenance (no build recorded for it; perfloop trace register \(x) --build HASH)"); continue }
       if allowed[h] == nil {
@@ -495,7 +507,10 @@ public final class Loop {
         problems.append("\(x): trace build \(commit) ≠ champion \(c.build.commit ?? Build.short(c.build.hash ?? ""))\(ex.map { " or exp \($0.id)" } ?? "")")
       }
     }
-    if !problems.isEmpty && (!allowStale || files.count < 2) { throw PLError.refused("diff refused: " + problems.joined(separator: "; ") + (files.count == 2 ? " (--allow-stale to compare anyway)" : "")) }
+    if !problems.isEmpty && (!allowStale || files.count < 2) {
+      if files.count < 2 && problems.allSatisfy({ $0.contains("has no profile") }) { throw PLError.usage(problems.joined(separator: "; ")) }
+      throw PLError.refused("diff refused: " + problems.joined(separator: "; ") + (files.count == 2 ? " (--allow-stale to compare anyway)" : ""))
+    }
     for f in files where TracePrivacy.inCheckout(f) { log("warning: \(f) is inside a git checkout; a trace holds the recorded process's environment: move it out") }
     let o = try Adapter(exe: cEntry.executable).diff(files[0], files[1])
     guard o.status == 0 else { throw PLError.harness("diff exited \(o.status)") }

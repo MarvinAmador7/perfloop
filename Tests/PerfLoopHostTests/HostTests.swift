@@ -129,7 +129,38 @@ import PerfLoopProbe
     XCTAssertEqual(m.knobs.first?.name, "test.rank"); XCTAssertEqual(m.knobs.first?.choices, ["sort", "index"])
     XCTAssertEqual(m.defaultFixture, "rows500")
     XCTAssertFalse(m.has(verb: "ab")); XCTAssertTrue(m.has(verb: "snapdiff"))
+    XCTAssertTrue(m.has(verb: "profile")); XCTAssertTrue(m.has(verb: "diff"))
     XCTAssertEqual(m.defaultVia, "run", "no ab: the runner measures pairs through run")
+  }
+
+  /// `diff A B` on two profile documents, headless: per step, what shrank, provenance from their builds.
+  func testDiffOfTwoProfilesHeadless() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-hostdiff-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    func profile(_ name: String, sortMs: Int, hash: String) throws -> String {
+      var p = ProfileDoc(template: "Time Profiler", trace: nil, scenario: "select", fixture: "rows500", process: "TestBench", durationS: 1)
+      p.build = Build(hash: hash, commit: "abc1234", dirty: false, stamp: true)
+      p.steps = (0..<4).map { StepInterval(name: "select#\($0)", startNs: $0 * 100, endNs: $0 * 100 + 50, source: "signpost") }
+      p.sampleIntervalMs = 1
+      let sort = CallTree(n: "ListModel.rankBySorting", v: sortMs, o: true, c: [CallTree(n: "-[NSString localizedStandardCompare:]", v: sortMs)])
+      p.treeInSteps = CallTree(n: "main thread", v: sortMs + 40, c: [CallTree(n: "main", v: sortMs + 40, o: true, c: [sort, CallTree(n: "CA::Transaction::commit", v: 40)])])
+      p.tree = p.treeInSteps
+      let path = dir.appendingPathComponent("\(name).json").path
+      try PLJSON.encode(p).write(toFile: path, atomically: true, encoding: .utf8)
+      return path
+    }
+    let a = try profile("a", sortMs: 360, hash: "sha256:aa"), b = try profile("b", sortMs: 8, hash: "sha256:bb")
+    let (code, out) = bench().handle(["diff", a, b, "--json"])
+    XCTAssertEqual(code, 0, out)
+    let d = try PLJSON.decode(DiffResult.self, from: Data(out.utf8))
+    XCTAssertEqual(d.a.msPerStep, 100); XCTAssertEqual(d.b.msPerStep, 12); XCTAssertEqual(d.a.stepSource, "signpost")
+    XCTAssertEqual(d.gains.first?.symbol, "ListModel.rankBySorting"); XCTAssertEqual(d.gains.first?.d, -88)
+    XCTAssertTrue(bench().handle(["diff", a, b]).1.contains("shrank in b"))
+    // Against a named champion build, a side of another build is stale: refused (6) unless allowed.
+    XCTAssertEqual(bench().handle(["diff", a, b, "--champion", "sha256:bb"]).0, 6)
+    XCTAssertEqual(bench().handle(["diff", a, b, "--champion", "sha256:bb", "--allow-stale"]).0, 0)
+    XCTAssertEqual(bench().handle(["diff", a]).0, 1)
   }
 
   func testUnknownVerbIsAUsageError() {

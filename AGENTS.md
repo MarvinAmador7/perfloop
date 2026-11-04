@@ -19,6 +19,7 @@ experiment's `explain.txt` says what happened and what to do next. You change co
 perfloop session start                       # the stopping rules count from here
 perfloop exp status                          # what is open, what each needs next, and a `stop:` line when it's time
 perfloop explain exp/<id>                    # where the time went; the last line is the next command
+perfloop suggest                             # hypotheses from what was recorded, ranked, each with its evidence
 # one idea → edit the app → commit →
 perfloop exp new "<one-sentence hypothesis>" --build-cmd "<build>" --bench <bench path>
 perfloop exp new "<hypothesis>" --knobs name=value          # an idea the app already has as a knob: no rebuild
@@ -64,6 +65,9 @@ seconds to minutes. Run them only when the owner says the Mac is free, with the 
 `--runner ssh://user@spare-mac` (a Mac nobody uses) take them. A run on a locked screen, in the background or under a
 profiler is **untrusted** and never decides; rerun it, don't explain it away. `perfloop doctor` says what would make
 this Mac's numbers untrustworthy.
+
+Over MCP (`perfloop mcp`), the same verbs are tools: a stage returns a job, and `job` waits for it on the server's side,
+so never poll with `sleep`; the session's end stops its jobs.
 
 Headless and always fine: `doctor`, `describe`, `store list`, `exp status`, `explain`, `ledger`, `champion`, `causes`.
 

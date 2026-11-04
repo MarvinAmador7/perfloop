@@ -17,6 +17,8 @@ public final class SweepRun {
     public var out: String?
     /// Stop starting points once this many minutes are spent (a resumed run counts afresh).
     public var budgetMin: Double?
+    /// Budgets the fitted curves are held to (`--budget-ms`); default: a 120 Hz and a 60 Hz frame for CPU per step.
+    public var budgetMs: [Double] = []
     /// mkdir-style lock held while a point runs (other agents' window runs wait for it, and it for them).
     public var lock: String?
     /// Points per lock hold.
@@ -213,21 +215,22 @@ public final class SweepRun {
       try PLJSON.write(sp, path: pointFile(p.dir, k).path)
       done[k] = sp
       if doc.build == nil, let raw = try? PLJSON.read(JSONValue.self, path: rawFile(p.dir, k).path) { doc.build = Build(json: raw.at("tool.build"))?.embedded }
-      doc = finish(doc, p, done, stopped: nil)
+      doc = finish(doc, p, done, stopped: nil, budgetMs: o.budgetMs)
       try PLJSON.write(doc, path: p.dir.appendingPathComponent("sweep.json").path)
       if let x = sp.objective { log("sweep point \(k): \(Sweep.metricWord(p.metric)) \(Sweep.fmt(x))\(sp.busy == true ? " (busy machine)" : "")") }
     }
     Interrupts.release()
-    doc = finish(doc, p, done, stopped: stopped)
+    doc = finish(doc, p, done, stopped: stopped, budgetMs: o.budgetMs)
     try PLJSON.write(doc, path: p.dir.appendingPathComponent("sweep.json").path)
     return doc
   }
 
-  func finish(_ d: SweepDoc, _ p: Plan, _ done: [String: SweepPoint], stopped: String?) -> SweepDoc {
+  func finish(_ d: SweepDoc, _ p: Plan, _ done: [String: SweepPoint], stopped: String?, budgetMs: [Double] = []) -> SweepDoc {
     var doc = d
     doc.points = p.points.map { done[Sweep.key($0, axes: p.axes)] ?? SweepPoint(values: $0) }
     let (fit, all) = Sweep.fits(doc.points, axes: p.axes, objective: p.metric)
     doc.fit = fit; doc.fits = all
+    doc.walls = Sweep.walls(doc, budgets: budgetMs.isEmpty ? nil : budgetMs.map { ($0, "\(Stats.round($0, 2)) ms") })
     doc.complete = doc.points.allSatisfy(\.usable)
     doc.finishedAt = Clock.now()
     doc.notes = []
