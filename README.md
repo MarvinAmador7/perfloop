@@ -95,6 +95,7 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 | `exp new "<hypothesis>" --bench P \| --build-cmd C --bench P \| --knobs k=v` | a candidate; screens it |
 | `exp status [ID]` · `exp screen ID` · `exp full ID` · `exp promote ID` · `exp abandon ID` | the experiment verbs |
 | `explain exp/ID` · `ledger` · `causes RESULT.json` | what happened, in words |
+| `suggest [champion\|exp/ID\|RESULT.json]` | ranked hypotheses for the next experiment from the cause records, stacks, profile and sweep, each with its evidence and the share it could remove (leads, not conclusions) |
 | `guards --exp ID` | the correctness guards alone |
 | `session start` | the stopping rules (2 h, 20 candidates, 5 non-promising in a row) count from here |
 | `sweep SCENARIO --set rows=100..5000/500 [--budget-ms X]` | a cost curve over a fixture parameter or knob, with a fitted slope and where it crosses the frame (or your) budget: inside the measured range, extrapolated ×k, or not claimed past 4× |

@@ -61,7 +61,8 @@ checked against §1.
 - **`perfloop suggest`** (`Sources/PerfLoopKit/Suggest.swift`, `perfloop.suggest/1`): reads the champion's (or an
   experiment's) latest results, its newest profile and the store's sweeps, and prints hypotheses ranked by the share of
   the objective each could remove, with the evidence. They are leads, not conclusions: each says what to check first.
-  It is also in every experiment's `explain.txt`.
+  Its top three are in every experiment's `explain.txt`. It needs each side's result, which benches measured through
+  `run` keep (PerfLoopHost's); an adapter with its own `ab` (deskbench) keeps summaries only: pass a result file.
 - **Budget walls** (`Sweep.walls`, in `perfloop.sweep/1` as `walls`): the size at which each fitted curve crosses the
   frame budget at the measured refresh rate (or `--budget-ms`), marked `extrapolated` with the factor beyond the
   largest measured point, and refused as a claim past 4× (`beyond`).

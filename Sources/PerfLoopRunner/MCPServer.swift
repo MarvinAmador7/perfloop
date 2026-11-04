@@ -67,6 +67,9 @@ public final class MCPServer {
       try ["exp", "status"] + Self.opt(a, "id", Self.id) },
     Tool(name: "explain", description: "An experiment's explain.txt: verdict, numbers, where the time went (stacks, causes), hypotheses, and the next command.",
          properties: ["id": Self.prop("string", "Experiment id, e.g. 0007")], required: ["id"], kind: .now) { a in try ["explain", "exp/" + Self.id(Self.req(a, "id"))] },
+    Tool(name: "suggest", description: "Ranked hypotheses for the next experiment from what the loop recorded (cause records, stacks, profiles, sweeps), each with its evidence and the share of the objective it could remove. Leads to check, not conclusions.",
+         properties: ["target": Self.prop("string", "champion (default) or exp/ID")], required: [], kind: .now) { a in
+      try ["suggest"] + Self.opt(a, "target", Self.target) },
     Tool(name: "ledger", description: "Every state change of every experiment, oldest first: what was tried, by whom, where, with what result.", properties: [:], required: [], kind: .now) { _ in ["ledger"] },
     Tool(name: "champion", description: "The build to beat and its chain back to a merged commit.", properties: [:], required: [], kind: .now) { _ in ["champion"] },
     Tool(name: "doctor", description: "What would make this Mac's numbers untrustworthy now (screen lock, someone using it, load, disk, xctrace), and with a bench, the adapter's contract.",

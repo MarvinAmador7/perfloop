@@ -42,6 +42,10 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             and the isolation scenarios; a failure demotes it, a snapshot over tolerance
                                             asks the owner; only the owner sets a tolerance (never inside exp)
   explain exp/ID                            exp/ID/explain.txt: everything needed to decide the next step
+  suggest [champion|exp/ID|RESULT.json] [--json]
+                                            hypotheses for the next experiment from what was recorded (cause fan-out,
+                                            repeated bodies, hot frames of ours, framework work they ask for, a profile's
+                                            largest subtrees, a sweep's walls), ranked by the share they could remove
   causes RESULT.json [--json]               why bodies ran: the model mutations each step's and long stretch's bodies
                                             followed (the adapter's mutation records, CAPABILITIES.md C7)
   profile champion|exp/ID [--template time|hitches|swiftui] [--scenario S] [--fixture F] [--keep-trace] [--lock DIR] [--idle S]
@@ -85,7 +89,7 @@ struct Args {
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
                                     "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir",
-                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop", "template"]
+                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop", "template", "top"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -332,6 +336,11 @@ func run(_ args: Args) throws -> Int32 {
     } else { out(CauseTable.text(v)) }
     return 0
 
+  case ("suggest", _):
+    let t = args[1] ?? "champion"
+    // A result file needs no store.
+    let d = Loop.isProfileTarget(t) ? try loop().suggest(t) : Suggest.make(result: try PLJSON.read(JSONValue.self, path: t), sources: [t])
+    out(json ? PLJSON.encode(d) : Suggest.text(d, top: args.one("top").flatMap(Int.init) ?? 6)); return 0
   case ("profile", _):
     guard let t = args[1] else { throw PLError.usage("usage: perfloop profile champion|exp/ID [--template time|hitches|swiftui] [--scenario S] [--fixture F] [--keep-trace]") }
     let l = try loop()

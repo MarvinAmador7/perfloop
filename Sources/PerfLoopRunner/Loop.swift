@@ -427,7 +427,10 @@ public final class Loop {
   /// Writes and returns `exp/<id>/explain.txt`.
   @discardableResult
   public func explain(_ e: Experiment) -> String {
-    let text = Explain.experiment(e, champion: store.champion(), stop: Stopping.reasons(StopInput(session: store.ledger.currentSession())))
+    var text = Explain.experiment(e, champion: store.champion(), stop: Stopping.reasons(StopInput(session: store.ledger.currentSession())))
+    // The next ideas, before the `next:` line (which stays last).
+    let s = suggestLines(e)
+    if !s.isEmpty, let r = text.range(of: "\nnext: ", options: .backwards) { text.insert(contentsOf: "\n" + s.joined(separator: "\n"), at: r.lowerBound) }
     let p = store.expDir(e.id).appendingPathComponent("explain.txt")
     try? FileManager.default.createDirectory(at: p.deletingLastPathComponent(), withIntermediateDirectories: true)
     try? text.write(to: p, atomically: true, encoding: .utf8)

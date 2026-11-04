@@ -151,6 +151,21 @@ final class LoopTests: FakeBenchCase {
     XCTAssertThrowsError(try loop.profile("champion")) { XCTAssertTrue("\($0)".contains("no `profile` verb"), "\($0)") }
   }
 
+  /// `suggest` reads the newest result measured of a target in the store (the champion's side of the newest pair
+  /// against it, an experiment's own side), and says what to do when nothing was measured yet.
+  func testSuggestFindsTheNewestResultOfATarget() throws {
+    let verbs = ["VERBS": "help,list,describe,knobs,run,snapdiff"]   // measured through run: each side's result is kept
+    try baseline(verbs)
+    XCTAssertThrowsError(try loop.suggest("champion")) { XCTAssertTrue("\($0)".contains("nothing measured yet"), "\($0)") }
+    var o = Loop.NewOptions(hypothesis: "faster"); o.bench = try bench("fast", verbs.merging(["CPU": "20"]) { $1 })
+    let e = try loop.new(o)
+    let c = try loop.suggest("champion"), x = try loop.suggest("exp/\(e.id)")
+    XCTAssertTrue(c.sources.first?.contains("champion side") == true, "\(c.sources)")
+    XCTAssertTrue(x.sources.first?.contains("candidate side") == true, "\(x.sources)")
+    XCTAssertEqual(c.schema, "perfloop.suggest/1")
+    XCTAssertTrue(try String(contentsOf: store.expDir(e.id).appendingPathComponent("explain.txt"), encoding: .utf8).contains("next: "))
+  }
+
   func testPairsAreCounterbalanced() {
     let l = Loop(store: store)
     for key in ["0001/screen", "0002/screen", "0001/full"] {

@@ -19,6 +19,7 @@ experiment's `explain.txt` says what happened and what to do next. You change co
 perfloop session start                       # the stopping rules count from here
 perfloop exp status                          # what is open, what each needs next, and a `stop:` line when it's time
 perfloop explain exp/<id>                    # where the time went; the last line is the next command
+perfloop suggest                             # hypotheses from what was recorded, ranked, each with its evidence
 # one idea → edit the app → commit →
 perfloop exp new "<one-sentence hypothesis>" --build-cmd "<build>" --bench <bench path>
 perfloop exp new "<hypothesis>" --knobs name=value          # an idea the app already has as a knob: no rebuild
