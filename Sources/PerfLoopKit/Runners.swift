@@ -7,7 +7,7 @@ import Foundation
 /// Where a pair ran: the runner and its machine, recorded on every pair and ledger line. Two runners are two machines
 /// (a VM's numbers are another machine's), so a stage never mixes them and `diff` refuses to compare across them.
 public struct RunnerIdentity: Codable, Sendable, Equatable, Hashable {
-  /// "local", "ssh://Marvins-Mac-mini.local", "vm:tart/sequoia".
+  /// "local", "ssh://spare-mac.local", "vm:tart/sequoia".
   public var runner: String
   /// `machine.model` (sysctl hw.model), e.g. "Mac16,10"; nil when it couldn't be read.
   public var model: String?
@@ -21,7 +21,7 @@ public struct RunnerIdentity: Codable, Sendable, Equatable, Hashable {
 
   /// The ledger's key: runner and machine model.
   public var key: String { "\(runner) \(model ?? "?")" }
-  /// "ssh://mini (Mac16,10, Marvins-Mac-mini)".
+  /// "ssh://mini (Mac16,10, spare-mac)".
   public var line: String { "\(runner) (\(model ?? "unknown model")\(host.map { ", \($0)" } ?? ""))" }
 
   /// Same runner and, where both are known, the same model and host. An unknown field (a legacy pair) doesn't

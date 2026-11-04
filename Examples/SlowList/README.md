@@ -42,7 +42,7 @@ $B profile select                            # the same scenario under xctrace: 
 
 ## A run on a spare Mac (2026-11-04, Mac mini Mac16,11, macOS 26.6.2, the walkthrough at 277e356)
 
-`./walkthrough.sh --runner ssh://mar@Marvins-Mac-mini.local`: builds on the MacBook Pro, every window on the mini (its
+`./walkthrough.sh --runner ssh://me@spare-mac.local`: builds on the MacBook Pro, every window on the mini (its
 screen unlocked, nobody at it: last input there 1,118 s before). Every rep's window was active, key, visible and
 unoccluded, so every pair was trusted and counted. 2 min 56 s of windows (3 screens, 1 full and its second-fixture
 check: 34 bench runs). The mini's display ran at 60 Hz, 1× scale. Main-thread CPU per selection (ms), interleaved pairs:

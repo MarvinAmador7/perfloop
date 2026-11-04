@@ -150,11 +150,11 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
 
 `ledger.jsonl`: one line per state change, `{ "schema": "perfloop.ledger/1", "at": "…", "experiment": "0007",
 "state": "promoted", "objective": { "before": 41.2, "after": 16.9 }, "build": "sha256:…", "by": "agent|owner",
-"runner": "ssh://Marvins-Mac-mini.local", "machine": "Mac16,11" }` (`runner`/`machine` on a stage's line: where its
+"runner": "ssh://spare-mac.local", "machine": "Mac16,11" }` (`runner`/`machine` on a stage's line: where its
 numbers came from).
 
 Every pair and stage records where it ran (C10): `"runner": { "runner": "local" | "ssh://host" | "vm:tart/NAME",
-"model": "Mac16,11", "host": "Marvins-Mac-mini", "os": "26.6.2" }`. A pair without one predates runners and counts as
+"model": "Mac16,11", "host": "spare-mac", "os": "26.6.2" }`. A pair without one predates runners and counts as
 `local` on the store's Mac. A stage never mixes runners (acceptance says `error`; resuming a stage on another runner is
 refused, exit 6). A pair the local runner aborted on input has `"interrupted": true` (never judged); the pair that
 replaced it has `"interruptions": N`.
@@ -191,7 +191,7 @@ for any fixture whose manifest entry has `parametric` (`{ "agents": [1, 128] }`:
 
 ```jsonc
 { "schema": "perfloop.queue/1", "at": "…", "item": "q3", "state": "queued", "experiment": "0007", "stage": "auto",   // auto | screen | full
-  "runner": "ssh://Marvins-Mac-mini.local" | null, "force": true | null, "note": "…" }
+  "runner": "ssh://spare-mac.local" | null, "force": true | null, "note": "…" }
 { "schema": "perfloop.queue/1", "at": "…", "item": "q3", "state": "running", "runner": "local", "note": "pid 4242 on local (Mac16,1, …)" }
 { "schema": "perfloop.queue/1", "at": "…", "item": "q3", "state": "waiting", "note": "waiting: last input 12 s ago < 120 s (frontmost: Xcode)" }
 ```

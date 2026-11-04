@@ -206,7 +206,7 @@ final class RunnerTests: FakeBenchCase {
   }
 
   func testRunnerSpecs() {
-    XCTAssertEqual(RunnerSpec("ssh://mar@Marvins-Mac-mini.local"), .ssh(user: "mar", host: "Marvins-Mac-mini.local", port: nil, root: nil))
+    XCTAssertEqual(RunnerSpec("ssh://me@spare-mac.local"), .ssh(user: "me", host: "spare-mac.local", port: nil, root: nil))
     XCTAssertEqual(RunnerSpec("ssh://mini:2222/Users/x/pl"), .ssh(user: nil, host: "mini", port: 2222, root: "/Users/x/pl"))
     XCTAssertEqual(RunnerSpec("ssh://mar@mini")?.name, "ssh://mini")
     XCTAssertNil(RunnerSpec("ssh://"))
