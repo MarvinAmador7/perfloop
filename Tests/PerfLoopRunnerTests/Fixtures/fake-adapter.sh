@@ -22,13 +22,15 @@ FAKE_NOGUARDS=0
 FAKE_ISO_FAIL=0
 FAKE_SLEEP=0
 FAKE_VERBS=
+FAKE_HASH=
+FAKE_OBJECTIVE=mainThreadCpuMsPerStep
 
 self="$0"
 log() { if [ -n "$FAKE_LOG" ]; then echo "$*" >> "$FAKE_LOG"; fi; }
 val() { grep "^$2=" "$1" | head -1 | cut -d= -f2; }
 sha() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
 jitter() { awk -v v="$1" -v n="$2" -v s="$3" 'BEGIN { srand(s); printf "%.3f", v * (1 + (rand() * 2 - 1) * n) }'; }
-build() { echo "{\"commit\": \"$(val "$1" FAKE_COMMIT)\", \"dirty\": $(val "$1" FAKE_DIRTY), \"configuration\": \"release\", \"stamp\": true, \"builtAt\": \"2026-10-30T20:00:00Z\", \"hash\": \"sha256:$(sha "$1")\"}"; }
+build() { h=$(val "$1" FAKE_HASH); [ -n "$h" ] || h=$(sha "$1"); echo "{\"commit\": \"$(val "$1" FAKE_COMMIT)\", \"dirty\": $(val "$1" FAKE_DIRTY), \"configuration\": \"release\", \"stamp\": true, \"builtAt\": \"2026-10-30T20:00:00Z\", \"hash\": \"sha256:$h\"}"; }
 checks() { f=$(val "$1" FAKE_CHECK_FAIL); if [ -n "$f" ]; then echo "\"$f\""; elif [ "$2" = burst ] && [ "$(val "$1" FAKE_ISO_FAIL)" = 1 ]; then echo '"isolation-still"'; fi; }
 # The guards PERFLOOP_GUARDS asks for, as deskbench reports them (exe scenario dir): built-within fails on a FAKE_BLANK
 # build; snapshot-diff's capture is a "PNG" holding FAKE_SNAP, which the fake snapdiff compares byte for byte.
@@ -66,9 +68,10 @@ JSON
   ;;
 describe)
   if [ "$FAKE_DESCRIBE" != 1 ]; then echo "deskbench: unknown command 'describe'" >&2; exit 1; fi
+  verbs=""; if [ -n "$FAKE_VERBS" ]; then verbs="\"verbs\": [\"$(echo "$FAKE_VERBS" | sed 's/,/", "/g')\"],"; fi
   if [ "$FAKE_GUARDED" = 1 ]; then
   cat <<JSON
-{ "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench",
+{ "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench", $verbs
   "scenarios": [ { "name": "step", "kind": "smooth", "params": { "steps": "8" }, "objective": "mainThreadCpuMsPerStep", "guards": ["checks", "built-within", "snapshot-diff"],
                    "guardParams": { "built-within.ms": 300, "snapshot-diff.tolerance": 0.005 }, "frameGuards": ["hitchTimeRatioMsPerS", "longestStretchMs"], "secondFixture": "swarm64" },
                  { "name": "burst", "kind": "isolation", "objective": "mainThreadCpuMsPerStep", "guards": ["checks", "built-within"] } ],
@@ -78,10 +81,9 @@ describe)
 JSON
   exit 0
   fi
-  verbs=""; if [ -n "$FAKE_VERBS" ]; then verbs="\"verbs\": [\"$(echo "$FAKE_VERBS" | sed 's/,/", "/g')\"],"; fi
   cat <<JSON
 { "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench", $verbs
-  "scenarios": [ { "name": "step", "kind": "smooth", "params": { "steps": "8" }, "objective": "mainThreadCpuMsPerStep", "guards": ["landed"], "secondFixture": "swarm64" },
+  "scenarios": [ { "name": "step", "kind": "smooth", "params": { "steps": "8" }, "objective": "$FAKE_OBJECTIVE", "guards": ["landed"], "secondFixture": "swarm64" },
                  { "name": "switch", "kind": "latency", "objective": "latencyMs", "guards": ["checks"] } ],
   "fixtures": [ { "name": "crew17" }, { "name": "swarm64" } ],
   "knobs": [ { "name": "reel.slide", "type": "choice", "default": "ca", "choices": ["ca", "clip"] } ], "hosts": ["scene"] }

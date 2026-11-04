@@ -9,6 +9,8 @@ import PerfLoopRunner
 let help = """
 perfloop: an agent-first performance loop (design/perf-loop/SPEC.md; the adapter's PROGRAM.md is the procedure)
 
+  doctor [--bench PATH] [--json]            what stands between this Mac (and the adapter, headless) and numbers that
+                                            decide: each check ok | warn | fail with its fix; exit 1 on a fail
   describe --bench PATH                     the adapter's manifest (describe --json, or derived from list --json)
   store import DIR --commit SHA [--dirty] --note "…" [--exe NAME]
                                             a bench that predates the build stamp, under its sha256
@@ -112,6 +114,17 @@ func run(_ args: Args) throws -> Int32 {
   }
   switch (args[0] ?? "help", args[1]) {
   case ("help", _), ("-h", _): out(help); return 0
+
+  case ("doctor", _):
+    var d = Doctor()
+    if let b = args.one("bench") ?? args[1] {
+      let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-doctor-\(UUID().uuidString)")
+      defer { try? FileManager.default.removeItem(at: scratch) }
+      d.checkBench(b, exe: args.one("exe"), scratch: scratch)
+    }
+    let r = Doctor.Report(lines: d.lines)
+    out(json ? PLJSON.encode(r) : r.text)
+    return r.ok ? 0 : 1
 
   case ("describe", _):
     guard let b = args.one("bench") ?? args[1] else { throw PLError.usage("usage: perfloop describe --bench PATH") }
