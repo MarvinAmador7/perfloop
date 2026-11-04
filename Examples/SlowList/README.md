@@ -33,5 +33,23 @@ $B describe                                  # the manifest the runner reads
 $B run select --reps 1                       # opens a window for ~3 s; prints where the time went
 PERFLOOP_KNOBS=rows.rank=index $B run select --reps 1
 ./walkthrough.sh --dry-run                   # the whole loop, printed
-./walkthrough.sh --lock /tmp/window.lock     # …and run (~5 min of windows: when nobody is using the Mac)
+./walkthrough.sh --lock /tmp/window.lock     # …and run (~5 min of builds, then ~2 min of windows: a free Mac)
 ```
+
+## A run (2026-11-04, MacBookPro18,3, macOS 27, the walkthrough at f3bbae2)
+
+The whole loop took 1 min 40 s of windows (3 screens, 1 full and its second-fixture check: 34 bench runs, each a fresh process).
+Main-thread CPU per selection (ms), interleaved pairs:
+
+| Experiment | Champion | Candidate | Verdict |
+|---|---:|---:|---|
+| knob `rows.rank=index` (screen, 3 pairs) | 86.5–89.6 | 3.2–14.2 | promising: won 3/3, median gain 85.7 % |
+| cheat: rows draw nothing (screen) | 79.0–88.4 | 11.1–12.9 | **rejected**: `rows-drawn` failed (0 rows of 12), snapshot 8.8 % different (owner review); its objective "won" 3/3 by 86 % |
+| fix: rows take values (screen) | 78.6–92.1 | 12.1–18.9 | promising: won 3/3, 84.6 % |
+| fix (full, 5 + 5) | 80.7–85.9 | 3.1–13.3 | **won**: Mann-Whitney p = 0.0079, effect 85.2 %; hitch time 398 → 43 ms/s, longest stretch 88.6 → 21.7 ms; not worse on `rows300`; promoted |
+
+What the bench said, without a profiler: the champion's worst stretch was `ListModel.rankBySorting` under
+`RowView.body.getter` (Row×15 per selection). After the fix, the first selection's worst stretch (89 ms) was AppKit
+showing the filter field's completion list (`SPCompletionListRemoteViewController resizeRemoteWindow`) and the focus
+ring: the next real cost in this app, found the same way. These numbers are from a developer's Mac in use (last input
+0 s before the run), which the noise bands absorbed here because the effect is 85 %; smaller effects want a free Mac.
