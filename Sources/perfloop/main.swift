@@ -9,8 +9,9 @@ import PerfLoopRunner
 let help = """
 perfloop: an agent-first performance loop (design/perf-loop/SPEC.md; the adapter's PROGRAM.md is the procedure)
 
-  doctor [--bench PATH] [--json]            what stands between this Mac (and the adapter, headless) and numbers that
-                                            decide: each check ok | warn | fail with its fix; exit 1 on a fail
+  doctor [--bench PATH] [--json]            what stands between this Mac and numbers that decide (screen lock, idle,
+                                            load, disk, the store's place, xctrace) and, with --bench, the adapter's
+                                            contract (headless): each check ok | warn | fail with its fix; exit 1 on a fail
   init --app NAME [--dir DIR] [--target NAME] [--perfloop PATH|URL] [--package]
                                             scaffold a bench for your app: Sources/<Name>Bench/main.swift (PerfLoopHost,
                                             one scenario on a placeholder view), PROGRAM.md for your agent, and the
@@ -133,7 +134,11 @@ func run(_ args: Args) throws -> Int32 {
 
   case ("doctor", _):
     var d = Doctor()
-    if let b = args.one("bench") ?? args[1] {
+    let bench = args.one("bench") ?? args[1]
+    var probe = MachineProbe()
+    if let f = args.one("idle-from") ?? ProcessInfo.processInfo.environment["PERFLOOP_IDLE_FROM"] { probe.idle = FileIdleSource(path: f) }
+    d.checkMachine(store: (try? store(bench: bench))?.root, probe: probe)
+    if let b = bench {
       let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-doctor-\(UUID().uuidString)")
       defer { try? FileManager.default.removeItem(at: scratch) }
       d.checkBench(b, exe: args.one("exe"), scratch: scratch)
