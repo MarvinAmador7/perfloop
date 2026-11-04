@@ -77,7 +77,10 @@ bench.main()
 ```
 
 `run.step` runs the action and waits until the window is at rest, then records main-thread CPU, instructions,
-latency (to the first frame after an `until:` condition holds), frames, stretches with stacks, bodies and causes. The
+latency (to the first frame after an `until:` condition holds), frames, stretches with stacks, bodies and causes.
+`run.swipe(try run.gesture())` is a step too: a trackpad gesture (`--set gesture=synthetic:scroll-down`, or a file
+recorded by hand with `BENCH record-gesture SCENARIO`) replayed into the window's scroll view with its own timestamps,
+scored for how closely the content followed the fingers (position error, stalls, jerk, latency in frames). The
 host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `run`, `snapdiff`, `knobs`, `profile`, `diff`.
 
 ## Commands

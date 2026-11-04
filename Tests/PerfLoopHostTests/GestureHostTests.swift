@@ -1,0 +1,73 @@
+#if os(macOS)
+import XCTest
+import AppKit
+@testable import PerfLoopHost
+import PerfLoopKit
+import PerfLoopProbe
+
+/// Gesture replay and recording without a window: a rep's smoothness from its steps, read back the way the runner reads
+/// it, the built-in gestures in the manifest, and the recorder cutting NSEvents into a file.
+@MainActor final class GestureHostTests: XCTestCase {
+  func step(_ name: String, _ s: Smoothness?) -> StepRecord {
+    var t = Timeline(nominalHz: 120); t.ticks = stride(from: 0.0, through: 200, by: 1000 / 120).map { $0 }
+    var r = t.step(name: name, at: 0, end: 100, latencyMs: nil, settleMs: 10, settled: true, cpuMs: 10, instructions: nil)
+    r.smoothness = s
+    return r
+  }
+
+  func testARepsSmoothnessIsItsWorstGestureAndTheRunnerReadsIt() throws {
+    let a = Smoothness(positionErrorP95Pt: 0.4, stalls: 1, jerkP95: 3, positionErrorMaxPt: 2, latencyFrames: 1, trackingTicks: 40, ticks: 90)
+    let b = Smoothness(positionErrorP95Pt: 1.6, stalls: 2, jerkP95: 9, positionErrorMaxPt: 5, latencyFrames: 2, trackingTicks: 30, ticks: 80)
+    let t = Timeline(nominalHz: 120)
+    let rep = t.rep(index: 0, steps: [step("swipe#0", a), step("swipe#1", b)], checks: [], guards: nil, window: nil)
+    XCTAssertEqual(rep.smoothness?.positionErrorP95Pt, 1.6); XCTAssertEqual(rep.smoothness?.stalls, 3); XCTAssertEqual(rep.smoothness?.jerkP95, Stats.median([3, 9]))
+    XCTAssertEqual(rep.smoothness?.latencyFrames, 2)
+    XCTAssertNil(t.rep(index: 0, steps: [step("select#0", nil)], checks: [], guards: nil, window: nil).smoothness, "no gesture, no smoothness")
+    let summary = ResultSummary(reps: [rep], metric: "mainThreadCpuMsPerStep")
+    XCTAssertEqual(summary.smoothness?.stalls.median, 3)
+    let r = HostResult(tool: ToolInfo(name: "x", version: "1", configuration: "release", commit: nil, build: Build(hash: nil, commit: nil, dirty: true, stamp: false)),
+                       app: "x", adapter: "x", scenario: "scroll", fixture: "f", params: [:], startedAt: Clock.now(), reps: [rep], summary: summary, verdict: "pass", exitCode: 0, notes: [])
+    let v = try PLJSON.decode(JSONValue.self, from: Data(PLJSON.encode(r).utf8))
+    let side = Readings.sides(run: v, metric: "mainThreadCpuMsPerStep")[0]
+    XCTAssertEqual(side.positionErrorP95Pt, 1.6); XCTAssertEqual(side.stalls, 3)
+    XCTAssertNil(v["reps"]?[0]?["steps"]?[0]?["smoothness"]?["absent"])
+  }
+
+  func testBuiltInGesturesAreListedAndLoad() throws {
+    let b = Bench(app: "g", stamp: "commit=abc\ndirty=0")
+    b.gestures = SyntheticGestures.specs
+    b.scenario("scroll", summary: "s") { _ in }
+    XCTAssertEqual(b.manifest().gestures, SyntheticGestures.specs)
+    XCTAssertTrue(b.handle(["gestures"]).1.contains("synthetic:scroll-down"))
+    let all = try PLJSON.decode([Gesture].self, from: Data(b.handle(["gestures", "--json"]).1.utf8))
+    XCTAssertEqual(all.count, SyntheticGestures.all.count)
+  }
+
+  /// The recorder's tap, fed NSEvents made from a synthetic gesture's numbers: one file, the same deltas and phases.
+  func testTheRecorderCutsEventsIntoAFile() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-rec-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appendingPathComponent("hand.json")
+    let tap = GestureTap(to: url, name: "hand", device: nil)
+    let g = try SyntheticGestures.load("synthetic:drag-down")
+    let t0 = ProcessInfo.processInfo.systemUptime
+    for e in g.events {
+      let cg = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(e.dy), wheel2: Int32(e.dx), wheel3: 0))
+      cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+      cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: e.dy)
+      let sp: Int64 = switch e.phase { case .began: 1; case .changed: 2; case .ended: 4; case .mayBegin: 128; default: 0 }
+      cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: sp)
+      cg.timestamp = CGEventTimestamp((t0 + e.t / 1000) * 1e9)
+      tap.handle(try XCTUnwrap(NSEvent(cgEvent: cg)))
+    }
+    tap.stop(keepOpen: true)   // the lifted drag ends 0.3 s later; out of time, the one in flight is written
+    XCTAssertEqual(tap.written.count, 1)
+    let back = try Gesture.read(url)
+    XCTAssertEqual(back.events.count, g.events.count)
+    XCTAssertEqual(back.events.map(\.phase), g.events.map(\.phase))
+    XCTAssertEqual(back.events.reduce(0) { $0 + $1.dy }, g.events.reduce(0) { $0 + $1.dy })
+    XCTAssertEqual(back.device, "trackpad"); XCTAssertEqual(back.problems, [])
+    XCTAssertEqual(back.events.last!.t, g.events.last!.t, accuracy: 1, "the times are the events' own")
+  }
+}
+#endif

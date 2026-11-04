@@ -113,6 +113,18 @@ TOC), `knobs`, `treeInSteps` (what `diff` compares), and `inProcess` (the run's 
 `.trace` files; prints `perfloop.diff/1` (SCHEMAS.md §5), exit 6 when provenance refuses. Called by `perfloop diff`,
 which first resolves `champion` and `exp/ID` to their newest profiles and refuses inputs of other builds.
 
+## 6a. Gestures (optional)
+
+A scenario that replays a gesture takes it as its `gesture` parameter: `synthetic:NAME` (the manifest's `gestures` lists
+the built-in ones) or a `perfloop.gesture/1` file. Its steps carry `smoothness` (SCHEMAS.md §8), the rep the worst of
+them (`reps[].smoothness`), the summary the medians (`summary.smoothness`), which the runner reads as frame guards when
+the scenario lists `positionErrorP95Pt` and `stalls` in `frameGuards`. PerfLoopHost: `run.swipe(gesture)` replays into
+the window's largest NSScrollView (CGEvent-built NSEvents handed to `scrollWheel(with:)` at the recorded times; nothing
+posted to the system). `record-gesture SCENARIO [--name N] [--out FILE] [--count N] [--timeout S]` shows the scenario's
+window and records a hand's gestures over it (a local event monitor: deltas, phases, times) into
+`${PERFLOOP_HOME:-~/.perfloop}/APP/gestures/NAME.json`, where `perfloop gestures list` looks; it refuses a path inside a
+git checkout. `gestures [--json]` lists the built-in ones.
+
 ## 7. Exit codes
 
 0 ok · 1 usage · 2 harness error · 3 budget/check/guard failed · 4 regression beyond noise · 5 untrusted (rerun) ·

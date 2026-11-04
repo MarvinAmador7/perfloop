@@ -37,6 +37,23 @@ bench.scenario("filter", summary: "Type a filter: the list narrows with each key
   run.check("narrowed", run.lastEvent("list.count") == model.visible.count, "the list shows \(run.lastEvent("list.count") ?? -1) of \(model.visible.count) items")
 }
 
+bench.gestures = SyntheticGestures.specs
+bench.scenario("scroll", summary: "Swipe down the list on the trackpad: every row that scrolls in builds its body",
+               guards: ["checks", "rows-drawn"], frameGuards: ["hitchTimeRatioMsPerS", "longestStretchMs", "positionErrorP95Pt", "stalls"],
+               params: ["swipes": "3", "gesture": "synthetic:scroll-down"], budget: "the content follows the fingers within 1 pt, no stall") { run in
+  let model = ListModel.sample(count: run.fixture.int("rows", 1000))
+  try await run.show(view: ListContainerView(model: model), size: bench.windowSize)
+  let g = try run.gesture()
+  var moved: [Double] = []
+  for i in 0..<run.int("swipes", 3) {
+    await run.scrollToStart()
+    let before = run.scrollView()?.contentView.bounds.origin.y ?? 0
+    await run.swipe(g, name: "swipe#\(i) \(g.name)")
+    moved.append(abs((run.scrollView()?.contentView.bounds.origin.y ?? 0) - before))
+  }
+  run.check("scrolled", moved.allSatisfy { $0 > 100 }, "the list moved \(moved.map { Int($0) }) pt")
+}
+
 /// Every row on screen was built with its content (the rank, title and detail the user reads): a row that renders
 /// nothing is fast and wrong. Counted from `Probe.body("RowContent", id:)`; the snapshot guard is the backstop.
 bench.guard("rows-drawn") { run, params in

@@ -117,6 +117,8 @@ public struct StepRecord: Codable, Sendable, Equatable {
   /// Instructions the process retired over the step (proc_pid_rusage); nil where the counters read zero (a VM).
   public var instructions: Int?
   public var causes: [Cause]?
+  /// A replayed gesture's: how closely the content followed the fingers (`run.swipe`, C9).
+  public var smoothness: Smoothness?
 }
 
 /// Whether the window was where SwiftUI and AppKit draw promptly: active app, key, visible, not occluded. A rep in any
@@ -150,6 +152,8 @@ public struct RepRecord: Codable, Sendable, Equatable {
   public var cpuMsPerStep: Double?
   public var instructionsPerStep: Double?
   public var notes: [String]
+  /// The rep's gestures together: the worst error, every stall, the median jerk (nil without a replayed gesture).
+  public var smoothness: Smoothness?
 }
 
 public struct Objective: Codable, Sendable, Equatable {
@@ -170,6 +174,8 @@ public struct ResultSummary: Codable, Sendable, Equatable {
   public var lateFrames: Dist
   public var checksFailed: [String]
   public var guardsFailed: [String]
+  /// Medians across reps of each rep's smoothness (nil without a replayed gesture).
+  public var smoothness: SmoothnessSummary?
 }
 
 public struct ToolInfo: Codable, Sendable, Equatable {
@@ -264,7 +270,7 @@ public struct Timeline: Sendable {
                      worstStretches: Array(worst), window: window,
                      cpuMsPerStep: steps.isEmpty ? nil : Stats.round(steps.map(\.cpuMs).reduce(0, +) / n, 3),
                      instructionsPerStep: ins.count == steps.count && !ins.isEmpty && ins.reduce(0, +) > 0 ? (Double(ins.reduce(0, +)) / n).rounded() : nil,
-                     notes: notes)
+                     notes: notes, smoothness: Smoothness.rep(steps))
   }
 }
 
@@ -283,6 +289,7 @@ extension ResultSummary {
     steadyHz = dist(rs.map(\.frames.steadyHz)); lateFrames = dist(rs.map { Double($0.frames.late) })
     checksFailed = Array(Set(rs.flatMap { $0.checks.filter { !$0.pass }.map(\.name) })).sorted()
     guardsFailed = Array(Set(rs.flatMap { ($0.guards ?? []).filter { !$0.pass }.map(\.name) })).sorted()
+    smoothness = SmoothnessSummary(reps: rs)
     let d: Dist? = switch metric {
     case "instructionsPerStep": instructionsPerStep
     case "latencyMs": latencyMs
@@ -290,5 +297,30 @@ extension ResultSummary {
     default: mainThreadCpuMsPerStep
     }
     objective = Objective(name: metric, value: d.flatMap { $0.n > 0 ? $0.median : nil }, dist: d)
+  }
+}
+
+/// A rep's smoothness from its steps': the worst gesture's error, every stall, the median jerk; nil without gestures.
+extension Smoothness {
+  public static func rep(_ steps: [StepRecord]) -> Smoothness? {
+    let xs = steps.compactMap(\.smoothness)
+    guard !xs.isEmpty else { return nil }
+    let err = xs.compactMap(\.positionErrorP95Pt), jerk = xs.compactMap(\.jerkP95)
+    return Smoothness(positionErrorP95Pt: err.max(), stalls: xs.reduce(0) { $0 + $1.stalls }, jerkP95: jerk.isEmpty ? nil : Stats.round(Stats.median(jerk), 2),
+                      positionErrorMaxPt: xs.compactMap(\.positionErrorMaxPt).max(), latencyFrames: xs.compactMap(\.latencyFrames).max(),
+                      trackingTicks: xs.reduce(0) { $0 + $1.trackingTicks }, ticks: xs.reduce(0) { $0 + $1.ticks })
+  }
+}
+
+/// Medians across reps of each rep's smoothness (`summary.smoothness`).
+public struct SmoothnessSummary: Codable, Sendable, Equatable {
+  public var positionErrorP95Pt: Dist?
+  public var stalls: Dist
+  public var jerkP95: Dist?
+  public init?(reps rs: [RepRecord]) {
+    let xs = rs.compactMap(\.smoothness)
+    guard !xs.isEmpty else { return nil }
+    let e = xs.compactMap(\.positionErrorP95Pt), j = xs.compactMap(\.jerkP95)
+    positionErrorP95Pt = e.isEmpty ? nil : Dist(e); stalls = Dist(xs.map { Double($0.stalls) }); jerkP95 = j.isEmpty ? nil : Dist(j)
   }
 }

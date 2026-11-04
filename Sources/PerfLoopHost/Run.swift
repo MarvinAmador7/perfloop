@@ -34,6 +34,10 @@ import PerfLoopProbe
   /// `profile`'s child: once the window is up and at rest, write `<file>.waiting` and wait for `<file>` (the profiler
   /// has attached).
   var waitFor: String?
+  /// `record-gesture`: once the window is up, record a hand's gestures instead of running the steps.
+  var recordRequest: RecordRequest?
+  var recorded: [(String, PerfLoopProbe.Gesture)] = []
+  var recordFailures: [String] = []
 
   init(scenario: String, fixture: Fixture, params: [String: String], rep: Int, recorder: Recorder, activate: Bool, sampler: MainThreadSampler?) {
     self.scenario = scenario; self.fixture = fixture; self.params = params; self.rep = rep; self.recorder = recorder; self.activate = activate; self.sampler = sampler
@@ -91,6 +95,7 @@ import PerfLoopProbe
       while !FileManager.default.fileExists(atPath: wf), Date() < until { await sleep(ms: 50) }
       _ = await settle(timeoutMs: 1000)
     }
+    if let q = recordRequest { recordRequest = nil; try await record(q) }
   }
 
   /// The window's state now: a rep whose window wasn't active, key, visible and unoccluded is untrusted.
