@@ -273,14 +273,15 @@ extension Run {
     timer?.invalidate(); timer = nil
     // Nothing else arrives to end a gesture whose momentum never came: wake up at its deadline.
     guard let d = recorder.deadline else { refresh(); return }
-    let r = recorder
     let t = Timer(timeInterval: max(0, d - ProcessInfo.processInfo.systemUptime) + 0.01, repeats: false) { [weak self] _ in
-      MainActor.assumeIsolated { r.idle(at: ProcessInfo.processInfo.systemUptime); self?.refresh() }
+      MainActor.assumeIsolated { self?.idle() }
     }
     RunLoop.main.add(t, forMode: .common)
     timer = t
     refresh()
   }
+
+  func idle() { recorder.idle(at: ProcessInfo.processInfo.systemUptime); refresh() }
 
   /// Stops listening; `keepOpen` writes the gesture in flight (out of time), else it is dropped (enough were written).
   func stop(keepOpen: Bool) {
