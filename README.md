@@ -97,7 +97,7 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 | `explain exp/ID` · `ledger` · `causes RESULT.json` | what happened, in words |
 | `guards --exp ID` | the correctness guards alone |
 | `session start` | the stopping rules (2 h, 20 candidates, 5 non-promising in a row) count from here |
-| `sweep SCENARIO --set rows=100..5000/500` | a cost curve over a fixture parameter or knob, with a fitted slope |
+| `sweep SCENARIO --set rows=100..5000/500 [--budget-ms X]` | a cost curve over a fixture parameter or knob, with a fitted slope and where it crosses the frame (or your) budget: inside the measured range, extrapolated ×k, or not claimed past 4× |
 | `queue add ID` · `queue list` · `queue remove QID` · `queue run --runner R` · `runner check R` · `runner clean R` | runners: `local` (idle-gated), `ssh://host` |
 | `mcp [--app NAME]` | the loop as MCP tools for a coding agent, stages as jobs (§ Agents over MCP) |
 | `profile champion\|exp/ID [--template time\|hitches\|swiftui]` | the build under xctrace (opens a window): call trees per step, hitches, hangs, SwiftUI tables; kept in the store, never an objective |

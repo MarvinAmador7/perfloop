@@ -139,7 +139,7 @@ git checkout. `gestures [--json]` lists the built-in ones.
 | `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added |
 | `perfloop.snapdiff` | 1 (reads `deskbench.snapdiff/1`) | adapter `snapdiff` | stable |
 | `perfloop.experiment`, `perfloop.ledger`, `perfloop.champion` | 1 | runner (store) | stable since Phase 2 |
-| `perfloop.sweep`, `perfloop.queue`, `perfloop.gesture`, `perfloop.gestures` | 1 | runner / probe | stable since Phase 3–4 |
+| `perfloop.sweep`, `perfloop.queue`, `perfloop.gesture`, `perfloop.gestures` | 1 | runner / probe | stable since Phase 3–4; `perfloop.sweep` gained `walls` (2026-11) |
 | `perfloop.doctor` | 1 | runner `doctor --json` | new |
 | `perfloop.profile` | 2 | adapter `profile` | fields only added; PerfLoopHost's adds `traceKept`, `os`, `model`, `knobs`, `treeInSteps`, `inProcess` (2026-11) |
 | `perfloop.diff` | 1 | adapter `diff` | stable |
