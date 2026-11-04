@@ -58,6 +58,9 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             recorded and synthetic gestures (perfloop.gesture/1) for a gesture-replay
                                             scenario: the store's gestures/, each --dir, the adapter's built-in ones
   session start                             the stopping rules (SPEC §5.3) count from here
+  mcp [--app NAME | --store DIR] [--lock DIR]
+                                            the loop as MCP tools over stdio for a coding agent (README: Agents over MCP):
+                                            stages run as jobs it polls with `job`; no owner flags
 
 runners and the queue (C10): where windowed reps run; results never mix runners
   exp screen|full ID --runner R [--idle S]  R: local (default; idle-gated only with --idle S), ssh://[user@]host[/dir]
@@ -209,7 +212,7 @@ func run(_ args: Args) throws -> Int32 {
     o.params = args.all("set").reduce(into: [:]) { d, kv in let p = kv.split(separator: "=", maxSplits: 1).map(String.init); if p.count == 2 { d[p[0]] = p[1] } }
     o.behaviourChange = args.has("behaviour-change") || args.has("behavior-change"); o.via = args.one("via"); o.patch = args.one("patch")
     o.screen = !args.has("no-screen"); o.against = args.one("against")
-    let l = try loop(bench: o.bench)
+    let l = try loop(bench: o.bench); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
     show(try l.new(o), l); return 0
   case ("exp", "status"):
     let l = try loop()
@@ -288,12 +291,24 @@ func run(_ args: Args) throws -> Int32 {
     return 0
 
   case ("sweep", _): return try SweepCommand.run(Array(CommandLine.arguments.dropFirst(2)))
+  case ("mcp", _):
+    // The loop as MCP tools over stdio (MCPServer.swift); each tool runs this executable as a child.
+    let exe = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0]).resolvingSymlinksInPath().path
+    var base: [String] = []
+    if let s = args.one("store") { base += ["--store", s] }
+    if let a = args.one("app") { base += ["--app", a] }
+    let jobs = ((try? store())?.root ?? FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-mcp")).appendingPathComponent("jobs")
+    let server = MCPServer(cli: exe, baseArgs: base, jobsDir: jobs, lock: args.one("lock"))
+    for s in [SIGINT, SIGTERM, SIGHUP] { signal(s) { sig in MCPServer.current?.shutdown(); exit(128 + sig) } }
+    MCPServer.current = server
+    server.serve()
+    return 0
   case ("gestures", _): return try GesturesCommand.run(args)
   case ("guards", _):
     guard let id = args.one("exp") ?? args[1] else { throw PLError.usage("usage: perfloop guards --exp ID [--guard-tolerance X --owner]") }
     var tol: Double?
     if let t = args.one("guard-tolerance") { guard let x = Double(t), x >= 0 else { throw PLError.usage("--guard-tolerance takes a share of pixels, e.g. 0.01") }; tol = x }
-    let l = try loop()
+    let l = try loop(); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
     let (e, r) = try l.guards(id, tolerance: tol)
     if json { out(PLJSON.encode(r)) } else {
       out("guards for exp \(e.id) (\(e.scenario) on \(e.fixture))\(r.override.map { ", \($0)" } ?? ""): \(r.pass ? "PASS" : r.failures.isEmpty ? "NEEDS REVIEW" : "FAIL") → \(e.state.rawValue)")

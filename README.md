@@ -99,11 +99,29 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 | `session start` | the stopping rules (2 h, 20 candidates, 5 non-promising in a row) count from here |
 | `sweep SCENARIO --set rows=100..5000/500` | a cost curve over a fixture parameter or knob, with a fitted slope |
 | `queue add ID` · `queue list` · `queue remove QID` · `queue run --runner R` · `runner check R` · `runner clean R` | runners: `local` (idle-gated), `ssh://host` |
+| `mcp [--app NAME]` | the loop as MCP tools for a coding agent, stages as jobs (§ Agents over MCP) |
 | `profile champion\|exp/ID [--template time\|hitches\|swiftui]` | the build under xctrace (opens a window): call trees per step, hitches, hangs, SwiftUI tables; kept in the store, never an objective |
 | `diff champion exp/ID` (or two profile JSONs / traces) · `trace register` | what grew and shrank between two builds, ms per step, main thread; refuses traces of other builds |
 | `gestures list` · `exp replay` | recorded and synthetic gestures; a past session as experiments |
 
 `perfloop help` has every flag. Exit codes: 0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner).
+
+## Agents over MCP
+
+`perfloop mcp` serves the loop as Model Context Protocol tools over stdio, for any agent that speaks MCP:
+
+```sh
+claude mcp add perfloop -- /path/to/perfloop mcp --app myapp          # Claude Code
+# Codex (~/.codex/config.toml):  [mcp_servers.perfloop]  command = "/path/to/perfloop"  args = ["mcp", "--app", "myapp"]
+```
+
+The tools are the agent's verbs (`status`, `explain`, `suggest`, `new_experiment`, `screen`, `full`, `promote`,
+`profile`, `diff`, `sweep`, …) with their schemas. A stage that builds or opens windows returns a job at once; `job`
+waits for it on the server's side (up to 60 s a call), so the agent never writes a sleep loop, and every job still
+running when the session ends is killed with its windows. Local runs hold a window lock (`--lock DIR`, default in the
+temporary directory). The owner's flags (`--force`, `--owner`, `--guard-tolerance`, `--allow-dirty`) are no tool's
+arguments, and no value may start with `-`. Job logs are in the store's `jobs/`. The shell CLI stays the reference;
+the server runs it for every call.
 
 ## A spare Mac as the runner
 

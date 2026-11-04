@@ -65,6 +65,9 @@ seconds to minutes. Run them only when the owner says the Mac is free, with the 
 profiler is **untrusted** and never decides; rerun it, don't explain it away. `perfloop doctor` says what would make
 this Mac's numbers untrustworthy.
 
+Over MCP (`perfloop mcp`), the same verbs are tools: a stage returns a job, and `job` waits for it on the server's side,
+so never poll with `sleep`; the session's end stops its jobs.
+
 Headless and always fine: `doctor`, `describe`, `store list`, `exp status`, `explain`, `ledger`, `champion`, `causes`.
 
 Disk: every build in the store is a copy of the bench (`perfloop store gc` keeps the newest 20 and every champion);
