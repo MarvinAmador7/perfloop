@@ -11,6 +11,11 @@ perfloop: an agent-first performance loop (design/perf-loop/SPEC.md; the adapter
 
   doctor [--bench PATH] [--json]            what stands between this Mac (and the adapter, headless) and numbers that
                                             decide: each check ok | warn | fail with its fix; exit 1 on a fail
+  init --app NAME [--dir DIR] [--target NAME] [--perfloop PATH|URL] [--package]
+                                            scaffold a bench for your app: Sources/<Name>Bench/main.swift (PerfLoopHost,
+                                            one scenario on a placeholder view), PROGRAM.md for your agent, and the
+                                            Package.swift lines to add (--package: a standalone Package.swift). Never
+                                            overwrites a file
   describe --bench PATH                     the adapter's manifest (describe --json, or derived from list --json)
   store import DIR --commit SHA [--dirty] --note "…" [--exe NAME]
                                             a bench that predates the build stamp, under its sha256
@@ -72,7 +77,7 @@ struct Args {
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
                                     "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir",
-                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock"]
+                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -114,6 +119,17 @@ func run(_ args: Args) throws -> Int32 {
   }
   switch (args[0] ?? "help", args[1]) {
   case ("help", _), ("-h", _): out(help); return 0
+
+  case ("init", _):
+    guard let app = args.one("app") ?? args[1] else { throw PLError.usage("usage: perfloop init --app NAME [--dir DIR] [--target NAME] [--perfloop PATH|URL] [--package]") }
+    let dir = URL(fileURLWithPath: Store.tilde(args.one("dir") ?? FileManager.default.currentDirectoryPath)).standardizedFileURL
+    var dep = args.one("perfloop")
+    if dep == nil, let root = Scaffold.packageRoot(of: CommandLine.arguments[0]) { dep = Scaffold.relativePath(from: dir, to: root) }
+    guard let d = dep else { throw PLError.usage("where is the PerfLoop package? pass --perfloop PATH (a checkout of tools/perfloop) or a git URL") }
+    var sc = Scaffold(app: app, dir: dir, target: args.one("target"), perfloop: d)
+    sc.package = args.has("package")
+    let w = try sc.write()
+    out((w.files.map { "wrote " + $0 } + ["", w.next]).joined(separator: "\n")); return 0
 
   case ("doctor", _):
     var d = Doctor()

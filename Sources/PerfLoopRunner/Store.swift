@@ -28,7 +28,7 @@ public struct Store {
   }
 
   /// `~/x` → the home directory's x (no NSString bridging: the runner builds on Linux).
-  static func tilde(_ p: String) -> String { p == "~" || p.hasPrefix("~/") ? FileManager.default.homeDirectoryForCurrentUser.path + p.dropFirst() : p }
+  public static func tilde(_ p: String) -> String { p == "~" || p.hasPrefix("~/") ? FileManager.default.homeDirectoryForCurrentUser.path + p.dropFirst() : p }
 
   public var ledger: Ledger { Ledger(path: root.appendingPathComponent("ledger.jsonl").path) }
   var builds: URL { root.appendingPathComponent("builds") }
