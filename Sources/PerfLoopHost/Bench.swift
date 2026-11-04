@@ -343,6 +343,10 @@ public final class Bench: @unchecked Sendable {
       run.appearance = appearance
       defer { run.close(); Probe.sink = nil; Mutations.sink = nil }
       try await body(run)
+      // Let the stretch the last step ended in close first: the guards' own work (snapshots) never lands in a stretch
+      // the steps overlap, so it is never a step's "worst stretch".
+      let closed = recorder.timeline.stretches.count
+      _ = await recorder.wait(timeoutMs: 1000) { recorder.timeline.stretches.count > closed }
       let window = run.windowState()
       var guards: [GuardResult]?
       if !requested.isEmpty {
