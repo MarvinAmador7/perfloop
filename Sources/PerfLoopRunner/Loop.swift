@@ -478,6 +478,9 @@ public final class Loop {
   /// trace) unless `allowStale`, then runs the champion adapter's `diff`. Returns its JSON text.
   public func diff(_ a: String, _ b: String, exp: String?, allowStale: Bool) throws -> String {
     let (c, cEntry) = try requireChampion()
+    if let m = cEntry.manifest, !m.has(verb: "diff") {
+      throw PLError.usage("the champion's adapter (\(m.adapter)) has no `diff`: differential call trees come from xctrace profiles, which PerfLoopHost benches don't record yet; read the stacks in each experiment's explain.txt (worst stretches) instead")
+    }
     let ex = try exp.map { try store.experiment($0) }
     var allowed: [String: String] = [:]
     if let h = c.build.hash { allowed[h] = "champion \(c.experiment)" }

@@ -150,6 +150,7 @@ final class LoopTests: FakeBenchCase {
     // deskbench's manifest has no `verbs`: it keeps its own ab.
     XCTAssertEqual(store.champion().flatMap { try? store.entry($0.build.hash!).manifest?.defaultVia }, "run")
     XCTAssertEqual(Manifest(app: "a", adapter: "a", build: nil, scenarios: []).defaultVia, "ab")
+    XCTAssertThrowsError(try loop.diff("a.trace", "b.trace", exp: nil, allowStale: true)) { XCTAssertTrue("\($0)".contains("has no `diff`"), "\($0)") }
   }
 
   func testPatchesNeverCarrySecrets() {
