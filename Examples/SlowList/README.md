@@ -40,23 +40,33 @@ $B profile select                            # the same scenario under xctrace: 
 ./walkthrough.sh --lock /tmp/window.lock     # …and run (~5 min of builds, then ~2 min of windows: a free Mac)
 ```
 
-## A run (2026-11-04, MacBookPro18,3, macOS 27, the walkthrough at f3bbae2)
+## A run on a spare Mac (2026-11-04, Mac mini Mac16,11, macOS 26.6.2, the walkthrough at 277e356)
 
-The whole loop took 1 min 40 s of windows (3 screens, 1 full and its second-fixture check: 34 bench runs, each a fresh process).
-Main-thread CPU per selection (ms), interleaved pairs:
+`./walkthrough.sh --runner ssh://mar@Marvins-Mac-mini.local`: builds on the MacBook Pro, every window on the mini (its
+screen unlocked, nobody at it: last input there 1,118 s before). Every rep's window was active, key, visible and
+unoccluded, so every pair was trusted and counted. 2 min 56 s of windows (3 screens, 1 full and its second-fixture
+check: 34 bench runs). The mini's display ran at 60 Hz, 1× scale. Main-thread CPU per selection (ms), interleaved pairs:
 
 | Experiment | Champion | Candidate | Verdict |
 |---|---:|---:|---|
-| knob `rows.rank=index` (screen, 3 pairs) | 86.5–89.6 | 3.2–14.2 | promising: won 3/3, median gain 85.7 % |
-| cheat: rows draw nothing (screen) | 79.0–88.4 | 11.1–12.9 | **rejected**: `rows-drawn` failed (0 rows of 12), snapshot 8.8 % different (owner review); its objective "won" 3/3 by 86 % |
-| fix: rows take values (screen) | 78.6–92.1 | 12.1–18.9 | promising: won 3/3, 84.6 % |
-| fix (full, 5 + 5) | 80.7–85.9 | 3.1–13.3 | **won**: Mann-Whitney p = 0.0079, effect 85.2 %; hitch time 398 → 43 ms/s, longest stretch 88.6 → 21.7 ms; not worse on `rows300`; promoted |
+| knob `rows.rank=index` (screen, 3 pairs) | 65.0–66.4 | 6.2–6.8 | promising: won 3/3, median gain 89.9 % |
+| cheat: rows draw nothing (screen) | 64.2–65.7 | 3.4–3.7 | **rejected**: `rows-drawn` failed (0 rows of 12), snapshot 9.3 % different (owner review); its objective "won" 3/3 by 94 % |
+| fix: rows take values (screen) | 65.1–65.9 | 6.6–7.0 | promising: won 3/3, 89.8 % |
+| fix (full, 5 + 5) | 64.6–65.5 | 6.2–6.9 | **won**: Mann-Whitney p = 0.0079, effect 90.4 %; hitch time 296 → 0 ms/s, longest stretch 66.8 → 4.5 ms; not worse on `rows300` (gain 74 %); promoted |
 
-What the bench said, without a profiler: the champion's worst stretch was `ListModel.rankBySorting` under
-`RowView.body.getter` (Row×15 per selection). After the fix, the first selection's worst stretch (89 ms) was AppKit
-showing the filter field's completion list (`SPCompletionListRemoteViewController resizeRemoteWindow`) and the focus
-ring: the next real cost in this app, found the same way. These numbers are from a developer's Mac in use (last input
-0 s before the run), which the noise bands absorbed here because the effect is 85 %; smaller effects want a free Mac.
+The champion's spread across 11 pairs was 64.2–66.4 ms (±1.7 %), against 78.6–92.1 ms on the MacBook Pro in use the
+same day. What the bench said, without a profiler: the champion's worst stretch (66.5 ms) was `ListModel.rankBySorting`
+under `RowView.body.getter` (Row×15 per selection, RowContent×2); after the fix, 2 Row bodies per selection and a
+4.3 ms worst stretch. Instructions per step: 1.23 G → 10.6 M.
+
+What this run doesn't show: the mini had other work going (OrbStack's helper at ~0.7 of a core, a browser and an agent
+app open in the owner's session), which the noise bands absorbed here; trusted means the window was where it should be,
+not that the machine was empty. The numbers are the mini's: a 60 Hz panel and another chip, so they don't compare with
+the MacBook Pro's.
+
+An earlier run on the MacBook Pro in use (2026-11-04, at f3bbae2, last input 0 s before the run) gave the same verdicts
+with the champion at 78.6–92.1 ms and the fix at 3.1–18.9 ms: the verdicts held there only because the effect is
+~85 %, far outside that machine's noise.
 
 A sweep over the list's size and the knob, the same day (1 rep a point, so a cost curve, not a verdict):
 
