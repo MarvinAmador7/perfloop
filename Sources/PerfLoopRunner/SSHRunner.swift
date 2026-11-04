@@ -397,7 +397,31 @@ public final class SSHRunner: Runner {
       if idle.locked == true { o.append("screen: LOCKED: a window there is occluded and never active, so reps wait until it is unlocked (or the screen lock is turned off there)") }
       else if idle.locked == false { o.append("screen: unlocked") }
     }
+    if let r = try? remote("echo cores=$(sysctl -n hw.logicalcpu 2>/dev/null); echo load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}'); ps -Ao pcpu=,comm= -r 2>/dev/null | head -8", check: false),
+       let line = Self.loadLine(r.out) { o.append(line) }
     return o
+  }
+
+  /// `load: …` from the remote's core count, load average and busiest processes: a spare Mac running other work (a VM
+  /// helper, a browser, an agent) is noise in every rep, even with its window trusted. nil when nothing could be read.
+  static func loadLine(_ text: String) -> String? {
+    var cores: Int?, load: Double?, busy: [(String, Double)] = []
+    for l in text.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+      if l.hasPrefix("cores=") { cores = Int(l.dropFirst(6)); continue }
+      if l.hasPrefix("load=") { load = Double(l.dropFirst(5)); continue }
+      let f = l.split(separator: " ", maxSplits: 1)
+      guard f.count == 2, let pct = Double(f[0]), pct >= 20 else { continue }
+      let name = String(f[1].split(separator: "/").last ?? f[1])
+      if ["ps", "sshd", "sshd-session", "sh", "head"].contains(where: { name.hasPrefix($0) }) { continue }
+      busy.append((name, pct))
+    }
+    guard let c = cores, let ld = load else { return nil }
+    var s = "load: \(ld) on \(c) cores"
+    if !busy.isEmpty {
+      s += "; busy there: " + busy.prefix(4).map { "\($0.0) \(Int($0.1.rounded())) %" }.joined(separator: ", ")
+      s += ": other work on that Mac is noise in every rep (quit it, or run the bench as a dedicated user with nothing else open)"
+    }
+    return s
   }
 
   /// `runner clean`: removes the store directory there (builds and any results left), and the launcher.

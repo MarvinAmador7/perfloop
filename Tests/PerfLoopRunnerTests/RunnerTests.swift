@@ -129,6 +129,13 @@ final class RunnerTests: FakeBenchCase {
     XCTAssertGreaterThanOrEqual(x.screen?.pairs.compactMap(\.interruptions).reduce(0, +) ?? 0, 1)
   }
 
+  func testRunnerCheckSaysWhatElseRunsThere() {
+    let out = "cores=14\nload=2.26\n 67.7 /Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper\n 19.1 /Applications/Comet.app/Comet Helper\n 25.0 sshd-session: mar [priv]\n"
+    XCTAssertEqual(SSHRunner.loadLine(out), "load: 2.26 on 14 cores; busy there: OrbStack Helper 68 %: other work on that Mac is noise in every rep (quit it, or run the bench as a dedicated user with nothing else open)")
+    XCTAssertEqual(SSHRunner.loadLine("cores=8\nload=0.4\n 3.0 /usr/bin/x\n"), "load: 0.4 on 8 cores")
+    XCTAssertNil(SSHRunner.loadLine("cores=\nload=\n"))
+  }
+
   func testDirectLaunchAndRunVia() throws {
     try baseline()
     let e = try candidate()

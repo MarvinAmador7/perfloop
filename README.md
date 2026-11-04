@@ -105,6 +105,25 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 
 `perfloop help` has every flag. Exit codes: 0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner).
 
+## A spare Mac as the runner
+
+Numbers from a Mac someone is using are noise; a spare Mac reached over ssh gives trusted ones. Verified on a Mac
+mini (Mac16,11, macOS 26.6.2) on 4 November 2026: `perfloop runner check ssh://user@mini`, then a queued knob experiment
+(`queue add ID --runner ssh://…` and `queue run --runner ssh://… --idle 60`, 2 min 13 s) and the whole SlowList
+walkthrough (`./walkthrough.sh --runner ssh://…`, 34 windows), with every rep's window trusted and the champion within
+±1.7 % across 11 pairs (Examples/SlowList/README.md). What that Mac needs, once:
+
+1. **Remote Login** on, and this Mac's key in `~/.ssh/authorized_keys` there (perfloop logs in with keys only).
+2. **The user logged in at the console, the screen unlocked.** A window behind the lock screen is never active: the
+   runner waits while it is locked (that is correct; it is how it behaved on the mini before). For unattended nights:
+   automatic login for that user, the screen lock off ("Require password after screen saver" never), display sleep
+   never (`sudo pmset -a displaysleep 0 sleep 0`).
+3. **Nothing else running in that session.** `runner check` lists what is busy there (`load: … busy there: …`); a VM
+   helper or a browser is noise in every rep even when the window is trusted. Best: a dedicated user for the bench,
+   with nothing else open.
+4. The display it has decides the frame numbers: the mini drove a 60 Hz, 1× panel, so its hitch figures aren't a
+   ProMotion MacBook's. Results never mix runners.
+
 ## Where things live
 
 - The store: `${PERFLOOP_HOME:-~/.perfloop}/<app>/` (builds by sha256, experiments, `ledger.jsonl`, `champion.json`).
