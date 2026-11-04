@@ -67,7 +67,8 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             stages run as jobs it polls with `job`; no owner flags
 
 runners and the queue (C10): where windowed reps run; results never mix runners
-  exp screen|full ID --runner R [--idle S]  R: local (default; idle-gated only with --idle S), ssh://[user@]host[/dir]
+  exp screen|full ID --runner R [--idle S]  R: local (default; idle-gated only with --idle S), ssh://[user@]host[/dir],
+                                            vm:tart/NAME (a macOS VM on this Mac; screens only)
   queue add ID [--stage auto|screen|full] [--runner R] [--force]
                                             auto: the screen, then the full when promising (--force: the full anyway)
   queue list [--json] | queue remove QID
@@ -281,10 +282,12 @@ func run(_ args: Args) throws -> Int32 {
     let r = try Runners.make(spec, store: try store(), options: runnerOptions(args, gatedByDefault: false))
     defer { r.close() }
     if args[1] == "clean" {
+      if let v = r as? VMRunner { out(try v.clean()); return 0 }
       guard let s = r as? SSHRunner else { out("\(r.name): nothing to clean (the store is this one)"); return 0 }
       out(try s.clean()); return 0
     }
     if let s = r as? SSHRunner { try s.check().forEach(out); return 0 }
+    if let v = r as? VMRunner { try v.check().forEach(out); return 0 }
     let i = try r.identity()
     out("\(i.line), macOS \(i.os ?? "?")")
     if let lr = r as? LocalRunner, let g = lr.gate {

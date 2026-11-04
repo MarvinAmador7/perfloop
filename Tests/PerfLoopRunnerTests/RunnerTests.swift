@@ -136,6 +136,38 @@ final class RunnerTests: FakeBenchCase {
     XCTAssertNil(SSHRunner.loadLine("cores=\nload=\n"))
   }
 
+  /// vm:tart/NAME: boots the VM headless, finds its address, is the ssh runner there under its own name; screens, never
+  /// a full; stops the VM it booted when it closes.
+  func testTheVMRunnerBootsScreensAndStops() throws {
+    guard FileManager.default.isExecutableFile(atPath: "/usr/bin/ssh-keygen") else { throw XCTSkip("no ssh-keygen here") }
+    let state = tmp.appendingPathComponent("vm-state"), tlog = tmp.appendingPathComponent("tart.log")
+    setenv("PERFLOOP_TART", Self.fixtures.appendingPathComponent("fake-tart.sh").path, 1); setenv("FAKE_TART_VM", "pl", 1)
+    setenv("FAKE_TART_STATE", state.path, 1); setenv("FAKE_TART_LOG", tlog.path, 1)
+    defer { for k in ["PERFLOOP_TART", "FAKE_TART_VM", "FAKE_TART_STATE", "FAKE_TART_LOG"] { unsetenv(k) } }
+    try baseline()
+    let e = try candidate()
+    let v = try XCTUnwrap(try Runners.make("vm:tart/pl", store: store) as? VMRunner)
+    v.ssh = Self.fixtures.appendingPathComponent("fake-ssh.sh").path; v.rsync = Self.fixtures.appendingPathComponent("fake-rsync.sh").path; v.wake = false
+    XCTAssertEqual(v.name, "vm:tart/pl")
+    let lines = try v.check()
+    XCTAssertTrue(lines[0].hasPrefix("vm:tart/pl: ") && lines[0].contains("FakeMac1,1"), "\(lines)"); XCTAssertTrue(lines.last!.contains("booted by this check"))
+    XCTAssertEqual(try String(contentsOf: state, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), "running")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: v.stateDir.appendingPathComponent("id_ed25519").path), "its own key, not ~/.ssh's")
+    XCTAssertTrue(sshCalls("ssh ").isEmpty == false)
+    loop.runner = v
+    let x = try loop.screen(e.id)
+    XCTAssertEqual(x.state, .promising, "\(x.screen?.reasons ?? [])")
+    XCTAssertEqual(x.screen?.runner?.runner, "vm:tart/pl"); XCTAssertEqual(x.screen?.runner?.model, "FakeMac1,1")
+    XCTAssertThrowsError(try loop.full(e.id)) { XCTAssertTrue("\($0)".contains("never decides a full"), "\($0)") }
+    v.close()
+    XCTAssertEqual(try String(contentsOf: state, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), "stopped")
+    XCTAssertTrue(try String(contentsOf: tlog, encoding: .utf8).contains("stop pl"))
+    XCTAssertNil(v.booted, "the VM it booted is down")
+    // No such VM, or no tart: what to do about it.
+    setenv("FAKE_TART_VM", "other", 1)
+    XCTAssertThrowsError(try (try Runners.make("vm:tart/pl", store: store) as! VMRunner).connect()) { XCTAssertTrue("\($0)".contains("tart clone"), "\($0)") }
+  }
+
   func testDirectLaunchAndRunVia() throws {
     try baseline()
     let e = try candidate()
@@ -180,7 +212,8 @@ final class RunnerTests: FakeBenchCase {
     XCTAssertNil(RunnerSpec("ssh://"))
     XCTAssertNil(RunnerSpec("ssh://a b"))
     XCTAssertEqual(RunnerSpec("vm:tart/seq"), .vm(tool: "tart", name: "seq"))
-    XCTAssertThrowsError(try Runners.make("vm:tart/seq", store: store)) { XCTAssertTrue("\($0)".contains("not available")) }
+    XCTAssertEqual((try? Runners.make("vm:tart/seq", store: store))?.name, "vm:tart/seq")   // connects (and boots) on first use
+    XCTAssertThrowsError(try Runners.make("vm:parallels/seq", store: store)) { XCTAssertTrue("\($0)".contains("only Tart VMs")) }
   }
 
   // MARK: mixing runners

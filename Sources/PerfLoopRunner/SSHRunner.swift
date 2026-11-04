@@ -29,6 +29,11 @@ public final class SSHRunner: Runner {
   public var ssh = ProcessInfo.processInfo.environment["PERFLOOP_SSH"] ?? "/usr/bin/ssh"
   public var rsync = ProcessInfo.processInfo.environment["PERFLOOP_RSYNC"] ?? "/usr/bin/rsync"
   public var launch: Launch = .gui
+  /// The runner's name in results when it isn't `ssh://host` (a VM: `vm:tart/NAME`).
+  public var nameOverride: String?
+  /// A key of its own (`-i`, IdentitiesOnly) and a known_hosts of its own: a VM's, never the user's.
+  public var identityFile: String?
+  public var knownHostsFile: String?
   /// Trust a host key seen for the first time (`StrictHostKeyChecking=accept-new`); a changed key is always refused.
   public var acceptNewHostKey = false
   /// Added to the adapter's environment there.
@@ -56,7 +61,7 @@ public final class SSHRunner: Runner {
     controlPath = (t.count + 64 < 104 ? t : "/tmp") + "/plssh-%C"
   }
 
-  public var name: String { spec.name }
+  public var name: String { nameOverride ?? spec.name }
   var target: String { user.map { "\($0)@\(host)" } ?? host }
   /// The store root as the loop writes its paths (what comes back is rewritten to this).
   var localRoot: String { store.root.path }
@@ -75,6 +80,8 @@ public final class SSHRunner: Runner {
     var o = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
              "-o", "ControlMaster=auto", "-o", "ControlPath=\(controlPath)", "-o", "ControlPersist=300"]
     if acceptNewHostKey { o += ["-o", "StrictHostKeyChecking=accept-new"] }
+    if let k = identityFile { o += ["-i", k, "-o", "IdentitiesOnly=yes"] }
+    if let k = knownHostsFile { o += ["-o", "UserKnownHostsFile=\(k)"] }
     if let p = port { o += ["-p", String(p)] }
     return o
   }

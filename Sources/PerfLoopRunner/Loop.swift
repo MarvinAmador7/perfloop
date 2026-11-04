@@ -304,6 +304,8 @@ public final class Loop {
 
   public func full(_ id: String, force: Bool = false) throws -> Experiment {
     var e = try store.experiment(id)
+    // A VM's frames and counters aren't a panel's: it screens, and never decides (SPEC §4.2).
+    if runner.name.hasPrefix("vm:") { throw PLError.refused("\(runner.name) screens and never decides a full (a guest's frame cadence and counters aren't hardware's): run the full on this Mac or a spare one") }
     if e.state == .rejected && !force { throw PLError.refused("exp \(e.id) was rejected by its screen; --force to run a full anyway") }
     // A screen the owner cleared of its snapshot review goes back to promising (perfloop guards --owner); the owner may
     // also run the full on a screen that still asks for review.

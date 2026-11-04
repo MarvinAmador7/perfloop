@@ -67,7 +67,7 @@ public enum Runners {
       if let l = o.launch { guard let m = SSHRunner.Launch(rawValue: l) else { throw PLError.usage("--launch gui|direct") }; r.launch = m }
       if let i = o.idle, !o.force { r.gate = IdleGate(threshold: i, busyApps: o.busyApps ?? IdleGate.defaultBusyApps) }
       return r
-    case .vm(let tool, let name): return try VMRunner.make(tool: tool, name: name)
+    case .vm(let tool, let name): return try VMRunner(tool: tool, name: name, store: store)
     }
   }
 }
