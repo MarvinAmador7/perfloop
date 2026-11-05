@@ -30,8 +30,9 @@ extension Run {
     do { return try SyntheticGestures.load(param("gesture") ?? fallback) } catch { throw HostError.usage("\(error)") }
   }
 
-  /// One measured step: `gesture` replayed into `scrollView` (the window's largest by default) with its recorded
-  /// timestamps, waiting until the content comes to rest (its offset unchanged for 150 ms). The step carries the
+  /// One measured step: `gesture` replayed into `scrollView` (the window's largest by default), each event stamped with
+  /// its recorded time (as a trackpad's events carry the time the hardware saw them, however late the main thread
+  /// takes them), waiting until the content comes to rest (its offset unchanged for 150 ms). The step carries the
   /// smoothness: position error p95 while the fingers were down, stalls, jerk, latency in frames (`steps[].smoothness`).
   /// `timestamps: false` stamps every event 0, as an old synthetic fling did (AppKit can't see the release velocity then).
   @discardableResult
@@ -77,7 +78,8 @@ extension Run {
   var blockMs = 0.0
   /// The axis the gesture moves on (the larger total travel).
   let axis: SyntheticGestures.Axis
-  struct Sent { var due: Double; var delivered: Double; var d: Double; var phase: Gesture.Phase; var momentum: Gesture.Phase; var precise: Bool; var finger: Bool }
+  /// One event as it went out; `timestamp` is the NSEvent's (the recorded time, 0 with `timestamps: false`).
+  struct Sent { var due: Double; var delivered: Double; var timestamp: Double; var d: Double; var phase: Gesture.Phase; var momentum: Gesture.Phase; var precise: Bool; var finger: Bool }
   private(set) var sent: [Sent] = []
   /// Per tick: time, last commit, the layer's position along the axis, the clip view's offset.
   private var raw: [(t: Double, committed: Double, layer: Double?, offset: Double)] = []
@@ -173,13 +175,17 @@ extension Run {
     cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: sp)
     cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: mp)
     let now = CACurrentMediaTime()
-    if timestamps { cg.timestamp = CGEventTimestamp(now * 1e9) }   // NSEvent.timestamp: AppKit's release velocity reads it
+    // NSEvent.timestamp: AppKit's release velocity (and its own deceleration after the fingers lift) reads it. The
+    // recorded time, not the delivery time: a timer that fires late hands two events over together, and stamped with
+    // the delivery time they gave AppKit a release velocity of the main thread's jitter (one flick read 820 to
+    // 7000 pt/s across replays of the same file; deskbench, 2026-11-04).
+    if timestamps { cg.timestamp = CGEventTimestamp((t0 + e.t / 1000) * 1e9) }
     let r = sv.convert(sv.bounds, to: nil)
     let p = window.convertPoint(toScreen: NSPoint(x: r.midX, y: r.midY))
     cg.location = CGPoint(x: p.x, y: (NSScreen.screens.first?.frame.height ?? 0) - p.y)
     guard let ev = NSEvent(cgEvent: cg) else { return }
     let d = Double(axis == .x ? ev.scrollingDeltaX : ev.scrollingDeltaY)
-    sent.append(Sent(due: t0 + e.t / 1000, delivered: now, d: d, phase: Gesture.Phase(rawBits: ev.phase.rawValue), momentum: Gesture.Phase(rawBits: ev.momentumPhase.rawValue),
+    sent.append(Sent(due: t0 + e.t / 1000, delivered: now, timestamp: ev.timestamp, d: d, phase: Gesture.Phase(rawBits: ev.phase.rawValue), momentum: Gesture.Phase(rawBits: ev.momentumPhase.rawValue),
                      precise: ev.hasPreciseScrollingDeltas, finger: e.finger))
     sv.scrollWheel(with: ev)
     if blockMs > 0, e.phase == .changed, sent.filter(\.finger).count == gesture.events.filter(\.finger).count / 2 { usleep(useconds_t(blockMs * 1000)) }

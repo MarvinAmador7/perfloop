@@ -43,6 +43,36 @@ import PerfLoopProbe
     XCTAssertEqual(all.count, SyntheticGestures.all.count)
   }
 
+  /// A replay stamps each event with its recorded time, not the time it went out: AppKit reads the release velocity from
+  /// the timestamps, and a late timer must not change it. Windowless: a scroll view in a window that is never shown.
+  func testAReplayStampsEventsWithTheirRecordedTimes() async throws {
+    let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    // Overriding scrollWheel keeps AppKit's scrolling on the main thread: its concurrent scrolling needs a screen.
+    final class Scroll: NSScrollView { override func scrollWheel(with e: NSEvent) { super.scrollWheel(with: e) } }
+    let sv = Scroll(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+    sv.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 4000))
+    window.contentView = sv
+    let g = try SyntheticGestures.load("synthetic:scroll-down")
+    let replay = GestureReplay(sv: sv, window: window, gesture: g, timestamps: true)
+    replay.start()
+    let limit = Date().addingTimeInterval(10)
+    while !replay.done, Date() < limit { try await Task.sleep(nanoseconds: 5_000_000) }
+    replay.stop()
+    XCTAssertEqual(replay.sent.count, g.events.count)
+    let first = try XCTUnwrap(replay.sent.first)
+    for (s, e) in zip(replay.sent, g.events) {
+      XCTAssertEqual((s.timestamp - first.timestamp) * 1000, e.t - g.events[0].t, accuracy: 0.001, "event at \(e.t) ms")
+      XCTAssertEqual(s.timestamp, s.due, accuracy: 1e-6)
+    }
+    let zero = GestureReplay(sv: sv, window: window, gesture: g, timestamps: false)
+    zero.start()
+    while !zero.done, Date() < limit { try await Task.sleep(nanoseconds: 5_000_000) }
+    zero.stop()
+    XCTAssertTrue(zero.sent.allSatisfy { $0.timestamp == 0 }, "timestamps: false stamps every event 0")
+  }
+
   /// The recorder's tap, fed NSEvents made from a synthetic gesture's numbers: one file, the same deltas and phases.
   func testTheRecorderCutsEventsIntoAFile() throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-rec-\(UUID().uuidString)")
