@@ -4,7 +4,7 @@ import PerfLoopKit
 /// `perfloop sweep` (C8): runs a grid of fixture parameters, knobs and scenario params through the adapter's
 /// `run`, one child per point, and fits cost curves through the objective. Every point is written before the next
 /// starts (`points/<key>.point.json`), so a stopped sweep resumes at the first missing point when the same command
-/// runs again. A point that opens a window can hold a lock directory for its duration (`--lock DIR`), so several
+/// runs again. A point holds the window lock (WindowLock: the default one, or `--lock DIR`) for its duration, so several
 /// agents sharing one Mac take turns at the window between points.
 public final class SweepRun {
   public struct Options {
@@ -19,7 +19,8 @@ public final class SweepRun {
     public var budgetMin: Double?
     /// Budgets the fitted curves are held to (`--budget-ms`); default: a 120 Hz and a 60 Hz frame for CPU per step.
     public var budgetMs: [Double] = []
-    /// mkdir-style lock held while a point runs (other agents' window runs wait for it, and it for them).
+    /// The window lock (WindowLock) held while a point runs (other agents' window runs wait for it, and it for them).
+    /// The CLI gives the default one unless `--no-lock`.
     public var lock: String?
     /// Points per lock hold.
     public var lockEvery = 1
@@ -250,6 +251,7 @@ public final class SweepRun {
     for (n, x) in params.sorted(by: { $0.key < $1.key }) { args += ["--set", "\(n)=\(x)"] }
     var e: [String: String] = [:]
     if !knobs.isEmpty { e["PERFLOOP_KNOBS"] = Adapter.knobString(Adapter.knobs(env["PERFLOOP_KNOBS"] ?? "").merging(knobs) { $1 }) }
+    e.merge(WindowLock.childEnv) { a, _ in a }
     let t0 = Date()
     let out: Adapter.Output
     do { out = try Interrupts.spawn(p.exe, args, env: e, base: env) } catch { sp.failure = "\(error)"; return sp }
@@ -273,26 +275,11 @@ public final class SweepRun {
     return sp
   }
 
-  /// Waits for the lock directory (mkdir is atomic), writes who holds it, and registers it for release on exit or a
-  /// signal.
+  /// Waits for the window lock (WindowLock says who holds it, and breaks a dead holder's) and registers it for release
+  /// on exit or a signal.
   func acquire(_ path: String) throws {
-    let fm = FileManager.default
-    var waited = false
-    while true {
-      do {
-        try fm.createDirectory(atPath: path, withIntermediateDirectories: false)
-        try? "perfloop sweep pid \(ProcessInfo.processInfo.processIdentifier)\n".write(toFile: path + "/owner", atomically: true, encoding: .utf8)
-        Interrupts.hold(path)
-        if waited { log("lock \(path): acquired") }
-        return
-      } catch {
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { throw PLError.harness("couldn't create the lock \(path): \(error)") }
-        if !waited { log("lock \(path) held by \(((try? String(contentsOfFile: path + "/owner", encoding: .utf8)) ?? "?").trimmingCharacters(in: .whitespacesAndNewlines)); waiting") }
-        waited = true
-        Thread.sleep(forTimeInterval: lockPollS)
-      }
-    }
+    do { Interrupts.hold(try WindowLock.acquire(path, poll: lockPollS, log: log)) }
+    catch let f as WindowLock.Failure { throw PLError.harness(f.description) }
   }
 }
 
@@ -301,7 +288,7 @@ public final class SweepRun {
 public enum Interrupts {
   static let mutex = NSLock()
   static var child: Process?
-  static var lock: String?
+  static var lock: WindowLock?
   static var sources: [DispatchSourceSignal] = []
 
   public static func install() {
@@ -321,10 +308,10 @@ public enum Interrupts {
       s.resume(); sources.append(s)
     }
   }
-  static func hold(_ path: String) { mutex.lock(); lock = path; mutex.unlock() }
+  static func hold(_ l: WindowLock) { mutex.lock(); lock = l; mutex.unlock() }
   public static func release() {
     mutex.lock(); let l = lock; lock = nil; mutex.unlock()
-    if let l { try? FileManager.default.removeItem(atPath: l) }
+    l?.release()
   }
 
   /// Adapter.spawn, keeping the child where a signal can reach it.

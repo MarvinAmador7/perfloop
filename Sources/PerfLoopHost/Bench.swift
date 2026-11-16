@@ -215,6 +215,8 @@ public final class Bench: @unchecked Sendable {
 
     scenarios: \(scenarios.map(\.name).joined(separator: ", "))
     fixtures: \(fixtures.map(\.name).joined(separator: ", "))
+    window lock: run, profile and record-gesture wait for the window lock and hold it (other benches and perfloop runs on
+    this Mac take turns): $PERFLOOP_LOCK, else /tmp/perfloop-window-UID.lock; --lock DIR another, --no-lock none
     environment: PERFLOOP_KNOBS=k=v,… PERFLOOP_GUARDS=a,b PERFLOOP_GUARD_PARAMS=k=v,… PERFLOOP_ARTIFACTS=DIR PERFLOOP_SAMPLER=off
     exit codes: 0 pass · 1 usage · 2 harness error · 3 budget, check or guard failed · 5 untrusted (window not active: rerun)
     """
@@ -230,6 +232,7 @@ public final class Bench: @unchecked Sendable {
       for x in a.all("knob") { k.merge(Knobs.parse(x)) { $1 } }
       setenv(Knobs.variable, Knobs.format(k), 1)
     }
+    takeWindowLock(a)
     if a.positional.first == "run" || a.positional.first == "record-gesture" {
       NSApplication.shared.setActivationPolicy(a.has("no-activate") ? .accessory : .regular)
       let d = LaunchDelegate { [unowned self] in
@@ -244,6 +247,22 @@ public final class Bench: @unchecked Sendable {
     let (code, text) = MainActor.assumeIsolated { handle(a) }
     if !text.isEmpty { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
     exit(code)
+  }
+
+  /// The verbs that open a window hold the window lock for their whole run (WindowLock: other benches and perfloop runs
+  /// on this Mac take turns with them), unless `--no-lock`; `--lock DIR` or `PERFLOOP_LOCK` moves it. Run by perfloop
+  /// (or `perfloop lock --`), the bench is inside its parent's hold and waits for nothing. ^C, a kill and exit release it.
+  static let windowVerbs: Set<String> = ["run", "profile", "record-gesture"]
+
+  func takeWindowLock(_ a: HostArgs) {
+    guard let verb = a.positional.first, Self.windowVerbs.contains(verb), a.positional.count > 1, !a.has("no-lock"),
+          let path = a.one("lock") ?? WindowLock.defaultPath() else { return }
+    let say: (String) -> Void = { [adapter] in FileHandle.standardError.write(Data("\(adapter): \($0)\n".utf8)) }
+    do {
+      guard try WindowLock.acquire(path, log: say).owned else { return }
+    } catch { say("\(error)"); exit(2) }
+    atexit { WindowLock.releaseAll() }
+    for sig in [SIGINT, SIGTERM, SIGHUP] { signal(sig) { s in WindowLock.releaseAll(); signal(s, SIG_DFL); raise(s) } }
   }
 
   /// The headless verbs: what `main` prints and exits with. Tests call this.
@@ -499,7 +518,7 @@ struct HostArgs {
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["fixture", "reps", "set", "out", "artifacts", "guards", "guard-param", "diff-out", "sampler", "quiet-check", "knob", "host", "objective",
                                     "wait-for", "template", "seconds", "top", "per", "min-ms", "process", "champion", "hold",
-                                    "name", "count", "timeout", "device", "feed"]
+                                    "name", "count", "timeout", "device", "feed", "lock"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {

@@ -22,7 +22,8 @@ public final class MCPServer {
   public var baseArgs: [String]
   public var env: [String: String] = [:]
   public let jobsDir: URL
-  /// The window lock local runs take (other benches on this Mac take turns with them).
+  /// The window lock local runs take (other benches on this Mac take turns with them): `--lock`, else the one the CLI,
+  /// PerfLoopHost benches and `perfloop lock` take by default (WindowLock.defaultPath).
   public var lock: String
   public var version = "1"
 
@@ -40,7 +41,7 @@ public final class MCPServer {
 
   public init(cli: String, baseArgs: [String] = [], jobsDir: URL, lock: String? = nil) {
     self.cli = cli; self.baseArgs = baseArgs; self.jobsDir = jobsDir
-    self.lock = lock ?? FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-window.lock").path
+    self.lock = lock ?? WindowLock.defaultPath() ?? "/tmp/perfloop-window-\(getuid()).lock"
   }
 
   // MARK: tools
