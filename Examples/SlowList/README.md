@@ -37,7 +37,7 @@ $B run scroll --set gesture=synthetic:drag-down --set inject-block-ms=60 --reps 
 $B record-gesture scroll --name my-swipe     # your own swipe over the list, for --set gesture=FILE
 $B profile select                            # the same scenario under xctrace: call trees per step
 ./walkthrough.sh --dry-run                   # the whole loop, printed
-./walkthrough.sh --lock /tmp/window.lock     # …and run (~5 min of builds, then ~2 min of windows: a free Mac)
+./walkthrough.sh                             # …and run (~5 min of builds, then ~2 min of windows: a free Mac)
 ```
 
 ## A run on a spare Mac (2026-11-04, Mac mini Mac16,11, macOS 26.6.2, the walkthrough at 277e356)
@@ -71,7 +71,7 @@ with the champion at 78.6–92.1 ms and the fix at 3.1–18.9 ms: the verdicts h
 A sweep over the list's size and the knob, the same day (1 rep a point, so a cost curve, not a verdict):
 
 ```sh
-perfloop sweep select --bench .build/release/SlowListBench --set rows=200..1000/400 --set rows.rank=sort,index --reps 1 --lock /tmp/window.lock
+perfloop sweep select --bench .build/release/SlowListBench --set rows=200..1000/400 --set rows.rank=sort,index --reps 1
 ```
 
 | rows | `sort` ms/step | `index` ms/step |

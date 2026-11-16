@@ -58,11 +58,18 @@ perfloop ledger                              # what was tried, by whom, with wha
 
 ## The machine
 
-`exp new` (it screens), `exp screen`, `exp full`, `guards` and a bench's `run` open a window and take focus for
-seconds to minutes. Run them only when the owner says the Mac is free, with the window lock if other benches share it
-(`--runner local --lock /tmp/window.lock`), or queue them: `perfloop queue add <id>` and let
-`perfloop queue run --runner local --idle 120` (only while nobody touches the Mac) or
-`--runner ssh://user@spare-mac` (a Mac nobody uses) take them. A run on a locked screen, in the background or under a
+`exp new` (it screens), `exp screen`, `exp full`, `guards`, `profile`, `sweep` and a bench's `run`/`ab` open a window
+and take focus for seconds to minutes. Run them only when the owner says the Mac is free, or queue them: `perfloop queue
+add <id>` and let `perfloop queue run --runner local --idle 120` (only while nobody touches the Mac) or
+`--runner ssh://user@spare-mac` (a Mac nobody uses) take them.
+
+**The window lock** makes window runs on one Mac take turns, and it is on by default: every perfloop verb above holds it
+around each rep, as do the MCP server's jobs and a PerfLoopHost bench's `run`/`profile`. Anything else that opens a
+window (a bench's own `ab` or `run` from an adapter that isn't PerfLoopHost, a script driving the app) goes inside it:
+`perfloop lock -- <command>`. Set `PERFLOOP_LOCK_OWNER=<your name>` so others see who waits on whom. A waiter prints
+the holder (`waiting: the window lock /tmp/perfloop-window-501.lock is held by pid 71104 (perfloop exp screen 0003)
+"palette", since …`); `perfloop lock` alone says who holds it now. A holder that died is broken by the next taker; never
+remove a live holder's lock, and never make one by hand with `mkdir` (it says nobody's name and is never broken). A run on a locked screen, in the background or under a
 profiler is **untrusted** and never decides; rerun it, don't explain it away. `perfloop doctor` says what would make
 this Mac's numbers untrustworthy.
 
@@ -73,6 +80,11 @@ Headless and always fine: `doctor`, `describe`, `store list`, `exp status`, `exp
 
 Disk: every build in the store is a copy of the bench (`perfloop store gc` keeps the newest 20 and every champion);
 traces are hundreds of MB. Delete what you made once its numbers are recorded.
+
+Traces: `perfloop profile` deletes the `.trace` once exported and its `trace:` line says what is on disk: `deleted`, or
+`KEPT at <path>` (`--keep-trace`, or a delete that failed: the notes say why). A kept trace holds the recorded process's
+environment, tokens included: delete it once read (`perfloop store gc --traces`). `perfloop doctor` fails while a stray
+one is in the store; `perfloop store gc` deletes those.
 
 ## Ask the owner
 

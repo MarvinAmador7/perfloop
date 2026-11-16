@@ -60,6 +60,10 @@ public struct MachineProbe {
     guard getloadavg(&l, 3) > 0 else { return nil }
     return (l[0], ProcessInfo.processInfo.activeProcessorCount)
   }
+  /// The `.trace` bundles under the store (or the home of every store).
+  public var traces: (URL) -> [TraceFile] = { Traces.find(under: $0) }
+  /// The window lock's state.
+  public var windowLock: (String) -> WindowLock.State = { WindowLock.state(at: $0) }
   public init() {}
 }
 
@@ -122,6 +126,34 @@ extension Doctor {
           fix: "export PERFLOOP_HOME=~/.perfloop (or any directory outside a checkout)")
     } else {
       add("store", .ok, store.map { "\($0.path)" } ?? "\(Store.tilde(home))/<app> (set PERFLOOP_APP, or pass --app)")
+    }
+
+    // Traces left behind: each holds the recorded process's environment, tokens included.
+    let ts = p.traces(URL(fileURLWithPath: root))
+    let stray = ts.filter { !$0.kept && !$0.recording }, kept = ts.filter { $0.kept && !$0.recording }
+    func list(_ xs: [TraceFile]) -> String { "\(Traces.mb(xs.reduce(0) { $0 + $1.bytes })): " + xs.prefix(3).map(\.path).joined(separator: ", ") + (xs.count > 3 ? ", …" : "") }
+    if !stray.isEmpty {
+      add("traces", .fail, "\(stray.count) .trace bundle(s) left in the store (\(list(stray))): each holds the recorded process's environment, tokens included",
+          fix: "perfloop store gc (deletes them); never commit or share one")
+    } else if !kept.isEmpty {
+      add("traces", .warn, "\(kept.count) .trace bundle(s) kept with --keep-trace (\(list(kept))): each holds the recorded process's environment",
+          fix: "delete them once read: perfloop store gc --traces")
+    } else {
+      add("traces", .ok, "no .trace bundles in the store" + (ts.isEmpty ? "" : " (\(ts.count) being recorded now)"))
+    }
+
+    // The window lock every window run on this Mac takes turns at.
+    if let l = WindowLock.defaultPath(env: env) {
+      switch p.windowLock(l) {
+      case .free: add("window lock", .ok, "\(l): free")
+      case .held(let h?): add("window lock", .ok, "\(l): held by \(h.line()); window runs wait their turn")
+      case .held(nil): add("window lock", .warn, "\(l): held, with no owner file (made by hand with mkdir?): window runs wait until it is removed",
+                           fix: "if nobody holds it: rmdir \(l); take it with perfloop lock -- CMD, which records its holder")
+      case .stale(let h): add("window lock", .ok, "\(l): left by \(h.line()), which is gone; the next window run breaks it")
+      }
+    } else {
+      add("window lock", .warn, "PERFLOOP_LOCK=off: window runs on this Mac don't take turns, so two benches can overlap",
+          fix: "unset PERFLOOP_LOCK unless no other bench or agent uses this Mac")
     }
   }
 }
