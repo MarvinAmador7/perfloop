@@ -4,7 +4,8 @@
 #
 #   ./walkthrough.sh --dry-run          print every command, run nothing (no window)
 #   ./walkthrough.sh [--lock DIR]       run it: builds for ~5 min, then opens a window 34 times over ~2 min, so run it when nobody is using the
-#                                       Mac (or on a spare one). --lock DIR takes turns with other benches on this Mac.
+#                                       Mac (or on a spare one). Its windows take turns with other benches on this Mac at
+#                                       the default window lock; --lock DIR uses another.
 #   ./walkthrough.sh --runner ssh://user@spare-mac
 #                                       the windows open on a spare Mac instead (perfloop runner check it first); builds stay here
 #   ./walkthrough.sh --keep             keep the scratch store and binaries (default: deleted at the end)

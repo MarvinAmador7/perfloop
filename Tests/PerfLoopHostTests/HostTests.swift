@@ -243,5 +243,25 @@ import PerfLoopProbe
     XCTAssertTrue(FileManager.default.fileExists(atPath: diffOut))
     XCTAssertEqual(bench().handle(["snapdiff", pa, pb, "--guard-param", "snapshot-diff.tolerance=0.02"]).0, 0)
   }
+
+  /// F4: a trace the bench couldn't delete is reported as kept, with why, never as deleted.
+  func testAFailedTraceDeleteIsReported() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-trace-\(UUID().uuidString)")
+    defer { chmod(dir.appendingPathComponent("stuck.trace").path, 0o755); try? FileManager.default.removeItem(at: dir) }
+    let ok = dir.appendingPathComponent("ok.trace"), stuck = dir.appendingPathComponent("stuck.trace")
+    for t in [ok, stuck] {
+      try FileManager.default.createDirectory(at: t, withIntermediateDirectories: true)
+      try "FAKE_TOKEN=secret".write(to: t.appendingPathComponent("env"), atomically: true, encoding: .utf8)
+    }
+    chmod(stuck.path, 0o555)
+    var d = ProfileDoc(template: "Time Profiler", trace: ok.path, scenario: "s", fixture: "f", process: "b", durationS: 1)
+    ProfileVerb.dropTrace(ok, keep: false, doc: &d, adapter: "testbench")
+    XCTAssertEqual(d.traceKept, false); XCTAssertTrue(d.text.contains("\ntrace: deleted"), d.text)
+    d = ProfileDoc(template: "Time Profiler", trace: stuck.path, scenario: "s", fixture: "f", process: "b", durationS: 1)
+    ProfileVerb.dropTrace(stuck, keep: false, doc: &d, adapter: "testbench")
+    XCTAssertEqual(d.traceKept, true)
+    XCTAssertTrue(d.text.contains("trace: KEPT at \(stuck.path)"), d.text)
+    XCTAssertTrue(d.notes.first?.hasPrefix("couldn't delete \(stuck.path)") == true, "\(d.notes)")
+  }
 }
 #endif

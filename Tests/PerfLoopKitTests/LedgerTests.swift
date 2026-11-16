@@ -52,4 +52,23 @@ final class LedgerTests: XCTestCase {
     XCTAssertEqual(c3.parents, ["0005"]); XCTAssertEqual(c3.mergedAncestor, "9bcd41a")
     XCTAssertEqual(try PLJSON.decode(Champion.self, from: Data(PLJSON.encode(c3).utf8)), c3)
   }
+
+  func testOwnerFlagsAreOnTheRecordAndOldRecordsStillRead() throws {
+    // A ledger line and an experiment from before owner flags were recorded read as before.
+    let old = try PLJSON.decode(LedgerEntry.self, from: Data(#"{"schema":"perfloop.ledger/1","at":"t","experiment":"0001","state":"lost","by":"agent"}"#.utf8))
+    XCTAssertNil(old.ownerFlags); XCTAssertEqual(old.text, "t 0001 lost        by agent")
+    var l = LedgerEntry(experiment: "0007", state: "lost", by: "agent", note: "lost: slower", at: "t")
+    l.ownerFlags = ["--force"]; l.ownerVia = "env"
+    XCTAssertEqual(l.text, "t 0007 lost        by agent · OWNER FLAG --force (PERFLOOP_OWNER=1) · lost: slower")
+    XCTAssertEqual(try PLJSON.decode(LedgerEntry.self, from: Data(PLJSON.line(l).utf8)), l)
+
+    var e = Experiment(id: "0007", hypothesis: "h", scenario: "step", fixture: "crew17", parent: nil, build: nil)
+    XCTAssertNil(try PLJSON.decode(Experiment.self, from: Data(PLJSON.encode(e).utf8)).forced)
+    let u = OwnerFlagUse(flag: "--force", via: "tty", command: "exp full", effect: "ran the full over a screen that rejected it", at: "t")
+    e.used(u); e.used(u)
+    XCTAssertEqual(e.ownerFlags, [u], "once per flag and run"); XCTAssertEqual(e.forced, true)
+    XCTAssertEqual(u.line, "--force (confirmed at a terminal, exp full, t): ran the full over a screen that rejected it")
+    let text = Explain.experiment(e, champion: nil)
+    XCTAssertTrue(text.hasPrefix("exp 0007 · new · code · step on crew17 · FORCED (owner flag)\nhypothesis: h\nowner flag: --force (confirmed"), text)
+  }
 }

@@ -105,13 +105,17 @@ extension Loop {
     else if run.pass, e.state == .needsReview, by == "owner", let last = e.full ?? e.screen, last.verdict == "needsReview" {
       e.state = e.full == nil ? .promising : .won
       e.notes.append("the owner cleared the snapshot review with guards re-run \(n)" + (tolerance.map { " at tolerance \($0)" } ?? ""))
+      ownerUsed(&e, "--owner", "cleared the snapshot review (guards re-run \(n)): \(before.rawValue) → \(e.state.rawValue)")
     }
     // The owner's tolerance holds for the rest of this experiment's pairs (a full after a cleared screen).
-    if let t = tolerance, by == "owner" { e.guardParams = (e.guardParams ?? [:]).merging(["snapshot-diff.tolerance": .number(t)]) { $1 } }
+    if let t = tolerance, by == "owner" {
+      e.guardParams = (e.guardParams ?? [:]).merging(["snapshot-diff.tolerance": .number(t)]) { $1 }
+      ownerUsed(&e, "--guard-tolerance", "snapshot-diff tolerance \(t) for this experiment's guards re-run \(n) and every later pair")
+    }
     if e.state != before { e.notes.append("guards re-run \(n): \(before.rawValue) → \(e.state.rawValue)") }
     try store.save(e)
-    try store.ledger.append(LedgerEntry(experiment: e.id, state: e.state.rawValue, build: e.build?.hash, by: by,
-                                        note: "guards re-run \(n): \(run.pass ? "pass" : (run.failures + run.reviews).joined(separator: "; "))"))
+    try store.ledger.append(stamped(LedgerEntry(experiment: e.id, state: e.state.rawValue, build: e.build?.hash, by: by,
+                                        note: "guards re-run \(n): \(run.pass ? "pass" : (run.failures + run.reviews).joined(separator: "; "))")))
     _ = explain(e)
     return (e, run)
   }

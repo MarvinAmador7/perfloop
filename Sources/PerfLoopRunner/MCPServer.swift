@@ -12,7 +12,8 @@ import PerfLoopKit
 ///   never writes a sleep loop. Every job still running when the session ends (stdin closes, or a signal) is killed with
 ///   its children: nothing is left behind.
 /// - **The agent's surface only.** No tool takes `--force`, `--owner`, `--guard-tolerance` or `--allow-dirty`, and no
-///   value can smuggle a flag in (a value that starts with `-` is refused): what judges the agent stays the owner's.
+///   value can smuggle a flag in (a value that starts with `-` is refused), and the children never see `PERFLOOP_OWNER`:
+///   what judges the agent stays the owner's.
 public final class MCPServer {
   public static let protocolVersions = ["2025-06-18", "2025-03-26", "2024-11-05"]
   /// The `perfloop` executable each tool runs.
@@ -21,7 +22,8 @@ public final class MCPServer {
   public var baseArgs: [String]
   public var env: [String: String] = [:]
   public let jobsDir: URL
-  /// The window lock local runs take (other benches on this Mac take turns with them).
+  /// The window lock local runs take (other benches on this Mac take turns with them): `--lock`, else the one the CLI,
+  /// PerfLoopHost benches and `perfloop lock` take by default (WindowLock.defaultPath).
   public var lock: String
   public var version = "1"
 
@@ -39,7 +41,7 @@ public final class MCPServer {
 
   public init(cli: String, baseArgs: [String] = [], jobsDir: URL, lock: String? = nil) {
     self.cli = cli; self.baseArgs = baseArgs; self.jobsDir = jobsDir
-    self.lock = lock ?? FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-window.lock").path
+    self.lock = lock ?? WindowLock.defaultPath() ?? "/tmp/perfloop-window-\(getuid()).lock"
   }
 
   // MARK: tools
@@ -245,9 +247,17 @@ public final class MCPServer {
   func process(_ args: [String]) -> Process {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: cli); p.arguments = args + baseArgs
-    var e = ProcessInfo.processInfo.environment; for (k, v) in env { e[k] = v }; p.environment = e
+    p.environment = childEnv
     p.standardInput = FileHandle.nullDevice
     return p
+  }
+
+  /// The children's environment: this one's plus `env`, never `PERFLOOP_OWNER` (an agent's tools are never the
+  /// owner's, even when the owner started the server from a shell that has it). stdin is /dev/null: no prompt either.
+  var childEnv: [String: String] {
+    var e = ProcessInfo.processInfo.environment; for (k, v) in env { e[k] = v }
+    e["PERFLOOP_OWNER"] = nil
+    return e
   }
 
   /// A headless verb, to completion (stdout, then stderr's lines).
@@ -272,7 +282,7 @@ public final class MCPServer {
     FileManager.default.createFile(atPath: j.log.path, contents: Data("$ perfloop \(args.joined(separator: " "))\n".utf8))
     let h = try FileHandle(forWritingTo: j.log); try h.seekToEnd()
     j.process.executableURL = URL(fileURLWithPath: cli); j.process.arguments = args + baseArgs
-    var e = ProcessInfo.processInfo.environment; for (k, v) in env { e[k] = v }; j.process.environment = e
+    j.process.environment = childEnv
     j.process.standardInput = FileHandle.nullDevice; j.process.standardOutput = h; j.process.standardError = h
     j.process.terminationHandler = { [weak j] p in j?.status = p.terminationStatus; try? h.close() }
     try j.process.run()

@@ -7,7 +7,8 @@ import PerfLoopRunner
 enum SweepCommand {
   static let help = """
   perfloop sweep SCENARIO --set NAME=VALUES [--set …] [--bench PATH] [--fixture F] [--reps N] [--objective M]
-                 [--out DIR] [--dry-run] [--budget-min M] [--budget-ms X] [--lock DIR] [--lock-every N] [--order shuffle|grid]
+                 [--out DIR] [--dry-run] [--budget-min M] [--budget-ms X] [--lock DIR | --no-lock] [--lock-every N]
+                 [--order shuffle|grid]
                  [--fresh] [--redo KEY] [--rep-s S] [--startup-s S] [--json]
     VALUES: 4..64/4 (inclusive, step 4) · 4..64 · 4,8,16 · ca,clip · 8 (one value: fixed, not swept)
     NAME: a knob, a parameter of the fixture (its manifest entry's `parametric`), or a scenario param; force one with
@@ -15,7 +16,9 @@ enum SweepCommand {
     The bench: --bench PATH, else the champion's build in the store. Results: --out DIR, else
     <store>/sweeps/<scenario>-<fixture>-<id>; the same command again resumes (finished points are kept).
     --dry-run prints the grid, the commands and an estimate; --budget-min stops starting points after M minutes;
-    --lock DIR holds a mkdir lock for each point (or every N points) so window runs on one Mac take turns.
+    Each point (or every --lock-every N points) holds the window lock, so window runs on one Mac take turns: by default
+    the one every perfloop window run and PerfLoopHost bench takes ($PERFLOOP_LOCK, else /tmp/perfloop-window-UID.lock),
+    --lock DIR another, --no-lock none.
     walls: where each fitted curve crosses a budget (--budget-ms X, repeatable; default a 120 Hz and a 60 Hz frame for
     CPU per step, 100 ms for latency), marked inside, extrapolated (×k past the largest measured) or beyond (past 4×).
   perfloop sweep show DIR|sweep.json [--json]   a sweep's table and fits (also `perfloop explain sweep.json`)
@@ -54,7 +57,9 @@ enum SweepCommand {
     var o = SweepRun.Options(scenario: pos[0])
     o.fixture = one("fixture"); o.sets = flags["set"] ?? []
     if let r = one("reps") { guard let n = Int(r), n > 0 else { throw PLError.usage("--reps wants a positive number") }; o.reps = n }
-    o.objective = one("objective"); o.out = one("out"); o.budgetMin = try num("budget-min"); o.lock = one("lock")
+    o.objective = one("objective"); o.out = one("out"); o.budgetMin = try num("budget-min")
+    if flags["no-lock"] != nil { setenv(WindowLock.pathVariable, "off", 1) }    // nor the bench's own
+    o.lock = flags["no-lock"] != nil ? nil : one("lock") ?? WindowLock.defaultPath()
     o.budgetMs = try (flags["budget-ms"] ?? []).map { s in guard let x = Double(s), x > 0 else { throw PLError.usage("--budget-ms wants ms, not '\(s)'") }; return x }
     if let n = try num("lock-every") { o.lockEvery = max(1, Int(n)) }
     if let x = one("order") { guard ["shuffle", "grid"].contains(x) else { throw PLError.usage("--order is shuffle or grid") }; o.order = x }

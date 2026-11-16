@@ -28,7 +28,7 @@ swift build -c release --product SlowListBench
 perfloop doctor --bench .build/release/SlowListBench          # is this Mac and this bench ready?
 .build/release/SlowListBench run select --reps 1               # a window for ~3 s; where the main thread's time went
 ./walkthrough.sh --dry-run                                      # the whole loop on it, printed
-./walkthrough.sh --lock /tmp/window.lock                        # …and run (~5 min of builds, ~2 min of windows)
+./walkthrough.sh                                                # …and run (~5 min of builds, ~2 min of windows)
 ```
 
 The walkthrough stores the app as the champion, screens a knob (`rows.rank=index`), refuses a cheat (rows that draw
@@ -90,7 +90,7 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 | `doctor [--bench PATH]` | what would make numbers untrustworthy here, and the adapter's contract, each with its fix |
 | `init --app NAME [--dir D] [--package]` | scaffold a bench target and PROGRAM.md |
 | `describe --bench PATH` | the adapter's manifest |
-| `store add PATH` · `store import DIR --commit SHA` · `store list` · `store gc` | the content-addressed build store |
+| `store add PATH` · `store import DIR --commit SHA` · `store list` · `store gc [--traces]` | the content-addressed build store; gc also deletes `.trace` bundles left in it |
 | `champion` · `champion set BUILD --merged` · `champion merged SHA` | the build to beat, and its chain back to a merged commit |
 | `exp new "<hypothesis>" --bench P \| --build-cmd C --bench P \| --knobs k=v` | a candidate; screens it |
 | `exp status [ID]` · `exp screen ID` · `exp full ID` · `exp promote ID` · `exp abandon ID` | the experiment verbs |
@@ -101,11 +101,27 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 | `sweep SCENARIO --set rows=100..5000/500 [--budget-ms X]` | a cost curve over a fixture parameter or knob, with a fitted slope and where it crosses the frame (or your) budget: inside the measured range, extrapolated ×k, or not claimed past 4× |
 | `queue add ID` · `queue list` · `queue remove QID` · `queue run --runner R` · `runner check R` · `runner clean R` | runners: `local` (idle-gated), `ssh://host` |
 | `mcp [--app NAME]` | the loop as MCP tools for a coding agent, stages as jobs (§ Agents over MCP) |
-| `profile champion\|exp/ID [--template time\|hitches\|swiftui]` | the build under xctrace (opens a window): call trees per step, hitches, hangs, SwiftUI tables; kept in the store, never an objective |
+| `profile champion\|exp/ID [--template time\|hitches\|swiftui]` | the build under xctrace (opens a window): call trees per step, hitches, hangs, SwiftUI tables; kept in the store, never an objective. The trace is deleted afterwards (checked on disk) unless `--keep-trace` |
+| `lock -- CMD` · `lock` | run CMD holding the window lock (for windows outside perfloop's verbs); who holds it now |
 | `diff champion exp/ID` (or two profile JSONs / traces) · `trace register` | what grew and shrank between two builds, ms per step, main thread; refuses traces of other builds |
 | `gestures list` · `exp replay` | recorded and synthetic gestures; a past session as experiments |
 
 `perfloop help` has every flag. Exit codes: 0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner).
+
+### The owner's flags
+
+`--force` (a full over a rejected screen, or `queue run` without the idle gate), `--owner` (decide what waits for the
+owner), `--guard-tolerance` (loosen a guard) and `--allow-dirty` (promote a dirty build) override what judges the
+agent, so they are yours, never your agent's. The CLI honours one only when the shell shows it is yours:
+`PERFLOOP_OWNER=1` in the environment (scripts), or a yes typed at the prompt when stdin and stderr are a terminal.
+Anything else is refused (exit 6) with what the agent should do instead, and the refusal never names a way around it.
+
+This is a speed bump and a record, not security. An agent's shell usually has no terminal, so it never sees the
+prompt, but it can set an environment variable like anyone else. What makes a use visible is the record: every
+experiment an owner flag changed gets `forced: true` and `ownerFlags` (which flag, `env` or `tty`, the command, what it
+changed) in its `experiment.json`; its ledger lines carry `ownerFlags`/`ownerVia`; and the verdict, `explain`,
+`exp status` and `ledger` print `FORCED (owner flag)` / `OWNER FLAG --force (PERFLOOP_OWNER=1)`. Look for them in an
+agent's PR. Don't export `PERFLOOP_OWNER` in a shell profile your agents inherit: set it per command.
 
 ## Agents over MCP
 
@@ -119,10 +135,26 @@ claude mcp add perfloop -- /path/to/perfloop mcp --app myapp          # Claude C
 The tools are the agent's verbs (`status`, `explain`, `suggest`, `new_experiment`, `screen`, `full`, `promote`,
 `profile`, `diff`, `sweep`, …) with their schemas. A stage that builds or opens windows returns a job at once; `job`
 waits for it on the server's side (up to 60 s a call), so the agent never writes a sleep loop, and every job still
-running when the session ends is killed with its windows. Local runs hold a window lock (`--lock DIR`, default in the
-temporary directory). The owner's flags (`--force`, `--owner`, `--guard-tolerance`, `--allow-dirty`) are no tool's
-arguments, and no value may start with `-`. Job logs are in the store's `jobs/`. The shell CLI stays the reference;
+running when the session ends is killed with its windows. Local runs hold the window lock (§ The window lock;
+`mcp --lock DIR` moves it). The owner's flags (`--force`, `--owner`, `--guard-tolerance`, `--allow-dirty`) are no tool's
+arguments, no value may start with `-`, and the CLI children never see `PERFLOOP_OWNER`. Job logs are in the store's `jobs/`. The shell CLI stays the reference;
 the server runs it for every call.
+
+## The window lock
+
+Two bench windows on one Mac spoil each other's numbers, so window runs take turns at one lock, on by default: every
+perfloop verb that opens a window here (`exp new`/`screen`/`full`, `guards`, `profile`, `sweep`, `exp replay --go`,
+`queue run --runner local`) holds it around each rep, the MCP server's jobs too, and a PerfLoopHost bench's `run`,
+`profile` and `record-gesture` hold it for their whole run when started by hand. `perfloop lock -- CMD` holds it around
+anything else (an adapter's own `ab`, a script). It lives at `$PERFLOOP_LOCK`, else `/tmp/perfloop-window-UID.lock`
+(not `$TMPDIR`, which agents' sandboxes give each their own); `--lock DIR` takes another, `--no-lock` (or
+`PERFLOOP_LOCK=off`) none, for a Mac no other bench uses.
+
+It is a directory (mkdir is atomic) whose `owner` file says who holds it: `{"pid", "command", "label", "since"}`, the
+label from `PERFLOOP_LOCK_OWNER` or `perfloop lock --label`. A waiter prints the holder once and again when it changes;
+`perfloop lock` (and `doctor`) say who holds it now. A lock whose holder died (its pid gone, or reused since) is broken
+by the next taker, and ^C or a kill releases it. A holder exports `PERFLOOP_LOCK_HELD` to its children, so a bench run by
+perfloop, or perfloop run by `perfloop lock --`, doesn't wait for its own parent (ADAPTER.md §6b).
 
 ## A spare Mac as the runner
 
@@ -160,7 +192,9 @@ organisations) and an image: `tart clone ghcr.io/cirruslabs/macos-tahoe-vanilla:
 - The store: `${PERFLOOP_HOME:-~/.perfloop}/<app>/` (builds by sha256, experiments, `ledger.jsonl`, `champion.json`).
   Never in a repo; a project-local `.perfloop/` is gitignored.
 - Traces (`.trace`) carry the recorded process's environment, tokens included: never commit or share them; the store
-  records their paths only.
+  records their paths only. `perfloop profile` deletes each once exported and checks it is gone (`--keep-trace` keeps
+  it, and says where); `perfloop doctor` fails on one left in the store, and `perfloop store gc` deletes those
+  (`--traces`: the kept ones too).
 - Schemas: `ADAPTER.md` §8 lists every document and its version.
 
 ## The package

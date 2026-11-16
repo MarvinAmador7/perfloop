@@ -83,7 +83,8 @@ public struct RunnerOptions {
   public var acceptNewHostKey = false
   public var remoteEnv: [String: String] = [:]
   public var launch: String?
-  /// Local: a mkdir lock taken around each rep once the gate says go (window runs on one Mac take turns).
+  /// Local: the window lock taken around each rep once the gate says go (window runs on one Mac take turns). The CLI
+  /// sets it to `WindowLock.defaultPath()` unless `--no-lock`; nil takes none.
   public var lock: String?
   public init() {}
 }
@@ -102,9 +103,12 @@ public final class LocalRunner: Runner {
   public var waitLogEvery: Double = 600
   public var log: (String) -> Void = { _ in }
   public var onWait: (String) -> Void = { _ in }
-  /// A mkdir lock held only while a rep runs (`--lock DIR`, as `sweep --lock`): taken after the idle gate says go,
-  /// so a runner waiting for the owner to leave never blocks another bench window on this Mac.
+  /// The window lock (WindowLock), held only while a rep runs: taken after the idle gate says go, so a runner waiting
+  /// for the owner to leave never blocks another bench window on this Mac. nil: none (a library default; the CLI and
+  /// the MCP server always give one unless `--no-lock`).
   public var lockDir: String?
+  /// Seconds between tries at a held lock.
+  public var lockPoll: Double = 2
   public init() {}
 
   public var name: String { "local" }
@@ -124,7 +128,7 @@ public final class LocalRunner: Runner {
     guard let gate else {
       try checkDeadline()
       let held = try takeLock(); defer { held?() }
-      return try Child(exe, args, env: env).finish()
+      return try Child(exe, args, env: env.merging(WindowLock.childEnv) { a, _ in a }).finish()
     }
     var start: IdleReading, held: (() -> Void)?
     while true {
@@ -137,7 +141,7 @@ public final class LocalRunner: Runner {
       held?()
     }
     defer { held?() }
-    let child = try Child(exe, args, env: env)
+    let child = try Child(exe, args, env: env.merging(WindowLock.childEnv) { a, _ in a })
     var why: String?
     while child.running {
       Thread.sleep(forTimeInterval: poll)
@@ -156,18 +160,14 @@ public final class LocalRunner: Runner {
 
   func checkDeadline() throws { if let d = deadline, Date() >= d { throw RunnerStop.deadline(d) } }
 
-  /// Takes `lockDir` (mkdir; `owner` says who), returning its release; nil without a lock.
+  /// Takes the window lock at `lockDir` (WindowLock: waits for a live holder and says who it is, breaks a dead one's),
+  /// returning its release; nil without a lock.
   func takeLock() throws -> (() -> Void)? {
     guard let l = lockDir else { return nil }
-    var said = false
-    while (try? FileManager.default.createDirectory(atPath: l, withIntermediateDirectories: false)) == nil {
-      try checkDeadline()
-      if !said { let who = (try? String(contentsOfFile: l + "/owner", encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "?"; let t = "waiting: the window lock \(l) is held (\(who))"; log(t); onWait(t); said = true }
-      Thread.sleep(forTimeInterval: 2)
-    }
-    let who = ProcessInfo.processInfo.environment["PERFLOOP_LOCK_OWNER"].map { $0 + " " } ?? ""
-    try? "\(who)perfloop pid \(ProcessInfo.processInfo.processIdentifier)".write(toFile: l + "/owner", atomically: true, encoding: .utf8)
-    return { try? FileManager.default.removeItem(atPath: l) }
+    let lock: WindowLock
+    do { lock = try WindowLock.acquire(l, poll: lockPoll, log: { [self] t in log(t); onWait(t) }, check: checkDeadline) }
+    catch let f as WindowLock.Failure { throw PLError.harness(f.description) }
+    return { lock.release() }
   }
 
   /// Blocks until the gate says go; returns the reading it went on.

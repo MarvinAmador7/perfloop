@@ -173,7 +173,12 @@ profile)
   done
   log "profile $sc $fixture template=$tmpl knobs=$knobs out=$out"
   mkdir -p "$out"
+  # Like an adapter that implements `profile` itself and never deletes its trace (nor says so): the runner must.
+  mkdir -p "$out/$sc-$tmpl.trace"; echo "FAKE_TOKEN=secret" > "$out/$sc-$tmpl.trace/environment"
+  if [ -n "$FAKE_TRACE_STUCK" ]; then mkdir -p "$out/stuck.trace"; echo x > "$out/stuck.trace/environment"; chmod 555 "$out/stuck.trace"; fi
+  [ -n "$FAKE_PROFILE_FAIL" ] && exit 2
   echo "{ \"schema\": \"perfloop.profile/2\", \"template\": \"Time Profiler\", \"scenario\": \"$sc\", \"fixture\": \"$fixture\", \"process\": \"fake\", \"durationS\": 1,
+  \"trace\": \"$out/$sc-$tmpl.trace\", \"adapterField\": 1,
   \"notes\": [\"fake knobs=$knobs\"], \"build\": $(build "$self"), \"msPerStep\": $FAKE_CPU, \"tree\": { \"n\": \"main thread\", \"v\": 10 } }" > "$out/$sc-$tmpl.json"
   cat "$out/$sc-$tmpl.json"
   ;;

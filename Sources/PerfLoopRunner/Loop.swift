@@ -19,6 +19,11 @@ public final class Loop {
   public var env = ProcessInfo.processInfo.environment
   /// Who is acting, for the ledger: agent unless the owner said so (`--owner`).
   public var by = "agent"
+  /// The owner flags this run came with, past the CLI's gate (OwnerGate.swift); each one that changes an experiment's
+  /// course is recorded on it (`ownerFlags`, `forced`) and on its ledger lines.
+  public var owner: OwnerAuth?
+  var ownerMarked: [String: Set<String>] = [:]
+  let ownerAt = Clock.now()
   /// Guard parameters on top of the champion manifest's: only `perfloop guards --guard-tolerance` (the owner's) sets one.
   var guardOverride: [String: JSONValue] = [:]
   /// Where windowed reps run (C10, Runner.swift): this Mac, ungated, unless `--runner` / the queue says otherwise.
@@ -315,7 +320,7 @@ public final class Loop {
     var e = try store.experiment(id)
     // A VM's frames and counters aren't a panel's: it screens, and never decides (SPEC §4.2).
     if runner.name.hasPrefix("vm:") { throw PLError.refused("\(runner.name) screens and never decides a full (a guest's frame cadence and counters aren't hardware's): run the full on this Mac or a spare one") }
-    if e.state == .rejected && !force { throw PLError.refused("exp \(e.id) was rejected by its screen; --force to run a full anyway") }
+    if e.state == .rejected && !force { throw PLError.refused(OwnerFlags.rejectedScreen(e.id)) }
     // A screen the owner cleared of its snapshot review goes back to promising (perfloop guards --owner); the owner may
     // also run the full on a screen that still asks for review.
     guard [.promising, .full, .rejected].contains(e.state) || (e.state == .lost && force) || (e.state == .needsReview && e.full == nil && by == "owner") else {
@@ -323,7 +328,9 @@ public final class Loop {
       throw PLError.usage("exp \(e.id) is \(e.state.rawValue): screen it first")
     }
     let s = try sides(e), r = rule(e, s)
-    if e.state != .full { e.state = .full; try store.save(e); try store.ledger.append(LedgerEntry(experiment: e.id, state: ExpState.full.rawValue, build: e.build?.hash, by: by)) }
+    if force && [.rejected, .lost].contains(e.state) { ownerUsed(&e, "--force", "ran the full over a \(e.state == .rejected ? "screen that rejected it" : "full that lost")") }
+    if e.state == .needsReview && by == "owner" { ownerUsed(&e, "--owner", "ran the full on a screen that asks for review") }
+    if e.state != .full { e.state = .full; try store.save(e); try store.ledger.append(stamped(LedgerEntry(experiment: e.id, state: ExpState.full.rawValue, build: e.build?.hash, by: by))) }
     var st = Stage(metric: r.metric, pairs: [], verdict: "pending")
     for look in Acceptance.fullLooks {
       let ps = try pairs(e, stage: "full", fixture: e.fixture, count: look, sides: s, metric: r.metric)
@@ -399,20 +406,21 @@ public final class Loop {
     if let cand = try? store.entry(e.build?.hash ?? ""), let cm = cand.manifest, let km = cEntry.manifest, cm.contract != km.contract {
       ownerNeeded.append("the candidate's manifest changes scenarios, objectives, guards or fixtures (they are their own PR)")
     }
-    if !ownerNeeded.isEmpty && !o.owner { refusals.append("needs the owner (--owner): " + ownerNeeded.joined(separator: "; ")) }
+    if !ownerNeeded.isEmpty && !o.owner { refusals.append("it waits for the owner (" + ownerNeeded.joined(separator: "; ") + "): stop and ask them, with this experiment's explain.txt") }
     guard refusals.isEmpty else { throw PLError.refused("not promoted: " + refusals.joined(separator: "; ")) }
     guard let b = e.build else { throw PLError.usage("exp \(e.id) has no build") }
     let after = e.full.flatMap { $0.objective["b"] }.map(Stats.median)
     let next = c.succeeded(by: e.id, build: b, objectives: after.map { [e.scenario: $0] } ?? [:], knobs: e.knobs)
     try store.setChampion(next)
     e.state = .promoted; e.promotedAt = Clock.now(); e.pr = o.pr
-    if o.allowDirty && b.dirty { e.notes.append("promoted dirty (--allow-dirty)") }
+    if o.allowDirty && b.dirty { e.notes.append("promoted dirty (--allow-dirty)"); ownerUsed(&e, "--allow-dirty", "promoted a dirty build") }
+    if o.owner && !ownerNeeded.isEmpty { ownerUsed(&e, "--owner", "promoted what waited for the owner: " + ownerNeeded.joined(separator: "; ")) }
     if let k = e.knobs, !k.isEmpty { e.notes.append("knob debt (SPEC §7.6): bake \(Adapter.knobString(k)) in as the default and delete the knob in a follow-up, this phase") }
     e.notes.append("confirmation traces (profile --template hitches|time) are not recorded yet: run them on an idle Mac for the ledger")
     let before = e.full.flatMap { $0.objective["a"] }.map(Stats.median)
     try store.save(e)
-    try store.ledger.append(LedgerEntry(experiment: e.id, state: ExpState.promoted.rawValue, objective: .init(before: before, after: after), build: b.hash, by: o.owner ? "owner" : by,
-                                        note: "champion \(c.experiment) → \(e.id); chain \(next.chain)"))
+    try store.ledger.append(stamped(LedgerEntry(experiment: e.id, state: ExpState.promoted.rawValue, objective: .init(before: before, after: after), build: b.hash, by: o.owner ? "owner" : by,
+                                        note: "champion \(c.experiment) → \(e.id); chain \(next.chain)")))
     _ = explain(e)
     return e
   }
@@ -433,8 +441,8 @@ public final class Loop {
     let a = st.objective["a"] ?? [], b = st.objective["b"] ?? []
     e.explain = store.rel(store.expDir(e.id).appendingPathComponent("explain.txt"))
     try store.save(e)
-    try store.ledger.append(LedgerEntry(experiment: e.id, state: e.state.rawValue, objective: .init(before: a.isEmpty ? nil : Stats.median(a), after: b.isEmpty ? nil : Stats.median(b)),
-                                        build: e.build?.hash, by: by, note: "\(st.verdict): " + (st.reasons.first ?? ""), runner: st.runner))
+    try store.ledger.append(stamped(LedgerEntry(experiment: e.id, state: e.state.rawValue, objective: .init(before: a.isEmpty ? nil : Stats.median(a), after: b.isEmpty ? nil : Stats.median(b)),
+                                        build: e.build?.hash, by: by, note: "\(st.verdict): " + (st.reasons.first ?? ""), runner: st.runner)))
     _ = explain(e)
   }
 
@@ -463,7 +471,12 @@ public final class Loop {
     } else { o.append("no champion: perfloop champion set BUILD --merged") }
     let open = store.experiments().filter { !$0.state.terminal }
     o.append(open.isEmpty ? "no open experiments" : "open experiments:")
-    for e in open { o.append("  \(e.id) \(e.state.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(e.scenario)/\(e.fixture) \(e.hypothesis)\n      next: \(Explain.next(e))") }
+    for e in open {
+      o.append("  \(e.id) \(e.state.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(e.scenario)/\(e.fixture) \(e.hypothesis)\(e.forced == true ? " · FORCED (owner flag)" : "")\n      next: \(Explain.next(e))")
+    }
+    // Owner flags this session, closed experiments included: a forced run is never quiet.
+    let owned = store.ledger.currentSession().filter { !($0.ownerFlags ?? []).isEmpty }
+    for (i, l) in owned.enumerated() where !owned[(i + 1)...].contains(where: { $0.experiment == l.experiment }) { o.append("owner flag: " + l.text) }
     for s in Stopping.reasons(StopInput(session: store.ledger.currentSession())) { o.append("stop: " + s) }
     return o.joined(separator: "\n")
   }

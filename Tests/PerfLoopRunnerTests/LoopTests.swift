@@ -86,8 +86,13 @@ final class LoopTests: FakeBenchCase {
     var po = Loop.PromoteOptions(); po.allowDirty = true
     XCTAssertThrowsError(try loop.promote(dirty.id, po)) { XCTAssertTrue("\($0)".contains("behaviour change")) }
     po.owner = true
-    XCTAssertEqual(try loop.promote(dirty.id, po).state, .promoted)
+    loop.owner = OwnerAuth(flags: ["--owner", "--allow-dirty"], via: "env", command: "exp promote")
+    let promoted = try loop.promote(dirty.id, po)
+    XCTAssertEqual(promoted.state, .promoted)
     XCTAssertEqual(store.ledger.entries().last?.by, "owner")
+    XCTAssertEqual(promoted.ownerFlags?.map(\.flag), ["--allow-dirty", "--owner"]); XCTAssertEqual(promoted.forced, true)
+    XCTAssertEqual(store.ledger.entries().last?.ownerFlags, ["--allow-dirty", "--owner"])
+    XCTAssertTrue(loop.explain(promoted).contains("· FORCED (owner flag)"))
   }
 
   func testWorseOnTheSecondFixtureIsLost() throws {

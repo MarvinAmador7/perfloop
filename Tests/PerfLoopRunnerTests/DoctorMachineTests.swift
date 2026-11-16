@@ -13,6 +13,7 @@ final class DoctorMachineTests: XCTestCase {
     p.xctrace = { xctrace }; p.devTools = { devTools }
     p.idle = ScriptedIdleSource { IdleReading(idle: idle, frontmost: front, locked: locked) }
     p.freeBytes = { _ in free }; p.gitTop = { _ in git }; p.gitIgnored = { _ in ignored }; p.load = { load }
+    p.traces = { _ in [] }; p.windowLock = { _ in .free }
     return p
   }
   func report(_ p: MachineProbe, store: URL? = URL(fileURLWithPath: "/Users/me/.perfloop/notes")) -> Doctor.Report {

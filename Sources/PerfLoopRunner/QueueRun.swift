@@ -19,8 +19,9 @@ extension Loop {
     if let r = runner, RunnerSpec(r) == nil { throw PLError.usage("unknown runner '\(r)'") }
     let e = try store.experiment(exp)
     guard e.kind != "baseline" else { throw PLError.usage("exp \(e.id) is the baseline") }
-    if e.state.terminal { throw PLError.refused("exp \(e.id) is \(e.state.rawValue): nothing left to run") }
-    if e.state == .rejected && !force && stage != "screen" { throw PLError.refused("exp \(e.id) was rejected by its screen; --force queues its full anyway") }
+    // A rejected screen is terminal, but the owner may queue its full anyway (--force).
+    if e.state == .rejected && !force && stage != "screen" { throw PLError.refused(OwnerFlags.rejectedScreen(e.id)) }
+    if e.state.terminal && !(e.state == .rejected && force && stage != "screen") { throw PLError.refused("exp \(e.id) is \(e.state.rawValue): nothing left to run") }
     if stage == "full" && e.state == .built { throw PLError.usage("exp \(e.id) isn't screened: queue it with --stage auto (screen, then full when promising)") }
     let q = queue
     if let dup = q.items().first(where: { $0.experiment == e.id && ($0.state == "queued" || $0.state == "running") }) {
@@ -28,7 +29,9 @@ extension Loop {
     }
     let id = q.nextID()
     let name = runner.flatMap { RunnerSpec($0)?.name }
-    try q.append(QueueEvent(item: id, state: "queued", experiment: e.id, stage: stage, runner: name, note: note, force: force ? true : nil))
+    var ev = QueueEvent(item: id, state: "queued", experiment: e.id, stage: stage, runner: name, note: note, force: force ? true : nil)
+    if force { ev.forceVia = owner?.via ?? "library" }                  // the full it runs later records how --force was authorised
+    try q.append(ev)
     return q.items().first { $0.id == id }!
   }
 
@@ -100,15 +103,26 @@ extension Loop {
   }
 
   func runStage(_ it: QueueItem) throws -> Experiment {
+    // `queue run --force` (the owner's): this stage's reps start without the idle gate; say so on the experiment.
+    let ungated = owner.map { $0.command == "queue run" && $0.flags.contains("--force") } ?? false
+    if ungated { ownerMarked[it.experiment, default: []].insert("--force") }
     var e = try store.experiment(it.experiment)
+    // `queue add --force`: the full runs as the owner asked when they queued it (how they were authorised then).
+    let saved = owner
+    if it.force { owner = OwnerAuth(flags: ["--force"], via: it.forceVia ?? "unrecorded", command: "queue add --force") }
+    defer { owner = saved }
     switch it.stage {
-    case "screen": return try screen(e.id)
-    case "full": return try full(e.id, force: it.force)
+    case "screen": e = try screen(e.id)
+    case "full": e = try full(e.id, force: it.force)
     default:
       if e.screen == nil || ["error", "untrusted"].contains(e.screen?.verdict ?? "") { e = try screen(e.id) }
       if [.promising, .full].contains(e.state) || (it.force && e.state == .rejected) { e = try full(e.id, force: it.force) }
-      return e
     }
+    if ungated {
+      owner = saved
+      e = try store.experiment(e.id); ownerUsed(&e, "--force", "its reps started without the idle gate (queue run --force)"); try store.save(e); _ = explain(e)
+    }
+    return e
   }
 }
 

@@ -13,9 +13,14 @@ public struct ProfileDoc: Codable, Sendable, Equatable {
   /// The Instruments template's name ("Time Profiler", "Animation Hitches", "SwiftUI").
   public var template: String
   /// Where the trace was written. A trace holds the recorded process's environment: `traceKept` false means it was
-  /// deleted once its tables were exported (the default), and this path no longer exists.
+  /// deleted once its tables were exported (the default), and this path no longer exists; true, that it is on disk at
+  /// this path (`--keep-trace`, or a delete that failed: the notes say why). `perfloop profile` sets both from what it
+  /// finds on disk after the adapter returns.
   public var trace: String?
   public var traceKept: Bool?
+  /// `--keep-trace` was asked: a trace on disk is there on purpose (`doctor` warns about it), not left by a failed
+  /// delete (`doctor` fails on that).
+  public var keepTrace: Bool?
   public var scenario: String
   public var fixture: String
   /// The recorded process's name (the bench executable's): its binary's frames are "ours".
@@ -91,10 +96,19 @@ public struct ProfileDoc: Codable, Sendable, Equatable {
     signposts = c
   }
 
+  /// What is on disk of the trace, as whoever wrote `traceKept` last found it (the runner checks it after the adapter).
+  public var traceLine: String {
+    switch traceKept {
+    case true?: "trace: KEPT at \(trace ?? "?"): it holds the recorded process's environment, tokens included: never commit or share it; delete it once read (perfloop store gc --traces)"
+    case false?: "trace: deleted"
+    case nil: "trace: not reported (the adapter didn't say whether it kept one)"
+    }
+  }
+
   /// The profile as text: hitches, hangs, the SwiftUI tables, the call tree, the notes.
   public var text: String {
     var o = ["profile \(scenario) on \(fixture) · \(template) · \(Int(durationS)) s · \(build?.line ?? "unstamped")"]
-    o.append(traceKept == true ? "trace: \(trace ?? "?") (holds the recorded process's environment: never commit or share it)" : "trace: deleted after export (--keep-trace keeps it)")
+    o.append(traceLine)
     if let h = hitches {
       if h.hitches > 0 || template == "Animation Hitches" {
         o.append("hitches: \(h.hitches) (total \(h.totalMs) ms, max \(h.maxMs) ms, ≥16 ms: \(h.over16Ms))")

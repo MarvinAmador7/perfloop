@@ -131,8 +131,16 @@ shows the window and writes `FILE.waiting`, `xctrace record --attach PID` attach
 xctrace says it is recording, the child runs its reps and writes `FILE.done`, and the recording is stopped with SIGINT,
 so every step is inside it. Every `run.step` is a `step` signpost (subsystem `dev.perfloop.bench`, Points of Interest),
 which is what the per-step trees are cut on. The trace is deleted once exported unless `--keep-trace` (it holds the
-recorded process's environment). The document adds, to SCHEMAS.md §4: `traceKept`, `os` and `model` (from the trace's
-TOC), `knobs`, `treeInSteps` (what `diff` compares), and `inProcess` (the run's own `perfloop.result/2`, `profiled: true`).
+recorded process's environment); a delete that fails leaves `traceKept: true` and a note, never a claim that it is gone.
+The document adds, to SCHEMAS.md §4: `traceKept` (whether the trace is on disk at `trace`), `keepTrace` (it is there on
+purpose), `os` and `model` (from the trace's TOC), `knobs`, `treeInSteps` (what `diff` compares), and `inProcess` (the
+run's own `perfloop.result/2`, `profiled: true`).
+
+Whatever the adapter does with its trace, `perfloop profile` checks the disk afterwards: it deletes every `.trace` under
+`--out DIR` (and the one the document's `trace` names) unless `--keep-trace`, checks each is gone, and rewrites
+`traceKept`/`trace`/`keepTrace` in the document to what it found, so its `trace:` line ("deleted", or "KEPT at PATH") is
+what is on disk. Write the trace under `--out DIR`, so the runner finds it. While recording into the store, a `.recording`
+file in the folder holding your pid keeps `perfloop store gc` and `doctor` off the trace (PerfLoopHost writes one).
 
 `diff A B --json [--champion BUILD] [--allow-stale] [--allow-cross-os] [--per step|run]`: A and B are profile JSONs or
 `.trace` files; prints `perfloop.diff/1` (SCHEMAS.md §5), exit 6 when provenance refuses. Called by `perfloop diff`,
@@ -150,6 +158,18 @@ window and records a hand's gestures over it (a local event monitor: deltas, pha
 `${PERFLOOP_HOME:-~/.perfloop}/APP/gestures/NAME.json`, where `perfloop gestures list` looks; it refuses a path inside a
 git checkout. `gestures [--json]` lists the built-in ones.
 
+## 6b. The window lock
+
+Two windows on one Mac spoil each other's numbers. A bench verb that opens a window when someone runs it directly (`run`,
+`ab`, `profile`, `record-gesture`) should hold the window lock for its whole run: mkdir the directory `$PERFLOOP_LOCK`
+(else `/tmp/perfloop-window-UID.lock`, UID the numeric user id; `PERFLOOP_LOCK=off`: none), retrying every 2 s while it
+exists, then write `owner` in it, `{"pid": PID, "command": "the command line", "label": "$PERFLOOP_LOCK_OWNER", "since":
+"<ISO 8601>"}`, export `PERFLOOP_LOCK_HELD=<its path>` to your children, and remove the directory on exit and on
+SIGINT/SIGTERM. Two rules keep it from deadlocking or sticking: when `PERFLOOP_LOCK_HELD` names a lock whose owner's pid is
+alive, you are inside that hold (perfloop runs you while holding it): take nothing; and a lock whose owner's pid is dead
+may be broken (moved aside and removed). PerfLoopHost does all of this (`--lock DIR` moves it, `--no-lock` skips it); an
+adapter that can't can be wrapped instead: `perfloop lock -- BENCH ab …`.
+
 ## 7. Exit codes
 
 0 ok · 1 usage · 2 harness error · 3 budget/check/guard failed · 4 regression beyond noise · 5 untrusted (never decides) ·
@@ -166,7 +186,7 @@ git checkout. `gestures [--json]` lists the built-in ones.
 | `perfloop.experiment`, `perfloop.ledger`, `perfloop.champion` | 1 | runner (store) | stable since Phase 2 |
 | `perfloop.sweep`, `perfloop.queue`, `perfloop.gesture`, `perfloop.gestures` | 1 | runner / probe | stable since Phase 3–4; `perfloop.sweep` gained `walls` (2026-11) |
 | `perfloop.doctor` | 1 | runner `doctor --json` | new |
-| `perfloop.profile` | 2 | adapter `profile` | fields only added; PerfLoopHost's adds `traceKept`, `os`, `model`, `knobs`, `treeInSteps`, `inProcess` (2026-11) |
+| `perfloop.profile` | 2 | adapter `profile` | fields only added; PerfLoopHost's adds `traceKept`, `os`, `model`, `knobs`, `treeInSteps`, `inProcess` (2026-11), `keepTrace` (2026-11; the runner sets it and `traceKept` from the disk) |
 | `perfloop.diff` | 1 | adapter `diff` | stable |
 
 Within a version a field is never renamed or removed, only added; a reader of version n reads n−1.
