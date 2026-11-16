@@ -160,7 +160,10 @@ Every pair and stage records where it ran (C10): `"runner": { "runner": "local" 
 "model": "Mac16,11", "host": "spare-mac", "os": "26.6.2" }`. A pair without one predates runners and counts as
 `local` on the store's Mac. A stage never mixes runners (acceptance says `error`; resuming a stage on another runner is
 refused, exit 6). A pair the local runner aborted on input has `"interrupted": true` (never judged); the pair that
-replaced it has `"interruptions": N`.
+replaced it has `"interruptions": N`. A pair redone once (it failed, or a rep was untrusted) says why in `"redone"`.
+Each side records what its trust was judged on, when the adapter said: `"trustworthy"` and `"windowFailed": ["keyWindow"]`,
+`"exit"`, `"quiet"`, `"busyPct"`, `"busy"`. A stage with untrusted reps has `"untrusted": "4/6 reps untrusted: …"`, and its
+verdict is `"untrusted"` when the pairs it needs are (ADAPTER.md §3, Trust).
 `champion.json`: `{ "schema": "perfloop.champion/1", "experiment": "0007", "build": { … }, "merged": false,
 "parents": ["0005", "0002"], "mergedAncestor": "9bcd41a", "objectives": { "step": 16.9, "switch": 153.2 }, "since": "…" }`.
 `parents` is the chain of earlier champions back to the newest merged one, and `mergedAncestor` is that merged commit,

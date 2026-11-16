@@ -79,6 +79,30 @@ import PerfLoopProbe
     XCTAssertEqual(Readings.sides(run: v, metric: "latencyMs")[0].objective, Stats.median([30, 50]))
   }
 
+  /// A key child window (a palette panel, a popover, a sheet) of the bench window counts as the window being key; any
+  /// other window doesn't. Plain objects stand in for windows: `owns` only follows the parent chain.
+  func testAKeyChildWindowCountsAsKey() throws {
+    final class W { var parent: W?; init(_ p: W? = nil) { parent = p } }
+    let bench = W(), panel = W(bench), popover = W(panel), other = W()
+    XCTAssertTrue(WindowState.owns(bench, key: bench, parent: { $0.parent }))
+    XCTAssertTrue(WindowState.owns(bench, key: panel, parent: { $0.parent }))
+    XCTAssertTrue(WindowState.owns(bench, key: popover, parent: { $0.parent }), "at any depth")
+    XCTAssertFalse(WindowState.owns(bench, key: other, parent: { $0.parent }))
+    XCTAssertFalse(WindowState.owns(bench, key: nil, parent: { $0.parent }))
+    let loop = W(); loop.parent = loop
+    XCTAssertFalse(WindowState.owns(bench, key: loop, parent: { $0.parent }), "a cycle ends")
+
+    // Reported key, with the child flagged; the runner reads it as trusted.
+    let w = WindowState(appActive: true, keyWindow: true, visible: true, occluded: false, frame: [], backingScale: 2, keyWindowIsChild: true)
+    let v = try PLJSON.decode(JSONValue.self, from: Data(PLJSON.encode(w).utf8))
+    XCTAssertEqual(v["keyWindowIsChild"]?.bool, true)
+    XCTAssertNil(try PLJSON.decode(JSONValue.self, from: Data(PLJSON.encode(WindowState(appActive: true, keyWindow: true, visible: true, occluded: false, frame: [], backingScale: 2)).utf8))["keyWindowIsChild"])
+    let side = Readings.sides(run: .object(["reps": .array([.object(["cpuMsPerStep": .number(1), "window": v])])]), metric: "mainThreadCpuMsPerStep")
+    XCTAssertEqual(side.first?.trustworthy, true)
+    // The fields that failed, named as the runner names them.
+    XCTAssertEqual(WindowState(appActive: true, keyWindow: false, visible: true, occluded: true, frame: [], backingScale: 2).failed, ["keyWindow=false", "occluded=true"])
+  }
+
   // MARK: the command line, headless
 
   enum Pick: String, KnobValue, CaseIterable { case sort, index

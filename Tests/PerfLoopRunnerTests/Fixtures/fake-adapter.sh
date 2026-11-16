@@ -24,6 +24,11 @@ FAKE_SLEEP=0
 FAKE_VERBS=
 FAKE_HASH=
 FAKE_OBJECTIVE=mainThreadCpuMsPerStep
+FAKE_QUIET=true
+FAKE_BUSY=6.9
+FAKE_KEY=true
+FAKE_RUN_EXIT=0
+FAKE_NORUNS=0
 
 self="$0"
 log() { if [ -n "$FAKE_LOG" ]; then echo "$*" >> "$FAKE_LOG"; fi; }
@@ -113,7 +118,12 @@ ab)
   summ() { echo "{ \"reps\": 1, \"objective\": { \"name\": \"mainThreadCpuMsPerStep\", \"value\": $2 }, \"mainThreadCpuMsPerStep\": { \"n\": 1, \"median\": $2 },
     \"hitchTimeRatioMsPerS\": { \"median\": $(val "$1" FAKE_HITCH) }, \"longestStretchMs\": { \"median\": 40 }, \"steadyHz\": { \"median\": $(val "$1" FAKE_HZ) },
     \"lateFrames\": { \"median\": $(val "$1" FAKE_LATE) }, \"checksFailed\": [ $(checks "$1" "$sc") ], \"aNewField\": { \"x\": 1 } }"; }
-  json="{ \"schema\": \"deskbench.ab/1\", \"scenario\": \"$sc\", \"fixture\": \"$fixture\", \"a\": \"$a\", \"b\": \"$b\", \"repsPerSide\": 1,
+  # deskbench's runs[]: each process's exit and the machine before it (FAKE_QUIET, FAKE_BUSY, FAKE_RUN_EXIT of that build;
+  # FAKE_ENV_QUIET in the environment, the machine for every build).
+  run_of() { echo "{ \"pair\": 0, \"side\": \"$2\", \"position\": 1, \"busyPct\": $(val "$1" FAKE_BUSY), \"builds\": [\"swift-build\"], \"waitedS\": 10, \"quiet\": ${FAKE_ENV_QUIET:-$(val "$1" FAKE_QUIET)}, \"exit\": $(val "$1" FAKE_RUN_EXIT) }"; }
+  runs="\"runs\": [ $(run_of "$a" A), $(run_of "$b" B) ],"
+  if [ "$(val "$a" FAKE_NORUNS)" = 1 ]; then runs=""; fi
+  json="{ \"schema\": \"deskbench.ab/1\", \"scenario\": \"$sc\", \"fixture\": \"$fixture\", \"a\": \"$a\", \"b\": \"$b\", \"repsPerSide\": 1, $runs
   \"summaryA\": $(summ "$a" "$ca"), \"summaryB\": $(summ "$b" "$cb"), \"comparison\": [], \"failures\": [], \"regression\": false, \"improvement\": false,
   \"objective\": \"mainThreadCpuMsPerStep\", \"guardsFailed\": [], \"notes\": [], \"buildA\": $(build "$a"), \"buildB\": $(build "$b"), \"counterbalanced\": true,
   \"guardsA\": $(guards "$a" "$sc" "$PERFLOOP_ARTIFACTS/A"), \"guardsB\": $(guards "$b" "$sc" "$PERFLOOP_ARTIFACTS/B") }"
@@ -138,12 +148,13 @@ run)
               "mainThread": { "cpuMs": $total, "longestMs": 40 }, "bodies": {},
               "checks": [ { "name": "landed", "pass": $landed, "detail": "" }, { "name": "isolation-still", "pass": $iso, "detail": "" } ],
               "guards": $(guards "$self" "$sc" "$PERFLOOP_ARTIFACTS"),
-              "window": { "appActive": true, "keyWindow": true, "visible": true, "occluded": false },
+              "window": { "appActive": true, "keyWindow": $FAKE_KEY, "visible": true, "occluded": false }, "quiet": ${FAKE_ENV_QUIET:-$FAKE_QUIET}, "busyPct": $FAKE_BUSY,
               "worstStretches": [ { "step": "step#3 9→12", "durationMs": 40, "cpuMs": 39, "bodies": {},
                                     "topOurs": [ { "symbol": "ReelView.slide", "samples": 30 } ],
                                     "topFramework": [ { "symbol": "LayoutEngineBox.sizeThatFits", "samples": 36, "under": "ReelRepresentable" } ] } ] } ],
-  "summary": { "reps": 1 }, "verdict": "pass", "exitCode": 0 }
+  "summary": { "reps": 1 }, "verdict": "pass", "exitCode": $FAKE_RUN_EXIT }
 JSON
+  exit "$FAKE_RUN_EXIT"
   ;;
 snapdiff)
   a=$1; b=$2; shift 2; tol=0.005; out=""

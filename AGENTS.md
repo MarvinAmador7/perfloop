@@ -74,9 +74,13 @@ window (a bench's own `ab` or `run` from an adapter that isn't PerfLoopHost, a s
 `perfloop lock -- <command>`. Set `PERFLOOP_LOCK_OWNER=<your name>` so others see who waits on whom. A waiter prints
 the holder (`waiting: the window lock /tmp/perfloop-window-501.lock is held by pid 71104 (perfloop exp screen 0003)
 "palette", since …`); `perfloop lock` alone says who holds it now. A holder that died is broken by the next taker; never
-remove a live holder's lock, and never make one by hand with `mkdir` (it says nobody's name and is never broken). A run on a locked screen, in the background or under a
-profiler is **untrusted** and never decides; rerun it, don't explain it away. `perfloop doctor` says what would make
-this Mac's numbers untrustworthy.
+remove a live holder's lock, and never make one by hand with `mkdir` (it says nobody's name and is never broken).
+
+A run on a locked screen, in the background, on a busy Mac or under a profiler is **untrusted** and never decides: a
+stage that needed it says `UNTRUSTED` with how many reps and why, and is neither rejected nor lost. Rerun it when the
+Mac is quiet (only the untrusted pairs run again), don't explain it away; when its `next:` says a rerun won't help (one
+side's window is wrong the same way every time), do what it says instead. `perfloop doctor` says what would make this
+Mac's numbers untrustworthy.
 
 Over MCP (`perfloop mcp`), the same verbs are tools: a stage returns a job, and `job` waits for it on the server's side,
 so never poll with `sleep`; the session's end stops its jobs.
