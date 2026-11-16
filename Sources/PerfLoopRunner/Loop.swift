@@ -233,7 +233,7 @@ public final class Loop {
       var p = try measure(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric, scenario: scenario)
       guard p.interrupted == true, n < maxRedo else { if n > 0 { p.interruptions = n }; return p }
       n += 1
-      log("exp \(e.id) \(stage) pair \(i + 1): interrupted by input; redoing it (\(n))")
+      log("exp \(e.id) \(stage) pair \(i + 1): interrupted (input, or the screen locked); redoing it (\(n))")
     }
   }
 
@@ -254,14 +254,17 @@ public final class Loop {
     }
     if e.via == "run" {
       var got: [String: JSONValue] = ["order": .string(order)]
+      var machines: [String: MachineState] = [:]
       var failure: String?
       for (label, entry, knobs) in first ? [("a", s.champion, s.championKnobs), ("b", s.candidate, s.candidateKnobs)] : [("b", s.candidate, s.candidateKnobs), ("a", s.champion, s.championKnobs)] {
         let o = try Adapter(exe: entry.executable, runner: runner, workDir: dir).run(scenario: sc, fixture: fixture, params: sc == e.scenario ? params : [:], knobs: knobs, env: guardEnv(g, dir: pdir.appendingPathComponent(label)))
         if o.status == interruptedStatus { return interrupted() }
+        machines[label] = o.machine
         if let v = o.json, ok.contains(o.status) { got[label] = v } else { failure = "\(label == "a" ? "champion" : "candidate") run exited \(o.status)"; break }
       }
       try PLJSON.write(JSONValue.object(got), path: raw.path)
-      let a = got["a"].flatMap { Readings.sides(run: $0, metric: metric).first }, b = got["b"].flatMap { Readings.sides(run: $0, metric: metric).first }
+      var a = got["a"].flatMap { Readings.sides(run: $0, metric: metric).first }, b = got["b"].flatMap { Readings.sides(run: $0, metric: metric).first }
+      Self.stamp(&a, machines["a"]); Self.stamp(&b, machines["b"])
       var p = Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure ?? (a == nil || b == nil ? "no result" : nil))
       judgeSnapshots(&p, g, dir: pdir, sides: s)
       return p
@@ -274,16 +277,26 @@ public final class Loop {
     guard let v, ok.contains(o.status) else { return Pair(index: i, order: order, result: store.rel(raw), a: Side(objective: nil), b: Side(objective: nil), failure: "ab exited \(o.status)") }
     if !FileManager.default.fileExists(atPath: raw.path) { try PLJSON.write(v, path: raw.path) }
     let cl = first ? "A" : "B", dl = first ? "B" : "A"
-    let a = Readings.sides(ab: v, label: cl, metric: metric).first, b = Readings.sides(ab: v, label: dl, metric: metric).first
+    var a = Readings.sides(ab: v, label: cl, metric: metric).first, b = Readings.sides(ab: v, label: dl, metric: metric).first
+    // One `ab` call is one gate: both sides started on the machine it saw.
+    Self.stamp(&a, o.machine); Self.stamp(&b, o.machine)
     var failure: String? = Readings.failures(ab: v).first.map { "ab: \($0)" }
     // The adapter says which binaries it ran: they must be the store's.
     for (label, want) in [(cl, s.champion.build.hash), (dl, s.candidate.build.hash)] {
       if let got = Readings.build(ab: v, label: label)?.hash, let want, got != want { failure = "ab ran \(Build.short(got)) as \(label), the store has \(Build.short(want))" }
     }
-    if a?.objective == nil || b?.objective == nil, failure == nil { failure = "the ab output has no \(metric) (an adapter older than the objective: use --via run)" }
+    if a?.objective == nil || b?.objective == nil, a?.noFrames != true, b?.noFrames != true, failure == nil { failure = "the ab output has no \(metric) (an adapter older than the objective: use --via run)" }
     var p = Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure)
     judgeSnapshots(&p, g, dir: pdir, sides: s)
     return p
+  }
+
+  /// The runner's reading of the machine when a side's rep started (the quiet gate) onto the side: `quiet` is false
+  /// when either the runner or the adapter saw a busy machine.
+  static func stamp(_ s: inout Side?, _ m: MachineState?) {
+    guard let m, s != nil else { return }
+    s!.machine = m
+    s!.quiet = m.quiet && s!.quiet != false
   }
 
   // MARK: screen, full, promote

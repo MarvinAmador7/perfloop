@@ -10,6 +10,30 @@ import CoreGraphics
 /// Where the idle gate's readings come from.
 public protocol IdleSource {
   func read() -> IdleReading
+  /// Only whether the screen is locked: what the runner watches during an ungated rep (cheaper than a full reading).
+  func readLocked() -> Bool?
+}
+
+extension IdleSource {
+  public func readLocked() -> Bool? { read().locked }
+}
+
+/// Where the quiet gate's readings come from: how busy the machine is with other work.
+public protocol LoadSource {
+  func readLoad() -> LoadReading
+}
+
+/// This machine (HostLoad): the cores' busy share over half a second, and `ps`.
+public struct HostLoadSource: LoadSource {
+  public init() {}
+  public func readLoad() -> LoadReading { HostLoad.read() }
+}
+
+/// A closure, for tests.
+public struct ScriptedLoadSource: LoadSource {
+  let f: () -> LoadReading
+  public init(_ f: @escaping () -> LoadReading) { self.f = f }
+  public func readLoad() -> LoadReading { f() }
 }
 
 /// This Mac: IOKit `IOHIDSystem`'s `HIDIdleTime` (ns since the last keyboard, mouse or trackpad event), the screen lock
@@ -22,6 +46,14 @@ public struct HIDIdleSource: IdleSource {
     return IdleReading(idle: Self.hidIdleSeconds(), frontmost: Self.frontmostApp(), locked: Self.screenLocked())
     #else
     return IdleReading(idle: nil)
+    #endif
+  }
+
+  public func readLocked() -> Bool? {
+    #if canImport(IOKit) && canImport(CoreGraphics)
+    return Self.screenLocked()
+    #else
+    return nil
     #endif
   }
 
@@ -50,13 +82,18 @@ public struct HIDIdleSource: IdleSource {
 }
 
 /// The testing hook (`--idle-from FILE`, `PERFLOOP_IDLE_FROM`): the reading is the file's text, read afresh each poll
-/// (`idle=130 frontmost=Xcode locked=0`, or seconds). A missing file reads as unknown.
-public struct FileIdleSource: IdleSource {
+/// (`idle=130 frontmost=Xcode locked=0`, or seconds; the quiet gate's `load=35 busy=swift-frontend:98`). A missing
+/// file reads as unknown.
+public struct FileIdleSource: IdleSource, LoadSource {
   public let path: String
   public init(path: String) { self.path = path }
   public func read() -> IdleReading {
     guard let t = try? String(contentsOfFile: path, encoding: .utf8) else { return IdleReading(idle: nil) }
     return IdleReading(text: t)
+  }
+  public func readLoad() -> LoadReading {
+    guard let t = try? String(contentsOfFile: path, encoding: .utf8) else { return LoadReading(busyPct: nil) }
+    return LoadReading(text: t)
   }
 }
 

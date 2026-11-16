@@ -66,6 +66,14 @@ seconds to minutes. Run them only when the owner says the Mac is free, with the 
 profiler is **untrusted** and never decides; rerun it, don't explain it away. `perfloop doctor` says what would make
 this Mac's numbers untrustworthy.
 
+Local runs never start a rep on a locked screen: the runner waits for the unlock (`--no-wait` stops instead; finished
+pairs are kept), and a rep during which the screen locks is redone. A rep that presented no frames has no frame
+metrics (never a perfect 0) and never decides: `unusable: no frames … screen locked or window off-screen`. Before each
+rep the runner also waits up to 60 s (`--quiet-timeout S`) for a quiet machine: at most 30 % of the cores busy
+(`--max-load PCT`) and no build or test run going. Then the rep runs anyway and its side of the pair says
+`"quiet": false`, with what was busy under `machine`; `--require-quiet` stops instead. So don't build or test while a
+stage runs, and read `waiting … for a quiet machine: building: swift-frontend` as "my own build is the noise".
+
 Over MCP (`perfloop mcp`), the same verbs are tools: a stage returns a job, and `job` waits for it on the server's side,
 so never poll with `sleep`; the session's end stops its jobs.
 

@@ -38,10 +38,16 @@ public protocol Runner: AnyObject {
 public enum RunnerStop: Error, CustomStringConvertible {
   case deadline(Date)
   case signal(Int32)
+  /// `--no-wait`: the screen was locked, so no rep started.
+  case locked
+  /// `--require-quiet`: the machine stayed busy past the quiet timeout, so no rep started.
+  case notQuiet(waited: Double, why: String)
   public var description: String {
     switch self {
     case .deadline(let d): "reached --until \(Clock.iso(d)) before the next rep"
     case .signal(let s): "stopped by signal \(s)"
+    case .locked: "the screen is locked: a window behind the lock screen is never active, so every rep would be untrusted; no rep started (--no-wait). Unlock it and run the same command again (without --no-wait the runner waits for the unlock); finished pairs are kept"
+    case .notQuiet(let w, let why): "the machine wasn't quiet after \(Int(w)) s (\(why)); no rep started (--require-quiet). Run the same command again once that work is done (finished pairs are kept), or leave out --require-quiet to run and record the reps as not quiet"
     }
   }
 }
@@ -57,8 +63,10 @@ public enum Runners {
     case .local:
       let r = LocalRunner()
       if !o.force { r.gate = IdleGate(threshold: o.idle ?? 120, busyApps: o.busyApps ?? IdleGate.defaultBusyApps) }
-      if let f = o.idleFrom { r.idle = FileIdleSource(path: f) }
+      if let f = o.idleFrom { let src = FileIdleSource(path: f); r.idle = src; r.load = src }
       r.lockDir = o.lock
+      r.waitWhileLocked = !o.noWait
+      r.quiet = o.quiet
       return r
     case .ssh(let user, let host, let port, let root):
       let r = SSHRunner(spec: s, user: user, host: host, port: port, root: root, store: store)
@@ -85,6 +93,10 @@ public struct RunnerOptions {
   public var launch: String?
   /// Local: a mkdir lock taken around each rep once the gate says go (window runs on one Mac take turns).
   public var lock: String?
+  /// Local: refuse (`RunnerStop.locked`) instead of waiting while the screen is locked (`--no-wait`).
+  public var noWait = false
+  /// Local: the quiet gate (`--max-load`, `--quiet-timeout`, `--require-quiet`); on by default, nil turns it off.
+  public var quiet: QuietGate? = QuietGate()
   public init() {}
 }
 
@@ -92,9 +104,24 @@ public struct RunnerOptions {
 
 /// This Mac. Ungated (`--force`, and `exp screen/full` without `--idle`), or idle-gated: a rep starts only once nobody
 /// has touched the Mac for the threshold, and is aborted (killed with its children, status 7) when input arrives.
+/// Either way, no rep starts while the screen is locked (a window behind the lock screen never draws: the rep would be
+/// untrusted and its frame metrics empty): the runner waits for the unlock, or with `--no-wait` refuses; a rep during
+/// which the screen locks is aborted and redone. And with the quiet gate (on by default) a rep waits, up to its
+/// timeout, for the machine to be quiet, and records what it saw on the rep (`Adapter.Output.machine`).
 public final class LocalRunner: Runner {
   public var gate: IdleGate?
   public var idle: IdleSource = HIDIdleSource()
+  /// false (`--no-wait`): a locked screen stops the run (`RunnerStop.locked`) instead of being waited out.
+  public var waitWhileLocked = true
+  /// Seconds between screen-lock readings while waiting for the unlock.
+  public var lockPoll = 5.0
+  /// The quiet gate: nil, no load check (the library's default; the CLI always sets one).
+  public var quiet: QuietGate?
+  public var load: LoadSource = HostLoadSource()
+  /// Seconds between load readings while waiting for quiet (each reading also samples for half a second).
+  public var quietPoll = 0.5
+  /// A wait for quiet timed out since the last quiet start: later waits are short (QuietGate.retryTimeout).
+  var quietTimedOut = false
   public var deadline: Date?
   /// Seconds between idle readings, waiting and during a rep.
   public var poll = 0.5
@@ -121,37 +148,92 @@ public final class LocalRunner: Runner {
 
   public func run(_ exe: String, _ args: [String], env: [String: String], workDir: URL) throws -> Adapter.Output {
     try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
-    guard let gate else {
-      try checkDeadline()
-      let held = try takeLock(); defer { held?() }
-      return try Child(exe, args, env: env).finish()
-    }
-    var start: IdleReading, held: (() -> Void)?
+    var start: IdleReading, held: (() -> Void)?, machine: MachineState?
     while true {
-      start = try waitForIdle(gate)
+      try waitForUnlock()
+      if let gate { start = try waitForIdle(gate) } else { try checkDeadline(); start = idle.read() }
       held = try takeLock()
-      guard held != nil else { break }
-      // The wait for the lock may have taken a while: still idle, or give the lock back and wait again.
+      // After the window lock: another bench's window running here is a wait for the lock, not noise to time out on.
+      if let q = quiet { machine = try waitForQuiet(q) }
+      guard held != nil || (machine?.waitedS ?? 0) > 0 else { break }
+      // The waits for the lock and for quiet may have taken a while: still unlocked and idle, or give the lock back and
+      // wait again.
       let now = idle.read()
-      if gate.wait(now) == nil { start = now; break }
-      held?()
+      if now.locked != true, gate?.wait(now) == nil { start = now; break }
+      held?(); held = nil
     }
     defer { held?() }
     let child = try Child(exe, args, env: env)
     var why: String?
     while child.running {
-      Thread.sleep(forTimeInterval: poll)
-      let now = idle.read()
-      if let w = gate.interrupted(previous: start, now: now) { why = w; break }
-      if now.idle != nil { start = now }
+      Thread.sleep(forTimeInterval: gate == nil ? max(poll, 1) : poll)
+      guard child.running else { break }
+      if let gate {
+        let now = idle.read()
+        if let w = gate.interrupted(previous: start, now: now) { why = w; break }
+        if now.idle != nil { start = now }
+      } else if readLockedNow(), start.locked != true {
+        // Ungated, only the lock is watched: the rest of the rep would draw nothing.
+        why = "the screen locked during the rep"; break
+      }
     }
     if let w = why {
       log("interrupted: \(w); the rep is killed and redone")
       onWait("interrupted: \(w)")
       child.kill()
-      return Adapter.Output(status: interruptedStatus, stdout: child.finish().stdout)
+      return Adapter.Output(status: interruptedStatus, stdout: child.finish().stdout, machine: machine)
     }
-    return child.finish()
+    var o = child.finish()
+    o.machine = machine
+    return o
+  }
+
+  func readLockedNow() -> Bool { idle.readLocked() == true }
+
+  /// Blocks while the screen is locked (whether or not the runner is idle-gated), or with `--no-wait` stops the run.
+  func waitForUnlock() throws {
+    var said = false
+    while readLockedNow() {
+      guard waitWhileLocked else { throw RunnerStop.locked }
+      if !said {
+        let t = "waiting: the screen is locked: a window behind the lock screen is never active (unlock it; --no-wait stops instead of waiting)"
+        log(t); onWait(t); said = true
+      }
+      try checkDeadline()
+      Thread.sleep(forTimeInterval: lockPoll)
+    }
+    if said { log("the screen is unlocked: starting the rep") }
+  }
+
+  /// Waits, up to the gate's timeout, for the machine to be quiet; returns what the rep starts on (nil: the load
+  /// can't be read here). A rep that starts busy says so (log, `onWait`, and `quiet: false` on the rep); with
+  /// `--require-quiet` the run stops instead.
+  func waitForQuiet(_ q: QuietGate) throws -> MachineState? {
+    let t0 = Date(), limit = quietTimedOut ? min(q.timeout, q.retryTimeout) : q.timeout
+    var said = false
+    while true {
+      let r = load.readLoad()
+      if r.unknown { return nil }
+      let waited = Date().timeIntervalSince(t0)
+      guard let why = q.busy(r) else {
+        if said { log("quiet after \(Int(waited)) s: starting the rep") }
+        quietTimedOut = false
+        return q.state(r, waited: waited)
+      }
+      if waited >= limit {
+        if q.require { throw RunnerStop.notQuiet(waited: waited, why: why) }
+        let t = "not quiet after \(Int(waited)) s (\(why)): the rep runs anyway and is recorded as not quiet (quiet: false)"
+        log(t); onWait(t)
+        quietTimedOut = true
+        return q.state(r, waited: waited)
+      }
+      if !said {
+        let t = "waiting up to \(Int(limit)) s for a quiet machine: \(why) (--max-load PCT, --quiet-timeout S, --require-quiet)"
+        log(t); onWait(t); said = true
+      }
+      try checkDeadline()
+      Thread.sleep(forTimeInterval: quietPoll)
+    }
   }
 
   func checkDeadline() throws { if let d = deadline, Date() >= d { throw RunnerStop.deadline(d) } }

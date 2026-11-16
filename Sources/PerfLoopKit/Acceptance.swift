@@ -32,6 +32,7 @@ public enum Acceptance {
   /// Why a pair can't decide anything (it is re-run on resume), or nil when it can.
   public static func unusable(_ p: Pair) -> String? {
     if let f = p.failure { return f }
+    if p.a.noFrames == true || p.b.noFrames == true { return "no frames on \(p.a.noFrames == true ? "the champion" : "the candidate"): screen locked or window off-screen (its frame metrics are missing, not 0)" }
     if p.a.objective == nil || p.b.objective == nil { return "the objective is missing on \(p.a.objective == nil ? "the champion" : "the candidate")" }
     if p.a.profiled == true || p.b.profiled == true { return "a profiler was attached: profiled runs never feed the objective" }
     if p.a.trustworthy == false || p.b.trustworthy == false { return "the window was not active, key and unoccluded: rerun" }

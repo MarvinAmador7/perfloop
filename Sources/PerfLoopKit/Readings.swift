@@ -30,7 +30,25 @@ public enum Readings {
     s.worstStretch = worst(r["worstStretches"]?.array ?? [])
     s.guards = r["guards"]?.array.map { $0.compactMap(GuardResult.init(json:)) }
     s.positionErrorP95Pt = r.at("smoothness.positionErrorP95Pt")?.double; s.stalls = r.at("smoothness.stalls")?.double; s.jerkP95 = r.at("smoothness.jerkP95")?.double
+    s.quiet = r["quiet"]?.bool
+    if let f = r["frames"], f.object != nil, drewNothing(ticks: f["ticks"]?.double, p95: f["p95Ms"]?.double) { noFrames(&s, metric: metric) }
     return s
+  }
+
+  /// A rep that presented no frame (the screen locked, the window off-screen or never shown) has no frame metrics: a
+  /// hitch ratio of 0 there is nothing drawing, not a perfect run. Known by the display-link tick count, or, from an
+  /// adapter that doesn't report it, a frame p95 of 0 ms (no real frame takes 0 ms). This was PerfLoopHost's "the
+  /// window drew no frame" rule; here it holds for every adapter.
+  static func drewNothing(ticks: Double?, p95: Double?) -> Bool {
+    if let t = ticks { return t == 0 }
+    if let p = p95 { return p == 0 }
+    return false
+  }
+
+  static func noFrames(_ s: inout Side, metric: String) {
+    s.noFrames = true
+    s.hitchTimeRatioMsPerS = nil; s.lateFrames = nil; s.steadyHz = nil
+    if ["hitchTimeRatioMsPerS", "lateFrames", "steadyHz"].contains(metric) { s.objective = nil }
   }
 
   /// A summary (`summary`, `summaryA`): medians only. With one rep a side (how the runner calls `ab`) they are the
@@ -44,6 +62,8 @@ public enum Readings {
     s.steadyHz = med("steadyHz"); s.lateFrames = med("lateFrames")
     func smooth(_ k: String) -> Double? { v["smoothness"]?[k]?["median"]?.double }
     s.positionErrorP95Pt = smooth("positionErrorP95Pt"); s.stalls = smooth("stalls"); s.jerkP95 = smooth("jerkP95")
+    // deskbench's summary has no tick count, only the frame p95 (`frameP95Ms`); the summary of a side with one rep.
+    if v["frameP95Ms"] != nil || v["frameTicks"] != nil, drewNothing(ticks: med("frameTicks"), p95: med("frameP95Ms")) { noFrames(&s, metric: metric) }
     return s
   }
 

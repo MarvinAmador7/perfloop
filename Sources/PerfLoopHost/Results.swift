@@ -154,6 +154,10 @@ public struct RepRecord: Codable, Sendable, Equatable {
   public var notes: [String]
   /// The rep's gestures together: the worst error, every stall, the median jerk (nil without a replayed gesture).
   public var smoothness: Smoothness?
+  /// `run --quiet-check S`: false when the machine wasn't quiet after S s and the rep ran anyway (nil: not checked).
+  public var quiet: Bool? = nil
+  /// What the quiet check saw before the rep (PerfLoopKit.MachineState).
+  public var machine: MachineState? = nil
 }
 
 public struct Objective: Codable, Sendable, Equatable {

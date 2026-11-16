@@ -102,6 +102,14 @@ public struct Side: Codable, Sendable, Equatable {
   public var positionErrorP95Pt: Double?
   public var stalls: Double?
   public var jerkP95: Double?
+  /// false: the rep started on a machine that wasn't quiet (the local runner's quiet gate, or the adapter's own `quiet`
+  /// on the rep); true: it was checked and quiet; nil: nobody checked.
+  public var quiet: Bool?
+  /// The quiet gate's reading when the rep started: share of the cores busy, the busiest processes, how long it waited.
+  public var machine: MachineState?
+  /// The rep presented no frames (the screen was locked, or the window was off-screen): its frame metrics are
+  /// missing, not 0, and the rep never decides.
+  public var noFrames: Bool?
   public init(objective: Double?, hitch: Double? = nil, longest: Double? = nil, checksFailed: [String] = []) {
     self.objective = objective; hitchTimeRatioMsPerS = hitch; longestStretchMs = longest; self.checksFailed = checksFailed
   }

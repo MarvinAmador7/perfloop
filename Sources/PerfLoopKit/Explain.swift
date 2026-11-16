@@ -37,6 +37,12 @@ public enum Explain {
       let n = s.pairs.compactMap(\.interruptions).reduce(0, +)
       o.append("  ran on \(r.line)" + (n > 0 ? "; \(n) rep(s) interrupted by input and redone" : ""))
     }
+    // Reps that started on a busy machine (the quiet gate timed out): said, with what was busy, never hidden.
+    let busy = s.pairs.flatMap { [$0.a, $0.b] }.filter { $0.quiet == false }
+    if !busy.isEmpty {
+      let why = busy.compactMap { $0.machine?.why }.first.map { " (\($0))" } ?? ""
+      o.append("  \(busy.count) of \(s.pairs.count * 2) rep(s) started on a machine that wasn't quiet\(why): quiet: false in the pair records")
+    }
     for p in s.pairs {
       if let why = Acceptance.unusable(p) { o.append("  pair \(p.index + 1) \(p.order): unusable: \(why)"); continue }
       o.append("  pair \(p.index + 1) \(p.order): champion \(fmt(p.a.objective)) · candidate \(fmt(p.b.objective)) (\(Stats.round(-Acceptance.gainPct(p.a.objective!, p.b.objective!), 1)) %)")

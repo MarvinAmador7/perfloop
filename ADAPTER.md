@@ -51,7 +51,10 @@ change. `guards`: `checks` (the scenario's own checks), `snapshot-diff` (§5), a
 
 ## 3. `run SCENARIO --fixture F --reps 1 --json [--set k=v …] [--quiet-check 0]`
 
-Opens the window, drives the scenario, prints a result, exits. The runner calls it once per side of every pair (fresh
+Opens the window, drives the scenario, prints a result, exits. `--quiet-check 0`: the runner has already waited for a
+quiet machine (its quiet gate) and records what it saw on the rep's side of the pair, so the bench shouldn't wait again
+(PerfLoopHost's `run`, called directly, waits up to `--quiet-check S`, 10 s, and marks a rep that started busy
+`"quiet": false`). The runner calls it once per side of every pair (fresh
 process each time) and interleaves champion and candidate itself. Exit 0 (pass), 3 (a check, guard or budget failed),
 4 (regression) or 5 (untrusted) all carry numbers; anything else is a harness error and the pair is redone once.
 
@@ -73,6 +76,8 @@ extra fields are fine and missing optional ones fall back. What it reads, per re
 | `steps[].instructions` (all steps) | `instructionsPerStep` |
 | `steps[].latencyMs` (median) | `latencyMs` |
 | `frames.hitchTimeRatioMsPerS`, `mainThread.longestMs` | frame guards (not worse beyond their band) |
+| `frames.ticks` (else `frames.p95Ms`) | 0: the rep presented no frame (screen locked, window off-screen): its frame metrics are missing, not 0, and the rep never decides. Report the tick count |
+| `quiet` | `false`: the rep started on a busy machine (the runner's own quiet gate can say so too: the side's `quiet` and `machine`) |
 | `frames.steadyHz`, `frames.late` | information; `explain` reports a rate change |
 | `checks[]` `{ name, pass, detail }` | the `checks` guard: a check the candidate fails while the champion passes vetoes it |
 | `guards[]` `{ name, pass, detail, artifacts, value, limit, review }` | the named guards; `review: true` asks the owner |
@@ -85,7 +90,9 @@ extra fields are fine and missing optional ones fall back. What it reads, per re
 
 deskbench's own interleaved pair. An adapter whose manifest lists `verbs` without `ab` is measured through two `run`s per
 pair instead, which is what PerfLoopHost benches do. Output: `summaryA/summaryB` (the objective's median under its
-name), `buildA/buildB`, `guardsA/guardsB`, `failures[]`.
+name, and `frameP95Ms` or `frameTicks`: a median of 0 means the side drew no frame), `buildA/buildB`,
+`guardsA/guardsB`, `failures[]`. The runner's quiet gate runs once before each `ab` call, so both sides of the pair
+record the same machine reading.
 
 ## 5. `snapdiff A.png B.png --json --diff-out D.png [--guard-param snapshot-diff.tolerance=X]`
 
