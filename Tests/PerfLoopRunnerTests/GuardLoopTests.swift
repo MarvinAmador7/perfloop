@@ -52,16 +52,24 @@ final class GuardLoopTests: FakeBenchCase {
     var e = try loop.new(o)
     XCTAssertEqual(e.state, .needsReview, "\(e.screen!.reasons)")
     XCTAssertEqual(e.screen?.verdict, "needsReview")
-    XCTAssertTrue(Explain.next(e).contains("perfloop guards --exp \(e.id) --guard-tolerance X --owner"))
+    // The agent's next step is to ask the owner, never the owner's flags.
+    XCTAssertTrue(Explain.next(e).contains("stop and ask the owner"), Explain.next(e))
+    for f in ["--owner", "--guard-tolerance", "--force", "--allow-dirty"] { XCTAssertFalse(Explain.next(e).contains(f), f) }
     // The agent can't loosen the tolerance, nor run the full.
     XCTAssertThrowsError(try loop.guards(e.id, tolerance: 0.3)) { XCTAssertEqual(($0 as? PLError)?.code, 6) }
     XCTAssertThrowsError(try loop.full(e.id))
     // A re-run without a new tolerance still asks; the owner's tolerance clears it and holds for the full.
     let (_, again) = try loop.guards(e.id)
     XCTAssertFalse(again.pass); XCTAssertEqual(again.reviews.count, 1)
-    loop.by = "owner"
+    loop.by = "owner"; loop.owner = OwnerAuth(flags: ["--guard-tolerance", "--owner"], via: "tty", command: "guards")
     let (cleared, run) = try loop.guards(e.id, tolerance: 0.3)
     XCTAssertTrue(run.pass, "\(run.failures) \(run.reviews)"); XCTAssertEqual(cleared.state, .promising)
+    // Both owner flags are on the record: the experiment, its ledger line, its explain.
+    XCTAssertEqual(cleared.forced, true)
+    XCTAssertEqual(cleared.ownerFlags?.map(\.flag), ["--owner", "--guard-tolerance"]); XCTAssertEqual(Set(cleared.ownerFlags!.map(\.via)), ["tty"])
+    XCTAssertEqual(store.ledger.entries().last?.ownerFlags, ["--guard-tolerance", "--owner"]); XCTAssertEqual(store.ledger.entries().last?.ownerVia, "tty")
+    XCTAssertTrue(loop.explain(cleared).contains("owner flag: --guard-tolerance (confirmed at a terminal, guards"))
+    loop.owner = nil
     XCTAssertEqual(run.override, "snapshot-diff.tolerance 0.3 by the owner"); XCTAssertEqual(run.isolation.map(\.scenario), ["burst"])
     loop.by = "agent"
     e = try loop.full(e.id)
