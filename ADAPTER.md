@@ -56,7 +56,8 @@ quiet machine (its quiet gate) and records what it saw on the rep's side of the 
 (PerfLoopHost's `run`, called directly, waits up to `--quiet-check S`, 10 s, and marks a rep that started busy
 `"quiet": false`). The runner calls it once per side of every pair (fresh
 process each time) and interleaves champion and candidate itself. Exit 0 (pass), 3 (a check, guard or budget failed),
-4 (regression) or 5 (untrusted) all carry numbers; anything else is a harness error and the pair is redone once.
+4 (regression) or 5 (untrusted) all carry numbers, but a rep that exits 5 never decides; anything else is a harness
+error and the pair is redone once.
 
 The environment it runs with:
 
@@ -76,15 +77,29 @@ extra fields are fine and missing optional ones fall back. What it reads, per re
 | `steps[].instructions` (all steps) | `instructionsPerStep` |
 | `steps[].latencyMs` (median) | `latencyMs` |
 | `frames.hitchTimeRatioMsPerS`, `mainThread.longestMs` | frame guards (not worse beyond their band) |
-| `frames.ticks` (else `frames.p95Ms`) | 0: the rep presented no frame (screen locked, window off-screen): its frame metrics are missing, not 0, and the rep never decides. Report the tick count |
-| `quiet` | `false`: the rep started on a busy machine (the runner's own quiet gate can say so too: the side's `quiet` and `machine`) |
+| `frames.ticks` (else `frames.p95Ms`) | 0: the rep presented no frame (screen locked, window off-screen): its frame metrics are missing, not 0, and the rep is untrusted. Report the tick count |
 | `frames.steadyHz`, `frames.late` | information; `explain` reports a rate change |
 | `checks[]` `{ name, pass, detail }` | the `checks` guard: a check the candidate fails while the champion passes vetoes it |
 | `guards[]` `{ name, pass, detail, artifacts, value, limit, review }` | the named guards; `review: true` asks the owner |
-| `window { appActive, keyWindow, visible, occluded }` | all four right, or the rep is untrusted and never decides |
+| `window { appActive, keyWindow, visible, occluded }` | all four right, or the rep is untrusted and never decides (a rep without one: the result's top-level `window`) |
+| `quiet`, `busyPct`, `busy[]` | the machine when the rep started: `quiet: false` makes the rep untrusted; `busyPct` (share of the cores busy) and `busy` (what kept them busy) say why. Per rep or top level; `noise.quiet` / `noise.reasons` (deskbench) are read the same way. Optional: the local runner's own quiet gate fills the same fields on each side (and its wait under `machine`), false when either saw a busy machine |
 | `worstStretches[] { step, durationMs, topOurs[], topFramework[], causes[] }` | `explain`'s "where the time went" |
 | `smoothness { positionErrorP95Pt, stalls, jerkP95 }` | gesture-replay frame guards (C9) |
 | top-level `profiled: true` | the rep never feeds the objective |
+
+`keyWindow` is true when the bench window is key, **or a visible window it owns is**: a child window (a panel, a
+popover) or a sheet, at any depth. A palette or search panel that takes the keyboard is the design, not a distraction,
+and a bench that reports `keyWindow: false` for it makes every rep untrusted, every time. PerfLoopHost counts it so and
+adds `keyWindowIsChild: true`; an adapter of its own does the same (`w.isKeyWindow`, or `NSApp.keyWindow`'s
+`parent`/`sheetParent` chain reaches `w`).
+
+**Trust.** A rep decides only when its `window` was right, the machine was quiet (when the adapter or the runner's quiet
+gate says), it presented frames, and it didn't exit 5. A pair with an untrusted rep is redone once. A stage whose pairs are still untrusted decides nothing: its
+verdict is `untrusted` with the count and the cause (`screen: UNTRUSTED (6/6 reps untrusted: not quiet ×6 (busy up to
+99.8 %: swift-build)) …`), and rerunning it measures only those pairs again. The exception is one side's window wrong
+the same way in both orders while the other side's is right: the build does that, a rerun can't change it, and the
+stage says `deterministic` and stops early. (A screen whose trusted pairs already reject the candidate, a pair it
+didn't win or a guard it failed, is still rejected.)
 
 ## 4. `ab --a EXE --b EXE S --fixture F --reps 1 --json --out FILE` (optional)
 
@@ -93,6 +108,15 @@ pair instead, which is what PerfLoopHost benches do. Output: `summaryA/summaryB`
 name, and `frameP95Ms` or `frameTicks`: a median of 0 means the side drew no frame), `buildA/buildB`,
 `guardsA/guardsB`, `failures[]`. The runner's quiet gate runs once before each `ab` call, so both sides of the pair
 record the same machine reading.
+
+The runner can't see the processes `ab` starts, so for its trust rule (§3) `ab` also reports each side's reps, one of:
+
+- `runs[]`, one per process: `{ "side": "A" | "B", "exit": 5, "quiet": false, "busyPct": 99.8, "builds": ["swift-build"],
+  "window": { … } }` (`busy` or deskbench's `builds`; every field but `side` optional, `window` as in §3);
+- `repsA` / `repsB` (or `reps[]` with `variant: "A" | "B"`): the reps as `run` reports them.
+
+An `ab` that reports neither still runs and decides as before, but nothing in it can be untrusted: every stage it
+measured says `trust: not checked` in `explain`.
 
 ## 5. `snapdiff A.png B.png --json --diff-out D.png [--guard-param snapshot-diff.tolerance=X]`
 
@@ -113,8 +137,16 @@ shows the window and writes `FILE.waiting`, `xctrace record --attach PID` attach
 xctrace says it is recording, the child runs its reps and writes `FILE.done`, and the recording is stopped with SIGINT,
 so every step is inside it. Every `run.step` is a `step` signpost (subsystem `dev.perfloop.bench`, Points of Interest),
 which is what the per-step trees are cut on. The trace is deleted once exported unless `--keep-trace` (it holds the
-recorded process's environment). The document adds, to SCHEMAS.md §4: `traceKept`, `os` and `model` (from the trace's
-TOC), `knobs`, `treeInSteps` (what `diff` compares), and `inProcess` (the run's own `perfloop.result/2`, `profiled: true`).
+recorded process's environment); a delete that fails leaves `traceKept: true` and a note, never a claim that it is gone.
+The document adds, to SCHEMAS.md §4: `traceKept` (whether the trace is on disk at `trace`), `keepTrace` (it is there on
+purpose), `os` and `model` (from the trace's TOC), `knobs`, `treeInSteps` (what `diff` compares), and `inProcess` (the
+run's own `perfloop.result/2`, `profiled: true`).
+
+Whatever the adapter does with its trace, `perfloop profile` checks the disk afterwards: it deletes every `.trace` under
+`--out DIR` (and the one the document's `trace` names) unless `--keep-trace`, checks each is gone, and rewrites
+`traceKept`/`trace`/`keepTrace` in the document to what it found, so its `trace:` line ("deleted", or "KEPT at PATH") is
+what is on disk. Write the trace under `--out DIR`, so the runner finds it. While recording into the store, a `.recording`
+file in the folder holding your pid keeps `perfloop store gc` and `doctor` off the trace (PerfLoopHost writes one).
 
 `diff A B --json [--champion BUILD] [--allow-stale] [--allow-cross-os] [--per step|run]`: A and B are profile JSONs or
 `.trace` files; prints `perfloop.diff/1` (SCHEMAS.md §5), exit 6 when provenance refuses. Called by `perfloop diff`,
@@ -132,9 +164,21 @@ window and records a hand's gestures over it (a local event monitor: deltas, pha
 `${PERFLOOP_HOME:-~/.perfloop}/APP/gestures/NAME.json`, where `perfloop gestures list` looks; it refuses a path inside a
 git checkout. `gestures [--json]` lists the built-in ones.
 
+## 6b. The window lock
+
+Two windows on one Mac spoil each other's numbers. A bench verb that opens a window when someone runs it directly (`run`,
+`ab`, `profile`, `record-gesture`) should hold the window lock for its whole run: mkdir the directory `$PERFLOOP_LOCK`
+(else `/tmp/perfloop-window-UID.lock`, UID the numeric user id; `PERFLOOP_LOCK=off`: none), retrying every 2 s while it
+exists, then write `owner` in it, `{"pid": PID, "command": "the command line", "label": "$PERFLOOP_LOCK_OWNER", "since":
+"<ISO 8601>"}`, export `PERFLOOP_LOCK_HELD=<its path>` to your children, and remove the directory on exit and on
+SIGINT/SIGTERM. Two rules keep it from deadlocking or sticking: when `PERFLOOP_LOCK_HELD` names a lock whose owner's pid is
+alive, you are inside that hold (perfloop runs you while holding it): take nothing; and a lock whose owner's pid is dead
+may be broken (moved aside and removed). PerfLoopHost does all of this (`--lock DIR` moves it, `--no-lock` skips it); an
+adapter that can't can be wrapped instead: `perfloop lock -- BENCH ab …`.
+
 ## 7. Exit codes
 
-0 ok · 1 usage · 2 harness error · 3 budget/check/guard failed · 4 regression beyond noise · 5 untrusted (rerun) ·
+0 ok · 1 usage · 2 harness error · 3 budget/check/guard failed · 4 regression beyond noise · 5 untrusted (never decides) ·
 6 refused (provenance) · 7 interrupted (input during the rep; the local runner's idle gate)
 
 ## 8. Schema versions
@@ -148,7 +192,7 @@ git checkout. `gestures [--json]` lists the built-in ones.
 | `perfloop.experiment`, `perfloop.ledger`, `perfloop.champion` | 1 | runner (store) | stable since Phase 2 |
 | `perfloop.sweep`, `perfloop.queue`, `perfloop.gesture`, `perfloop.gestures` | 1 | runner / probe | stable since Phase 3–4; `perfloop.sweep` gained `walls` (2026-11) |
 | `perfloop.doctor` | 1 | runner `doctor --json` | new |
-| `perfloop.profile` | 2 | adapter `profile` | fields only added; PerfLoopHost's adds `traceKept`, `os`, `model`, `knobs`, `treeInSteps`, `inProcess` (2026-11) |
+| `perfloop.profile` | 2 | adapter `profile` | fields only added; PerfLoopHost's adds `traceKept`, `os`, `model`, `knobs`, `treeInSteps`, `inProcess` (2026-11), `keepTrace` (2026-11; the runner sets it and `traceKept` from the disk) |
 | `perfloop.diff` | 1 | adapter `diff` | stable |
 
 Within a version a field is never renamed or removed, only added; a reader of version n reads n−1.

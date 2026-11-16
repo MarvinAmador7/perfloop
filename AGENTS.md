@@ -63,21 +63,33 @@ perfloop ledger                              # what was tried, by whom, with wha
 
 ## The machine
 
-`exp new` (it screens), `exp screen`, `exp full`, `guards` and a bench's `run` open a window and take focus for
-seconds to minutes. Run them only when the owner says the Mac is free, with the window lock if other benches share it
-(`--runner local --lock /tmp/window.lock`), or queue them: `perfloop queue add <id>` and let
-`perfloop queue run --runner local --idle 120` (only while nobody touches the Mac) or
-`--runner ssh://user@spare-mac` (a Mac nobody uses) take them. A run on a locked screen, in the background or under a
-profiler is **untrusted** and never decides; rerun it, don't explain it away. `perfloop doctor` says what would make
-this Mac's numbers untrustworthy.
+`exp new` (it screens), `exp screen`, `exp full`, `guards`, `profile`, `sweep` and a bench's `run`/`ab` open a window
+and take focus for seconds to minutes. Run them only when the owner says the Mac is free, or queue them: `perfloop queue
+add <id>` and let `perfloop queue run --runner local --idle 120` (only while nobody touches the Mac) or
+`--runner ssh://user@spare-mac` (a Mac nobody uses) take them.
 
-Local runs never start a rep on a locked screen: the runner waits for the unlock (`--no-wait` stops instead; finished
-pairs are kept), and a rep during which the screen locks is redone. A rep that presented no frames has no frame
-metrics (never a perfect 0) and never decides: `unusable: no frames … screen locked or window off-screen`. Before each
-rep the runner also waits up to 60 s (`--quiet-timeout S`) for a quiet machine: at most 30 % of the cores busy
-(`--max-load PCT`) and no build or test run going. Then the rep runs anyway and its side of the pair says
-`"quiet": false`, with what was busy under `machine`; `--require-quiet` stops instead. So don't build or test while a
-stage runs, and read `waiting … for a quiet machine: building: swift-frontend` as "my own build is the noise".
+**The window lock** makes window runs on one Mac take turns, and it is on by default: every perfloop verb above holds it
+around each rep, as do the MCP server's jobs and a PerfLoopHost bench's `run`/`profile`. Anything else that opens a
+window (a bench's own `ab` or `run` from an adapter that isn't PerfLoopHost, a script driving the app) goes inside it:
+`perfloop lock -- <command>`. Set `PERFLOOP_LOCK_OWNER=<your name>` so others see who waits on whom. A waiter prints
+the holder (`waiting: the window lock /tmp/perfloop-window-501.lock is held by pid 71104 (perfloop exp screen 0003)
+"palette", since …`); `perfloop lock` alone says who holds it now. A holder that died is broken by the next taker; never
+remove a live holder's lock, and never make one by hand with `mkdir` (it says nobody's name and is never broken).
+
+A run on a locked screen, in the background, on a busy Mac or under a profiler is **untrusted** and never decides: a
+stage that needed it says `UNTRUSTED` with how many reps and why, and is neither rejected nor lost. Rerun it when the
+Mac is quiet (only the untrusted pairs run again), don't explain it away; when its `next:` says a rerun won't help (one
+side's window is wrong the same way every time), do what it says instead. `perfloop doctor` says what would make this
+Mac's numbers untrustworthy.
+
+Local runs avoid both where they can. They never start a rep on a locked screen: the runner waits for the unlock
+before taking the window lock (`--no-wait` stops instead; finished pairs are kept), and a rep during which the screen
+locks is redone. A rep that presented no frames anyway has no frame metrics (never a perfect 0) and is untrusted:
+`no frames (screen locked or window off-screen)`. Before each rep, holding the window lock, the runner waits up to
+60 s (`--quiet-timeout S`) for a quiet machine: at most 30 % of the cores busy (`--max-load PCT`) and no build or test
+run going. Then the rep runs anyway and is untrusted (`"quiet": false` on its side of the pair, `busy` naming what was
+busy, the gate's wait under `machine`); `--require-quiet` stops instead. So don't build or test while a stage runs,
+and read `waiting … for a quiet machine: building: swift-frontend` as "my own build is the noise".
 
 Over MCP (`perfloop mcp`), the same verbs are tools: a stage returns a job, and `job` waits for it on the server's side,
 so never poll with `sleep`; the session's end stops its jobs.
@@ -86,6 +98,11 @@ Headless and always fine: `doctor`, `describe`, `store list`, `exp status`, `exp
 
 Disk: every build in the store is a copy of the bench (`perfloop store gc` keeps the newest 20 and every champion);
 traces are hundreds of MB. Delete what you made once its numbers are recorded.
+
+Traces: `perfloop profile` deletes the `.trace` once exported and its `trace:` line says what is on disk: `deleted`, or
+`KEPT at <path>` (`--keep-trace`, or a delete that failed: the notes say why). A kept trace holds the recorded process's
+environment, tokens included: delete it once read (`perfloop store gc --traces`). `perfloop doctor` fails while a stray
+one is in the store; `perfloop store gc` deletes those.
 
 ## Ask the owner
 

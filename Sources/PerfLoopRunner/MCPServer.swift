@@ -22,7 +22,8 @@ public final class MCPServer {
   public var baseArgs: [String]
   public var env: [String: String] = [:]
   public let jobsDir: URL
-  /// The window lock local runs take (other benches on this Mac take turns with them).
+  /// The window lock local runs take (other benches on this Mac take turns with them): `--lock`, else the one the CLI,
+  /// PerfLoopHost benches and `perfloop lock` take by default (WindowLock.defaultPath).
   public var lock: String
   public var version = "1"
 
@@ -40,7 +41,7 @@ public final class MCPServer {
 
   public init(cli: String, baseArgs: [String] = [], jobsDir: URL, lock: String? = nil) {
     self.cli = cli; self.baseArgs = baseArgs; self.jobsDir = jobsDir
-    self.lock = lock ?? FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-window.lock").path
+    self.lock = lock ?? WindowLock.defaultPath() ?? "/tmp/perfloop-window-\(getuid()).lock"
   }
 
   // MARK: tools
@@ -93,7 +94,7 @@ public final class MCPServer {
       if a["behaviour_change"]?.bool == true { x.append("--behaviour-change") }
       if a["screen"]?.bool == false { x.append("--no-screen") } else { x += try self.runner(a) }
       return x },
-    Tool(name: "screen", description: "3 interleaved pairs, champion vs candidate: promising | rejected. Opens windows. Returns a job.",
+    Tool(name: "screen", description: "3 interleaved pairs, champion vs candidate: promising | rejected, or untrusted (untrusted reps decided nothing: rerun when the Mac is quiet). Opens windows. Returns a job.",
          properties: ["id": Self.prop("string", "Experiment id"), "runner": Self.runnerProp], required: ["id"], kind: .job) { [unowned self] a in
       try ["exp", "screen", Self.id(Self.req(a, "id"))] + self.runner(a) },
     Tool(name: "full", description: "5 + 5 interleaved pairs (extended to 8 + 8 and 10 + 10 while undecided), frame guards, the second fixture: won | lost | needsReview. Opens windows. Returns a job.",

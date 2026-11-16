@@ -32,12 +32,109 @@ public enum Acceptance {
   /// Why a pair can't decide anything (it is re-run on resume), or nil when it can.
   public static func unusable(_ p: Pair) -> String? {
     if let f = p.failure { return f }
-    if p.a.noFrames == true || p.b.noFrames == true { return "no frames on \(p.a.noFrames == true ? "the champion" : "the candidate"): screen locked or window off-screen (its frame metrics are missing, not 0)" }
-    if p.a.objective == nil || p.b.objective == nil { return "the objective is missing on \(p.a.objective == nil ? "the champion" : "the candidate")" }
+    // A side that drew no frame has no frame metric to be the objective: that is untrusted (below), not missing.
+    if (p.a.objective == nil && p.a.noFrames != true) || (p.b.objective == nil && p.b.noFrames != true) { return "the objective is missing on \(p.a.objective == nil ? "the champion" : "the candidate")" }
     if p.a.profiled == true || p.b.profiled == true { return "a profiler was attached: profiled runs never feed the objective" }
-    if p.a.trustworthy == false || p.b.trustworthy == false { return "the window was not active, key and unoccluded: rerun" }
+    if let u = untrusted(p) { return u }
     if p.interrupted == true { return "interrupted: input during the rep (redo it)" }
     return nil
+  }
+
+  // MARK: trust
+
+  /// Why one side's rep can't be trusted, as short phrases (empty: it can): its window was wrong (and which fields),
+  /// the machine wasn't quiet when it started, or the bench itself said so (exit 5). Such a rep never decides.
+  public static func distrust(_ s: Side) -> [String] {
+    var r: [String] = []
+    if s.noFrames == true { r.append(noFramesPhrase) }
+    if s.trustworthy == false { r.append(windowPhrase(s)) }
+    if s.quiet == false { r.append(busyPhrase(s)) }
+    if s.exit == 5 && r.isEmpty { r.append("the bench exited 5 (untrusted)") }
+    return r
+  }
+
+  /// A rep that presented no frame (Readings.noFrames): its frame metrics are missing, not 0.
+  static let noFramesPhrase = "no frames (screen locked or window off-screen)"
+
+  static func windowPhrase(_ s: Side) -> String {
+    guard let f = s.windowFailed, !f.isEmpty else { return "window not active, key, visible and unoccluded" }
+    return "window " + f.map { "\($0)=\($0 == "occluded")" }.joined(separator: ", ")
+  }
+
+  static func busyPhrase(_ s: Side) -> String {
+    let d = [s.busyPct.map { "busy \(Explain.fmt($0)) %" }, s.busy.flatMap { $0.isEmpty ? nil : $0.prefix(3).joined(separator: ", ") }].compactMap { $0 }
+    return "not quiet" + (d.isEmpty ? "" : " (" + d.joined(separator: ": ") + ")")
+  }
+
+  /// Why a pair can't be trusted, naming the side and what was wrong; nil when both reps can be.
+  public static func untrusted(_ p: Pair) -> String? {
+    let a = distrust(p.a), b = distrust(p.b)
+    if a.isEmpty && b.isEmpty { return nil }
+    if a == b { return "untrusted on both sides: " + a.joined(separator: "; ") }
+    if a.isEmpty { return "untrusted on the candidate: " + b.joined(separator: "; ") + " (the champion's rep was fine)" }
+    if b.isEmpty { return "untrusted on the champion: " + a.joined(separator: "; ") + " (the candidate's rep was fine)" }
+    return "untrusted on the champion: " + a.joined(separator: "; ") + "; on the candidate: " + b.joined(separator: "; ")
+  }
+
+  /// A pair that ran and has numbers, but whose reps can't be trusted: redone once, and never decides.
+  public static func distrusted(_ p: Pair) -> Bool {
+    p.failure == nil && p.interrupted != true && (p.a.objective != nil || p.a.noFrames == true) && (p.b.objective != nil || p.b.noFrames == true) && p.a.profiled != true && p.b.profiled != true && untrusted(p) != nil
+  }
+
+  /// One side's window was wrong while the other side's was right: the build's state, not the machine's.
+  static func oneSidedWindow(_ p: Pair) -> String? {
+    if p.a.trustworthy == false && p.b.trustworthy == true { return "the champion's \(windowPhrase(p.a))" }
+    if p.b.trustworthy == false && p.a.trustworthy == true { return "the candidate's \(windowPhrase(p.b))" }
+    return nil
+  }
+
+  /// Untrusted pairs a rerun can't fix: every one has the same side's window wrong the same way while the other side's
+  /// was right, in both orders (so it isn't whichever ran second). The build keeps the keyboard somewhere else.
+  public static func deterministic(_ pairs: [Pair]) -> String? {
+    let bad = pairs.filter(distrusted)
+    guard let sig = bad.first.flatMap(oneSidedWindow), bad.allSatisfy({ oneSidedWindow($0) == sig }), Set(bad.map(\.order)).count > 1 else { return nil }
+    return "deterministic: \(sig) in all \(bad.count) untrusted pairs, in both orders, while the other side's was right: a rerun won't change it"
+  }
+
+  /// How many of a stage's reps couldn't be trusted, and why ("6/6 reps untrusted: not quiet ×6 (busy up to 99.8 %:
+  /// swift-build)"); nil when every rep could. Counts the pairs that ran (a failed pair has no reps to judge).
+  public static func untrustedSummary(_ pairs: [Pair]) -> String? {
+    let ran = pairs.filter { $0.failure == nil && $0.interrupted != true }
+    var reps = 0, notQuiet = 0, busiest: Double?, names: [String] = [], other: [(String, Int)] = []
+    func count(_ k: String) { if let i = other.firstIndex(where: { $0.0 == k }) { other[i].1 += 1 } else { other.append((k, 1)) } }
+    for p in ran {
+      for (who, s) in [("champion", p.a), ("candidate", p.b)] where !distrust(s).isEmpty {
+        reps += 1
+        if s.quiet == false {
+          notQuiet += 1
+          if let b = s.busyPct { busiest = max(busiest ?? b, b) }
+          for n in s.busy ?? [] where !names.contains(n) { names.append(n) }
+        }
+        if s.noFrames == true { count(noFramesPhrase) }
+        if s.trustworthy == false { count("the \(who)'s \(windowPhrase(s))") }
+        if s.exit == 5 && s.quiet != false && s.trustworthy != false { count("exit 5 (the bench's own untrusted)") }
+      }
+    }
+    guard reps > 0 else { return nil }
+    var parts: [String] = []
+    if notQuiet > 0 {
+      let d = [busiest.map { "busy up to \(Explain.fmt($0)) %" }, names.isEmpty ? nil : names.prefix(3).joined(separator: ", ")].compactMap { $0 }
+      parts.append("not quiet ×\(notQuiet)" + (d.isEmpty ? "" : " (" + d.joined(separator: ": ") + ")"))
+    }
+    parts += other.map { "\($0.0) ×\($0.1)" }
+    return "\(reps)/\(ran.count * 2) reps untrusted: " + parts.joined(separator: "; ")
+  }
+
+  /// A stage that can't decide because pairs it needs are untrusted: says how many and why, and whether a rerun helps.
+  static func untrustedStage(_ st: Stage, _ pairs: [Pair], use: [Pair]) -> Stage {
+    var st = st
+    st.verdict = "untrusted"
+    st.reasons = [st.untrusted ?? "untrusted reps"]
+    if let d = deterministic(pairs) { st.reasons.append(d) }
+    else {
+      st.reasons.append("\(pairs.filter(distrusted).count) pair(s) still untrusted after a redo, \(use.count) trusted: a rerun on a quiet Mac measures only the untrusted pairs again")
+    }
+    return st
   }
 
   /// Correctness guards: a check the candidate fails while the champion passes it in the same pair, and a guard the
@@ -60,6 +157,11 @@ public enum Acceptance {
     var st = base(pairs, metric: metric, guards: guards)
     if let m = RunnerIdentity.mixed(pairs) { st.verdict = "error"; st.reasons = [m]; return st }
     let use = pairs.filter { unusable($0) == nil }
+    // Untrusted pairs never decide: unless the trusted ones already reject the candidate on their own (a pair it didn't
+    // win, a guard it failed), the screen waits for them to be measured again.
+    if pairs.contains(where: distrusted), !use.contains(where: { $0.b.objective! >= $0.a.objective! }), guardFailures(use, guards: guards).isEmpty {
+      return untrustedStage(st, pairs, use: use)
+    }
     guard !use.isEmpty else { st.verdict = "error"; st.reasons = ["no pair produced the objective \(metric)"] + pairs.compactMap(unusable); return st }
     let gains = use.map { gainPct($0.a.objective!, $0.b.objective!) }
     let med = Stats.round(Stats.median(gains), 2), threshold = max(minGainPct, st.band ?? 0)
@@ -90,6 +192,8 @@ public enum Acceptance {
     if let m = RunnerIdentity.mixed(pairs) { st.verdict = "error"; st.reasons = [m]; return st }
     let use = pairs.filter { unusable($0) == nil }
     st.repsPerSide = use.count
+    // The full decides on every pair of its look or not at all: an untrusted one is measured again first.
+    if pairs.contains(where: distrusted) { return untrustedStage(st, pairs, use: use) }
     guard use.count >= 2 else { st.verdict = "error"; st.reasons = ["fewer than 2 usable pairs"] + pairs.compactMap(unusable); return st }
     let a = use.map { $0.a.objective! }, b = use.map { $0.b.objective! }
     let mwu = MannWhitney.test(a, b)
@@ -137,6 +241,7 @@ public enum Acceptance {
   /// The second fixture's screen after a win: not worse means the median gain is above −band (SPEC §5.5).
   public static func notWorse(_ pairs: [Pair], metric: String, guards: [String]) -> (Stage, Bool) {
     var st = screen(pairs, metric: metric, guards: guards)
+    if st.verdict == "untrusted" { return (st, false) }
     let ok = st.verdict != "error" && (st.medianGainPct ?? -100) > -(st.band ?? 0) && st.guardsPassed && (st.guardReviews ?? []).isEmpty
     st.reasons.append(ok ? "not worse on this fixture" : "worse on this fixture beyond the band, or a guard failed")
     return (st, ok)
@@ -154,6 +259,7 @@ public enum Acceptance {
     st.wins = use.filter { $0.b.objective! < $0.a.objective! }.count
     let f = floors(metric)
     if !a.isEmpty { st.band = Band(champion: a, candidate: b, floorPct: f.pct, absoluteFloor: f.absolute).pct }
+    st.untrusted = untrustedSummary(pairs)
     st.guardFailures = guardFailures(pairs, guards: guards); st.guardsPassed = st.guardFailures.isEmpty
     let reviews = guardReviews(pairs, guards: guards); st.guardReviews = reviews.isEmpty ? nil : reviews
     return st

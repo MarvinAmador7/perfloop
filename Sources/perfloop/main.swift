@@ -21,7 +21,10 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
   store import DIR --commit SHA [--dirty] --note "…" [--exe NAME]
                                             a bench that predates the build stamp, under its sha256
   store add PATH [--exe NAME]               a stamped bench (its list --json → tool.build)
-  store list | store gc [--keep N]          builds in the store; gc keeps the newest N (20), every champion, open experiments
+  store list                                builds in the store
+  store gc [--keep N] [--traces]            keeps the newest N builds (20), every champion and open experiments' builds,
+                                            and deletes every .trace left in the store (they hold the recorded process's
+                                            environment); --traces also those kept on purpose with --keep-trace
   champion [--json]                         the champion and its parent chain back to main
   champion set BUILD [--merged] [--scenario S] [--fixture F] [--note "…"]
                                             the first champion (owner); later experiments inherit scenario and fixture
@@ -31,8 +34,8 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
           [--behaviour-change] [--patch FILE] [--no-screen] [--against ID]
                                             a candidate against the champion; screens it unless --no-screen
   exp status [ID]                           open experiments and what each needs next (with ID: its explain)
-  exp screen ID                             3 interleaved pairs: promising | rejected
-  exp full ID [--force]                     5 + 5 (→ 8 + 8 → 10 + 10 while unknown): won | lost | needsReview
+  exp screen ID                             3 interleaved pairs: promising | rejected (| untrusted: decided nothing)
+  exp full ID [--force]                     5 + 5 (→ 8 + 8 → 10 + 10 while unknown): won | lost | needsReview (| untrusted)
   exp promote ID [--owner] [--allow-dirty] [--pr URL]
                                             the champion moves to the experiment's build (--force, --owner,
                                             --allow-dirty, --guard-tolerance: the owner's flags, below)
@@ -49,14 +52,16 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             largest subtrees, a sweep's walls), ranked by the share they could remove
   causes RESULT.json [--json]               why bodies ran: the model mutations each step's and long stretch's bodies
                                             followed (the adapter's mutation records, CAPABILITIES.md C7)
-  profile champion|exp/ID [--template time|hitches|swiftui] [--scenario S] [--fixture F] [--keep-trace] [--lock DIR] [--idle S]
+  profile champion|exp/ID [--template time|hitches|swiftui] [--scenario S] [--fixture F] [--keep-trace] [--idle S]
                                             the build under xctrace (the adapter's `profile`; opens a window on this Mac):
-                                            call trees per step, hitches, hangs; kept in the store, never an objective
+                                            call trees per step, hitches, hangs; kept in the store, never an objective.
+                                            Afterwards every .trace it left is deleted unless --keep-trace, and the
+                                            `trace:` line says what is on disk
   diff A B [--exp ID] [--allow-stale]       the adapter's differential call tree, ms per step: A and B are champion, exp/ID
                                             (their newest profile), profile JSONs or traces; refuses other builds' traces
   trace register TRACE --build HASH         record which build a trace was recorded on (the path only)
   ledger [--json]                           every state change, oldest first
-  sweep SCENARIO --set NAME=4..64/4 [--set …] [--bench PATH] [--fixture F] [--reps N] [--dry-run] [--lock DIR] [--json]
+  sweep SCENARIO --set NAME=4..64/4 [--set …] [--bench PATH] [--fixture F] [--reps N] [--dry-run] [--json]
                                             a grid over fixture parameters, knobs and params: the objective per point
                                             and fitted cost curves (perfloop.sweep/1); `perfloop sweep --help` for more
   gestures list [FILE…] [--dir DIR] [--bench PATH]
@@ -66,6 +71,9 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
   mcp [--app NAME | --store DIR] [--lock DIR]
                                             the loop as MCP tools over stdio for a coding agent (README: Agents over MCP):
                                             stages run as jobs it polls with `job`; no owner flags
+  lock [--label TEXT] -- CMD [ARG…]         runs CMD holding the window lock (waits its turn; for anything else that opens
+                                            a window, e.g. a bench's own `ab`); exits with CMD's status
+  lock [--json]                             who holds the window lock now: free, held (pid, command, label, since) or stale
 
 owner flags: --force, --owner, --guard-tolerance, --allow-dirty are the owner's, never an agent's (AGENTS.md)
   honoured only with PERFLOOP_OWNER=1 in the environment or a yes typed at a terminal; refused otherwise (exit 6).
@@ -87,13 +95,20 @@ runners and the queue (C10): where windowed reps run; results never mix runners
                                             in the logged-in user's session (--launch direct: plain ssh)
   runner check R | runner clean R           the runner's machine, session and store there; clean removes that store
   ssh runner flags: --accept-new-host-key, --remote-env K=V, --launch gui|direct
-  local runner flags: --lock DIR (a mkdir lock held around each rep), --busy-apps A,B, --idle-from FILE (testing)
+  local runner flags: --busy-apps A,B, --idle-from FILE (testing)
                                             no rep starts while the screen is locked: the runner waits for the unlock
-                                            (--no-wait: stops instead); a rep the lock interrupts is redone
+                                            before it takes the window lock (--no-wait: stops instead); a rep the
+                                            screen lock interrupts is redone
   quiet gate (local): before each rep, wait up to --quiet-timeout S (60) for a quiet machine: at most --max-load PCT
                                             (30) of all cores busy and no build running; then the rep runs and is
-                                            recorded as not quiet (quiet: false on its side of the pair), or with
-                                            --require-quiet the run stops (finished pairs are kept)
+                                            recorded as not quiet (quiet: false, so it is untrusted and never decides),
+                                            or with --require-quiet the run stops (finished pairs are kept)
+
+the window lock: one bench window on this Mac at a time. Every verb that opens a window here (exp new/screen/full,
+guards, profile, sweep, exp replay --go, queue run --runner local) holds it around each rep, as do the MCP server's jobs,
+PerfLoopHost benches' run/profile and `perfloop lock --`. Default $PERFLOOP_LOCK, else /tmp/perfloop-window-UID.lock;
+--lock DIR another, --no-lock none (a Mac no other bench uses). A waiter prints who holds it; a holder that is gone is
+broken; ^C and kills release it. $PERFLOOP_LOCK_OWNER (or --label) names the holder.
 
 store: --store DIR, else ${PERFLOOP_HOME:-~/.perfloop}/<app>, app from --app or $PERFLOOP_APP
 exit codes  0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner needed, an owner flag without the owner)
@@ -104,7 +119,7 @@ struct Args {
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
                                     "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir",
-                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop", "template", "top",
+                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop", "template", "top", "label",
                                     "max-load", "quiet-timeout"]
   init(_ argv: [String]) {
     var i = 0
@@ -206,8 +221,15 @@ func run(_ args: Args) throws -> Int32 {
     }
     return 0
   case ("store", "gc"):
-    let removed = try store().gc(keep: args.one("keep").flatMap(Int.init) ?? 20)
-    out("gc: removed \(removed.count) build(s)" + removed.map { "\n  " + $0 }.joined()); return 0
+    let s = try store()
+    let removed = s.gc(keep: args.one("keep").flatMap(Int.init) ?? 20)
+    out("gc: removed \(removed.count) build(s)" + removed.map { "\n  " + $0 }.joined())
+    let t = s.gcTraces(all: args.has("traces"))
+    out("gc: deleted \(t.removed.count) trace(s)\(t.removed.isEmpty ? "" : " (\(Traces.mb(t.removed.reduce(0) { $0 + $1.bytes })))")" + t.removed.map { "\n  " + $0.path }.joined())
+    if !t.kept.isEmpty { out("gc: left \(t.kept.count) trace(s) kept with --keep-trace (they hold the recorded process's environment; --traces deletes them)" + t.kept.map { "\n  " + $0.path }.joined()) }
+    if !t.recording.isEmpty { out("gc: left \(t.recording.count) trace(s) being recorded now: run gc again later" + t.recording.map { "\n  " + $0.path }.joined()) }
+    for (f, why) in t.failed { err("couldn't delete \(f.path): \(why): it holds the recorded process's environment; delete it by hand") }
+    return t.failed.isEmpty ? 0 : 2
 
   case ("champion", "set"):
     guard let b = args[2] else { throw PLError.usage("usage: perfloop champion set BUILD [--merged]") }
@@ -325,6 +347,7 @@ func run(_ args: Args) throws -> Int32 {
     return 0
 
   case ("sweep", _): return try SweepCommand.run(Array(CommandLine.arguments.dropFirst(2)))
+  case ("lock", _): return try lockCommand(Array(CommandLine.arguments.dropFirst(2)))
   case ("mcp", _):
     // The loop as MCP tools over stdio (MCPServer.swift); each tool runs this executable as a child.
     let exe = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0]).resolvingSymlinksInPath().path
@@ -414,7 +437,7 @@ func runnerOptions(_ args: Args, gatedByDefault: Bool) throws -> RunnerOptions {
   o.idleFrom = args.one("idle-from") ?? ProcessInfo.processInfo.environment["PERFLOOP_IDLE_FROM"]
   o.acceptNewHostKey = args.has("accept-new-host-key")
   o.launch = args.one("launch")
-  o.lock = args.one("lock")
+  o.lock = lockPath(args)
   o.noWait = args.has("no-wait")
   var q = QuietGate()
   if let x = args.one("max-load") { guard let v = Double(x), v > 0, v <= 100 else { throw PLError.usage("--max-load takes a share of all cores in % (1–100), e.g. 30") }; q.maxLoadPct = v }
@@ -425,7 +448,16 @@ func runnerOptions(_ args: Args, gatedByDefault: Bool) throws -> RunnerOptions {
   return o
 }
 
-/// Every windowed verb runs through a runner (local by default), so the screen-lock wait and the quiet gate always apply.
+/// The window lock a verb that opens windows here takes: `--no-lock` none, `--lock DIR`, else the default
+/// (`$PERFLOOP_LOCK`, else /tmp/perfloop-window-UID.lock; `PERFLOOP_LOCK=off` none). `--no-lock` also reaches the
+/// benches it runs (`PERFLOOP_LOCK=off`), so a PerfLoopHost bench doesn't take it either.
+func lockPath(_ args: Args) -> String? {
+  if args.has("no-lock") { setenv(WindowLock.pathVariable, "off", 1); return nil }
+  return args.one("lock") ?? WindowLock.defaultPath()
+}
+
+/// Every windowed verb runs through a runner (local by default: ungated, with the window lock), so the screen-lock
+/// wait and the quiet gate always apply.
 func useRunner(_ l: Loop, _ args: Args, gatedByDefault: Bool) throws {
   let spec = args.one("runner") ?? "local"
   let r = try Runners.make(spec, store: l.store, options: runnerOptions(args, gatedByDefault: gatedByDefault))
@@ -434,10 +466,43 @@ func useRunner(_ l: Loop, _ args: Args, gatedByDefault: Bool) throws {
   trapSignals()
 }
 
-/// ^C or a kill during a rep: take the bench's windows down with us.
+/// ^C or a kill during a rep: take the bench's windows down with us, and give the window lock back.
 func trapSignals() {
-  for s in [SIGINT, SIGTERM, SIGHUP] { signal(s) { sig in Child.killAll(); exit(128 + sig) } }
+  for s in [SIGINT, SIGTERM, SIGHUP] { signal(s) { sig in Child.killAll(); LockCommand.killChild(); WindowLock.releaseAll(); exit(128 + sig) } }
 }
+
+/// `perfloop lock [--lock DIR] [--label TEXT] -- CMD…`, or without a command, who holds it.
+func lockCommand(_ argv: [String]) throws -> Int32 {
+  let cut = argv.firstIndex(of: "--")
+  let a = Args(Array(argv[..<(cut ?? argv.endIndex)]))
+  guard !a.has("no-lock") else { throw PLError.usage("perfloop lock takes the window lock; --no-lock makes no sense here") }
+  guard let path = a.one("lock") ?? WindowLock.defaultPath() else { throw PLError.usage("PERFLOOP_LOCK is off: perfloop lock --lock DIR -- CMD, or unset it") }
+  guard let c = cut else {
+    let st = WindowLock.state(at: path)
+    if a.has("json") {
+      var o: [String: JSONValue] = ["path": .string(path)]
+      switch st {
+      case .free: o["state"] = .string("free")
+      case .held(let h): o["state"] = .string("held"); if let h { o["holder"] = (try? PLJSON.decode(JSONValue.self, from: Data(PLJSON.encode(h).utf8))) ?? .null }
+      case .stale(let h): o["state"] = .string("stale"); o["holder"] = (try? PLJSON.decode(JSONValue.self, from: Data(PLJSON.encode(h).utf8))) ?? .null
+      }
+      out(PLJSON.encode(JSONValue.object(o))); return 0
+    }
+    switch st {
+    case .free: out("window lock \(path): free")
+    case .held(let h?): out("window lock \(path): held by \(h.line())")
+    case .held(nil): out("window lock \(path): held, with no owner file (made by hand with mkdir? if nobody holds it: rmdir \(path))")
+    case .stale(let h): out("window lock \(path): stale: held by \(h.line()), which is gone; the next taker breaks it")
+    }
+    return 0
+  }
+  let cmd = Array(argv[(c + 1)...])
+  guard !cmd.isEmpty else { throw PLError.usage("usage: perfloop lock [--lock DIR] [--label TEXT] -- CMD [ARG…]") }
+  trapSignals()
+  return try LockCommand.run(cmd, path: path, label: a.one("label") ?? ProcessInfo.processInfo.environment[WindowLock.labelVariable], log: { err($0) })
+}
+
+atexit { WindowLock.releaseAll() }
 
 do { exit(try run(Args(Array(CommandLine.arguments.dropFirst())))) }
 catch let e as PLError { err(e.description); exit(e.code) }

@@ -79,6 +79,30 @@ import PerfLoopProbe
     XCTAssertEqual(Readings.sides(run: v, metric: "latencyMs")[0].objective, Stats.median([30, 50]))
   }
 
+  /// A key child window (a palette panel, a popover, a sheet) of the bench window counts as the window being key; any
+  /// other window doesn't. Plain objects stand in for windows: `owns` only follows the parent chain.
+  func testAKeyChildWindowCountsAsKey() throws {
+    final class W { var parent: W?; init(_ p: W? = nil) { parent = p } }
+    let bench = W(), panel = W(bench), popover = W(panel), other = W()
+    XCTAssertTrue(WindowState.owns(bench, key: bench, parent: { $0.parent }))
+    XCTAssertTrue(WindowState.owns(bench, key: panel, parent: { $0.parent }))
+    XCTAssertTrue(WindowState.owns(bench, key: popover, parent: { $0.parent }), "at any depth")
+    XCTAssertFalse(WindowState.owns(bench, key: other, parent: { $0.parent }))
+    XCTAssertFalse(WindowState.owns(bench, key: nil, parent: { $0.parent }))
+    let loop = W(); loop.parent = loop
+    XCTAssertFalse(WindowState.owns(bench, key: loop, parent: { $0.parent }), "a cycle ends")
+
+    // Reported key, with the child flagged; the runner reads it as trusted.
+    let w = WindowState(appActive: true, keyWindow: true, visible: true, occluded: false, frame: [], backingScale: 2, keyWindowIsChild: true)
+    let v = try PLJSON.decode(JSONValue.self, from: Data(PLJSON.encode(w).utf8))
+    XCTAssertEqual(v["keyWindowIsChild"]?.bool, true)
+    XCTAssertNil(try PLJSON.decode(JSONValue.self, from: Data(PLJSON.encode(WindowState(appActive: true, keyWindow: true, visible: true, occluded: false, frame: [], backingScale: 2)).utf8))["keyWindowIsChild"])
+    let side = Readings.sides(run: .object(["reps": .array([.object(["cpuMsPerStep": .number(1), "window": v])])]), metric: "mainThreadCpuMsPerStep")
+    XCTAssertEqual(side.first?.trustworthy, true)
+    // The fields that failed, named as the runner names them.
+    XCTAssertEqual(WindowState(appActive: true, keyWindow: false, visible: true, occluded: true, frame: [], backingScale: 2).failed, ["keyWindow=false", "occluded=true"])
+  }
+
   // MARK: the command line, headless
 
   enum Pick: String, KnobValue, CaseIterable { case sort, index
@@ -218,6 +242,26 @@ import PerfLoopProbe
     XCTAssertFalse(g.pass); XCTAssertEqual(g.review, true); XCTAssertEqual(g.value ?? 0, 64.0 / 4096, accuracy: 1e-4)
     XCTAssertTrue(FileManager.default.fileExists(atPath: diffOut))
     XCTAssertEqual(bench().handle(["snapdiff", pa, pb, "--guard-param", "snapshot-diff.tolerance=0.02"]).0, 0)
+  }
+
+  /// F4: a trace the bench couldn't delete is reported as kept, with why, never as deleted.
+  func testAFailedTraceDeleteIsReported() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-trace-\(UUID().uuidString)")
+    defer { chmod(dir.appendingPathComponent("stuck.trace").path, 0o755); try? FileManager.default.removeItem(at: dir) }
+    let ok = dir.appendingPathComponent("ok.trace"), stuck = dir.appendingPathComponent("stuck.trace")
+    for t in [ok, stuck] {
+      try FileManager.default.createDirectory(at: t, withIntermediateDirectories: true)
+      try "FAKE_TOKEN=secret".write(to: t.appendingPathComponent("env"), atomically: true, encoding: .utf8)
+    }
+    chmod(stuck.path, 0o555)
+    var d = ProfileDoc(template: "Time Profiler", trace: ok.path, scenario: "s", fixture: "f", process: "b", durationS: 1)
+    ProfileVerb.dropTrace(ok, keep: false, doc: &d, adapter: "testbench")
+    XCTAssertEqual(d.traceKept, false); XCTAssertTrue(d.text.contains("\ntrace: deleted"), d.text)
+    d = ProfileDoc(template: "Time Profiler", trace: stuck.path, scenario: "s", fixture: "f", process: "b", durationS: 1)
+    ProfileVerb.dropTrace(stuck, keep: false, doc: &d, adapter: "testbench")
+    XCTAssertEqual(d.traceKept, true)
+    XCTAssertTrue(d.text.contains("trace: KEPT at \(stuck.path)"), d.text)
+    XCTAssertTrue(d.notes.first?.hasPrefix("couldn't delete \(stuck.path)") == true, "\(d.notes)")
   }
 }
 #endif

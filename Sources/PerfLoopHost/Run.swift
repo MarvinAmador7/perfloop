@@ -98,11 +98,14 @@ import PerfLoopProbe
     if let q = recordRequest { recordRequest = nil; try await record(q) }
   }
 
-  /// The window's state now: a rep whose window wasn't active, key, visible and unoccluded is untrusted.
+  /// The window's state now: a rep whose window wasn't active, key, visible and unoccluded is untrusted. A visible
+  /// window the bench window owns (a child panel, popover or sheet) holding the keyboard counts as the window being key:
+  /// a palette that takes the keyboard is the design, not a distraction.
   public func windowState() -> WindowState? {
     guard let w = window else { return nil }
-    return WindowState(appActive: NSApp.isActive, keyWindow: w.isKeyWindow, visible: w.isVisible, occluded: !w.occlusionState.contains(.visible),
-                       frame: [w.frame.origin.x, w.frame.origin.y, w.frame.width, w.frame.height], backingScale: w.backingScaleFactor)
+    let child = !w.isKeyWindow && NSApp.keyWindow.map { $0 !== w && $0.isVisible && WindowState.owns(w, key: $0, parent: { $0.parent ?? $0.sheetParent }) } == true
+    return WindowState(appActive: NSApp.isActive, keyWindow: w.isKeyWindow || child, visible: w.isVisible, occluded: !w.occlusionState.contains(.visible),
+                       frame: [w.frame.origin.x, w.frame.origin.y, w.frame.width, w.frame.height], backingScale: w.backingScaleFactor, keyWindowIsChild: child ? true : nil)
   }
 
   func close() {

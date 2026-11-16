@@ -218,15 +218,20 @@ public final class Loop {
         out.append(p); continue
       }
       var p = try measureRedoingInterrupts(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric, scenario: scenario)
-      if Acceptance.unusable(p) != nil, p.failure != nil, p.interrupted != true {
-        log("exp \(e.id) \(stage) pair \(i + 1): \(p.failure!); once more")
+      // A failed or untrusted pair is redone once; an untrusted one that a rerun can't fix (the same side's window wrong
+      // the same way in both orders) isn't, and the stage stops there rather than spend more windowed runs on it.
+      let stuck = Acceptance.deterministic(out + [p])
+      if let why = Acceptance.unusable(p), p.failure != nil || Acceptance.distrusted(p), p.interrupted != true, stuck == nil {
+        log("exp \(e.id) \(stage) pair \(i + 1): \(why); once more")
         let n = p.interruptions
         p = try measureRedoingInterrupts(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric, scenario: scenario)
         if let n { p.interruptions = (p.interruptions ?? 0) + n }
+        p.redone = why
       }
       p.runner = here
       try PLJSON.write(p, path: rec.path)
       out.append(p)
+      if let d = Acceptance.deterministic(out) { log("exp \(e.id) \(stage): \(d); the stage stops at pair \(i + 1)"); break }
     }
     return out
   }
@@ -259,16 +264,17 @@ public final class Loop {
     }
     if e.via == "run" {
       var got: [String: JSONValue] = ["order": .string(order)]
-      var machines: [String: MachineState] = [:]
-      var failure: String?
+      var failure: String?, status: [String: Int32] = [:], machines: [String: MachineState] = [:]
       for (label, entry, knobs) in first ? [("a", s.champion, s.championKnobs), ("b", s.candidate, s.candidateKnobs)] : [("b", s.candidate, s.candidateKnobs), ("a", s.champion, s.championKnobs)] {
         let o = try Adapter(exe: entry.executable, runner: runner, workDir: dir).run(scenario: sc, fixture: fixture, params: sc == e.scenario ? params : [:], knobs: knobs, env: guardEnv(g, dir: pdir.appendingPathComponent(label)))
         if o.status == interruptedStatus { return interrupted() }
-        machines[label] = o.machine
+        status[label] = o.status; machines[label] = o.machine
         if let v = o.json, ok.contains(o.status) { got[label] = v } else { failure = "\(label == "a" ? "champion" : "candidate") run exited \(o.status)"; break }
       }
       try PLJSON.write(JSONValue.object(got), path: raw.path)
       var a = got["a"].flatMap { Readings.sides(run: $0, metric: metric).first }, b = got["b"].flatMap { Readings.sides(run: $0, metric: metric).first }
+      // The exit code the runner saw is the rep's (5: the bench's own "untrusted").
+      a?.exit = status["a"].map(Int.init); b?.exit = status["b"].map(Int.init)
       Self.stamp(&a, machines["a"]); Self.stamp(&b, machines["b"])
       var p = Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure ?? (a == nil || b == nil ? "no result" : nil))
       judgeSnapshots(&p, g, dir: pdir, sides: s)
@@ -296,12 +302,16 @@ public final class Loop {
     return p
   }
 
-  /// The runner's reading of the machine when a side's rep started (the quiet gate) onto the side: `quiet` is false
-  /// when either the runner or the adapter saw a busy machine.
+  /// The runner's quiet gate's reading when a side's rep started, onto the side's trust fields (Acceptance.distrust):
+  /// `quiet` is false when either the runner or the adapter saw a busy machine, `busyPct` the busier reading, `busy`
+  /// what kept it busy; `machine` keeps the gate's detail (how long it waited, why).
   static func stamp(_ s: inout Side?, _ m: MachineState?) {
-    guard let m, s != nil else { return }
-    s!.machine = m
-    s!.quiet = m.quiet && s!.quiet != false
+    guard let m, var x = s else { return }
+    x.machine = m
+    x.quiet = m.quiet && x.quiet != false
+    if let b = m.busyPct { x.busyPct = max(x.busyPct ?? b, b) }
+    if !m.quiet { let names = (m.busy ?? []) + (x.busy ?? []); x.busy = names.isEmpty ? nil : names.reduce(into: []) { if !$0.contains($1) { $0.append($1) } } }
+    s = x
   }
 
   // MARK: screen, full, promote
@@ -309,12 +319,13 @@ public final class Loop {
   public func screen(_ id: String) throws -> Experiment {
     var e = try store.experiment(id)
     guard e.kind != "baseline" else { throw PLError.usage("exp \(e.id) is the baseline") }
-    if let s = e.screen, s.verdict != "error" { log("exp \(e.id) is already screened (\(s.verdict))"); return e }
+    if let s = e.screen, !["error", "untrusted"].contains(s.verdict) { log("exp \(e.id) is already screened (\(s.verdict))"); return e }
     let s = try sides(e), r = rule(e, s)
     let ps = try pairs(e, stage: "screen", fixture: e.fixture, count: Acceptance.screenPairs, sides: s, metric: r.metric)
     let st = Acceptance.screen(ps, metric: r.metric, guards: r.guards)
     e.screen = st
     if st.verdict == "error" { e.notes.append("screen: no usable pair; rerun perfloop exp screen \(e.id)") }
+    else if st.verdict == "untrusted" {}                    // decided nothing: the state stays; explain's next: says what helps
     else { e.state = st.verdict == "promising" ? .promising : st.verdict == "needsReview" ? .needsReview : .rejected }
     try record(e, st)
     return e
@@ -351,7 +362,9 @@ public final class Loop {
         let ps = try pairs(e, stage: "second", fixture: sf, count: Acceptance.screenPairs, sides: s, metric: r.metric)
         let (s2, ok) = Acceptance.notWorse(ps, metric: r.metric, guards: r.guards)
         e.secondScreen = SecondFixture(fixture: sf, stage: s2, notWorse: ok)
-        if !ok { e.state = (s2.guardReviews ?? []).isEmpty || !s2.guardsPassed ? .lost : .needsReview; e.notes.append("won on \(e.fixture) but worse on \(sf) (or a guard there): over-fitting one fixture (SPEC §5.5)") }
+        // Untrusted on the second fixture decides nothing either: the full resumes there (its own pairs are on disk).
+        if s2.verdict == "untrusted" { e.state = .full }
+        else if !ok { e.state = (s2.guardReviews ?? []).isEmpty || !s2.guardsPassed ? .lost : .needsReview; e.notes.append("won on \(e.fixture) but worse on \(sf) (or a guard there): over-fitting one fixture (SPEC §5.5)") }
       }
       // The isolation scenarios' checks hold on the candidate too, whatever this experiment climbs (C6).
       if e.state == .won {
@@ -359,6 +372,7 @@ public final class Loop {
         if let bad = e.isolation?.first(where: { !$0.pass }) { e.state = .lost; e.notes.append("isolation broken in \(bad.scenario): " + bad.failures.joined(separator: "; ")) }
       }
     case "noDecision", "needsReview": e.state = .needsReview
+    case "untrusted": e.state = .full                     // resumes at the untrusted pairs; never lost on them
     case "error": e.state = .promising; e.notes.append("full: no usable pairs; rerun perfloop exp full \(e.id)")
     default: e.state = .lost
     }
@@ -389,7 +403,9 @@ public final class Loop {
     }
     if e.parent?.experiment != c.experiment { refusals.append("measured against champion \(e.parent?.experiment ?? "?"), but the champion is now \(c.experiment): screen it again as a new experiment") }
     if e.build?.dirty != false && !o.allowDirty { refusals.append("the build is dirty (or its state unknown): commit, rebuild, and run it again") }
-    if let s = e.secondScreen, !s.notWorse { refusals.append("worse on the second fixture \(s.fixture)") }
+    if let s = e.secondScreen, !s.notWorse {
+      refusals.append(s.stage.verdict == "untrusted" ? "the screen on the second fixture \(s.fixture) is untrusted: perfloop exp full \(e.id)" : "worse on the second fixture \(s.fixture)")
+    }
     if e.secondFixture != nil && e.secondFixture != e.fixture && e.secondScreen == nil { refusals.append("no screen on the second fixture \(e.secondFixture!)") }
     if e.behaviourChange { ownerNeeded.append("a declared behaviour change") }
     // Guards (C6): a full stage, the isolation scenarios holding (run now if the full predates them), the latest

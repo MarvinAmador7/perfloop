@@ -43,17 +43,15 @@ final class QuietTests: XCTestCase {
     XCTAssertTrue(LoadReading(text: "130").unknown)
   }
 
-  func testNotQuietRepsAreSaidInExplain() {
+  func testANotQuietRepIsUntrustedAndKeepsTheGatesDetail() {
     var a = Side(objective: 40), b = Side(objective: 20)
-    b.quiet = false; b.machine = MachineState(quiet: false, busyPct: 99.8, busy: ["swift-frontend 380 %"], waitedS: 60, why: "100 % of the cores busy (> 30 %)")
+    // What Loop.stamp writes from the runner's gate: the trust fields, and the gate's detail.
+    b.quiet = false; b.busyPct = 99.8; b.busy = ["swift-frontend 380 %"]
+    b.machine = MachineState(quiet: false, busyPct: 99.8, busy: ["swift-frontend 380 %"], waitedS: 60, why: "100 % of the cores busy (> 30 %)")
     a.quiet = true
-    var st = Stage(metric: "mainThreadCpuMsPerStep", pairs: [Pair(index: 0, order: "AB", result: nil, a: a, b: b)], verdict: "rejected")
-    st.runner = RunnerIdentity(runner: "local", model: "Mac16,1")
-    let text = Explain.stage("screen", st).joined(separator: "\n")
-    XCTAssertTrue(text.contains("1 of 2 rep(s) started on a machine that wasn't quiet (100 % of the cores busy (> 30 %)): quiet: false in the pair records"), text)
-    // A record round-trips with its machine state.
-    let back = try? PLJSON.decode(Side.self, from: Data(PLJSON.encode(b).utf8))
-    XCTAssertEqual(back, b)
+    let p = Pair(index: 0, order: "AB", result: nil, a: a, b: b)
+    XCTAssertEqual(Acceptance.unusable(p), "untrusted on the candidate: not quiet (busy 99.8 %: swift-frontend 380 %) (the champion's rep was fine)")
+    XCTAssertEqual(try? PLJSON.decode(Side.self, from: Data(PLJSON.encode(b).utf8)), b)   // the record round-trips
   }
 
   // MARK: frames that never drew
@@ -83,13 +81,17 @@ final class QuietTests: XCTestCase {
   func testAPairWithoutFramesNeverDecides() {
     var nf = Side(objective: 20); nf.noFrames = true
     let p = Pair(index: 0, order: "AB", result: nil, a: Side(objective: 40), b: nf)
-    XCTAssertEqual(Acceptance.unusable(p), "no frames on the candidate: screen locked or window off-screen (its frame metrics are missing, not 0)")
-    // A screen whose every pair drew nothing says so, and promises nothing (it was "promising" at 2× before).
+    XCTAssertEqual(Acceptance.unusable(p), "untrusted on the candidate: no frames (screen locked or window off-screen) (the champion's rep was fine)")
+    XCTAssertTrue(Acceptance.distrusted(p))                                          // redone once, like any untrusted pair
+    // A screen whose every pair drew nothing is untrusted, says why, and promises nothing (it was "promising" at 2×).
     let s = Acceptance.screen([p, p, p].enumerated().map { var x = $1; x.index = $0; return x }, metric: "mainThreadCpuMsPerStep", guards: [])
-    XCTAssertEqual(s.verdict, "error")
-    XCTAssertTrue(s.reasons.contains { $0.contains("screen locked or window off-screen") }, "\(s.reasons)")
-    // A frame metric as the objective: missing, so "no frames" is the reason, not "the objective is missing".
+    XCTAssertEqual(s.verdict, "untrusted")
+    XCTAssertEqual(s.untrusted, "3/6 reps untrusted: no frames (screen locked or window off-screen) ×3")
+    // A frame metric as the objective: missing because nothing drew, so the reason is "no frames", not "the objective
+    // is missing", and the pair is still an untrusted one (redone, never decides).
     var nh = Side(objective: nil); nh.noFrames = true
-    XCTAssertTrue(Acceptance.unusable(Pair(index: 0, order: "AB", result: nil, a: nh, b: Side(objective: 1)))?.hasPrefix("no frames on the champion") == true)
+    let q = Pair(index: 0, order: "AB", result: nil, a: nh, b: Side(objective: 1))
+    XCTAssertEqual(Acceptance.unusable(q), "untrusted on the champion: no frames (screen locked or window off-screen) (the candidate's rep was fine)")
+    XCTAssertTrue(Acceptance.distrusted(q))
   }
 }

@@ -77,6 +77,10 @@ enum ProfileVerb {
     let go = out.appendingPathComponent("go"), trace = out.appendingPathComponent("\(scenario)-\(template).trace"), result = out.appendingPathComponent("\(scenario)-inprocess.json")
     let waiting = URL(fileURLWithPath: go.path + ".waiting"), done = URL(fileURLWithPath: go.path + ".done")
     for f in [go, waiting, done, trace, result] { try? fm.removeItem(at: f) }
+    // While it records, `perfloop store gc` and `doctor` leave this folder's trace alone (unless the runner said so first).
+    let marker = out.appendingPathComponent(".recording")
+    let marked = !fm.fileExists(atPath: marker.path) && fm.createFile(atPath: marker.path, contents: Data(String(getpid()).utf8))
+    defer { if marked { try? fm.removeItem(at: marker) } }
     let fixture = a.one("fixture") ?? bench.defaultFixture ?? bench.fixtures.first?.name ?? "default"
     var args = ["run", scenario, "--fixture", fixture, "--reps", a.one("reps") ?? "1", "--json", "--out", result.path, "--wait-for", go.path, "--profiled",
                 "--sampler", a.one("sampler") ?? "off"]
@@ -132,15 +136,29 @@ enum ProfileVerb {
     if let d = try? Data(contentsOf: result), let v = try? PLJSON.decode(JSONValue.self, from: d) { doc.inProcess = v }
     else { doc.notes.append("the child wrote no in-process result (exit \(child.terminationStatus))") }
     try? fm.removeItem(at: result)
-    try summarise(&doc, trace: trace, template: template)
-    if keep {
-      doc.traceKept = true
-      FileHandle.standardError.write(Data("\(bench.adapter): \(trace.path) holds the recorded process's environment and paths: never commit, publish or attach it\n".utf8))
-    } else {
-      try? fm.removeItem(at: trace); doc.traceKept = false
-    }
+    do { try summarise(&doc, trace: trace, template: template) } catch { dropTrace(trace, keep: keep, doc: &doc, adapter: bench.adapter); throw error }
+    dropTrace(trace, keep: keep, doc: &doc, adapter: bench.adapter)
     try PLJSON.encode(doc).write(to: out.appendingPathComponent("\(scenario)-\(template).json"), atomically: true, encoding: .utf8)
     return doc
+  }
+
+  /// Deletes the trace unless `keep`, then says what is on disk: `traceKept` true while it is there, with a note (and a
+  /// line on stderr) when a delete failed, never a "deleted" for a trace that wasn't.
+  static func dropTrace(_ trace: URL, keep: Bool, doc: inout ProfileDoc, adapter: String) {
+    let fm = FileManager.default
+    var why: String?
+    if !keep { do { try fm.removeItem(at: trace) } catch { why = error.localizedDescription } }
+    doc.traceKept = fm.fileExists(atPath: trace.path)
+    doc.keepTrace = keep ? true : nil
+    guard doc.traceKept == true else { return }
+    doc.trace = trace.path
+    if keep {
+      FileHandle.standardError.write(Data("\(adapter): \(trace.path) holds the recorded process's environment and paths: never commit, publish or attach it\n".utf8))
+    } else {
+      let t = "couldn't delete \(trace.path) (\(why ?? "still there after the delete")): it holds the recorded process's environment; delete it by hand"
+      doc.notes.append(t)
+      FileHandle.standardError.write(Data("\(adapter): \(t)\n".utf8))
+    }
   }
 
   /// Exports what the template recorded and folds it into the document.

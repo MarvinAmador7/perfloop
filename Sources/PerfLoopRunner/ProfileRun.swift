@@ -3,8 +3,9 @@ import PerfLoopKit
 
 // `perfloop profile champion|exp/ID` (C2): the adapter's own xctrace recording of a store build (with the experiment's
 // knobs), kept in the store as a `perfloop.profile/2` and indexed by build, knobs, scenario and template, so that
-// `perfloop diff champion exp/ID` finds both sides by name and checks their provenance. The trace itself is deleted by
-// the adapter once exported (it holds the recorded process's environment) unless `--keep-trace`.
+// `perfloop diff champion exp/ID` finds both sides by name and checks their provenance. The trace holds the recorded
+// process's environment (tokens included): once the adapter returns, the runner deletes every `.trace` it left unless
+// `--keep-trace`, checks that it is gone, and the profile says what is on disk, not what the adapter meant to do.
 
 extension Loop {
   /// What a name like `champion` or `exp/0007` stands for: the build to record, the knobs it runs with, and the scenario
@@ -48,18 +49,79 @@ extension Loop {
     var args = ["profile", t.scenario, "--template", template, "--fixture", t.fixture, "--out", dir.path, "--json"]
     for (k, v) in t.knobs.sorted(by: { $0.key < $1.key }) { args += ["--knob", "\(k)=\(v)"] }
     if keepTrace { args.append("--keep-trace") }
-    let o = try Adapter(exe: entry.executable, runner: runner, workDir: dir).call(args)
-    if o.status == interruptedStatus { throw PLError.harness("the profile was interrupted (input on this Mac): run it again when nobody is using the Mac") }
     let path = dir.appendingPathComponent("\(t.scenario)-\(template).json").path
-    guard o.status == 0, let doc = try? PLJSON.read(ProfileDoc.self, path: path) else {
-      throw PLError.harness("\(entry.executable) profile exited \(o.status) without a profile at \(path)")
+    // While it records, `store gc` and `doctor` leave this folder's trace alone.
+    let marker = dir.appendingPathComponent(Traces.marker)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try? String(ProcessInfo.processInfo.processIdentifier).write(to: marker, atomically: true, encoding: .utf8)
+    let o: Adapter.Output
+    do { o = try Adapter(exe: entry.executable, runner: runner, workDir: dir).call(args) } catch {
+      let s = settleTraces(dir: dir, reported: nil, keep: keepTrace); try? FileManager.default.removeItem(at: marker)
+      if s.kept.isEmpty { throw error }
+      throw PLError.harness("\(error)" + s.failureNote)
     }
+    let written = try? PLJSON.read(ProfileDoc.self, path: path)
+    let s = settleTraces(dir: dir, reported: written?.trace, keep: keepTrace)
+    try? FileManager.default.removeItem(at: marker)
+    if o.status == interruptedStatus { throw PLError.harness("the profile was interrupted (input on this Mac): run it again when nobody is using the Mac" + s.failureNote) }
+    guard o.status == 0, var doc = written else {
+      throw PLError.harness("\(entry.executable) profile exited \(o.status) without a profile at \(path)" + s.failureNote)
+    }
+    s.apply(&doc)
+    try s.patch(path)
     try appendIndex(.object(["path": .string(path), "build": .string(t.build), "knobs": .object(t.knobs.mapValues { .string($0) }), "scenario": .string(t.scenario),
                              "fixture": .string(t.fixture), "template": .string(doc.template), "target": .string(t.label), "at": .string(Clock.now())]))
     if let id = t.experiment, target.hasPrefix("exp/"), var e = try? store.experiment(id) {
       e.notes.append("profile (\(doc.template)): \(store.rel(URL(fileURLWithPath: path)))"); try store.save(e); _ = explain(e)
     }
     return (path, doc)
+  }
+
+  /// What is on disk after a profile: the traces still there (kept on purpose, or a delete that failed, with why).
+  struct SettledTraces {
+    var kept: [String] = []
+    var failed: [String: String] = [:]
+    var keep = false
+
+    /// Into the document: `traceKept` and `trace` as they are on disk, and a note per trace still there that shouldn't be.
+    func apply(_ d: inout ProfileDoc) {
+      d.traceKept = !kept.isEmpty
+      d.keepTrace = keep ? true : nil
+      if let k = kept.first { d.trace = k }
+      d.notes += notes
+    }
+    var notes: [String] {
+      kept.dropFirst().map { "also kept: \($0)" } + failed.sorted(by: { $0.key < $1.key }).map { p, why in
+        "couldn't delete \(p) (\(why)): it holds the recorded process's environment; delete it by hand, or perfloop store gc"
+      }
+    }
+    /// The same into the profile JSON on disk (patched as JSON: fields this runner doesn't know are kept).
+    func patch(_ path: String) throws {
+      guard case .object(var o)? = try? PLJSON.read(JSONValue.self, path: path) else { return }
+      o["traceKept"] = .bool(!kept.isEmpty)
+      o["keepTrace"] = keep ? .bool(true) : nil
+      if let k = kept.first { o["trace"] = .string(k) }
+      if !notes.isEmpty { o["notes"] = .array((o["notes"]?.array ?? []) + notes.map(JSONValue.string)) }
+      try PLJSON.write(JSONValue.object(o), path: path)
+    }
+    /// For an error: the traces left behind.
+    var failureNote: String {
+      kept.isEmpty ? "" : "\n" + kept.map { "trace: KEPT at \($0)\(failed[$0].map { " (couldn't delete it: \($0))" } ?? ""): it holds the recorded process's environment; delete it by hand, or perfloop store gc" }.joined(separator: "\n")
+    }
+  }
+
+  /// Deletes every `.trace` the adapter left in `dir` (and the one its document names, wherever it is) unless `keep`,
+  /// then reads what is left.
+  func settleTraces(dir: URL, reported: String?, keep: Bool) -> SettledTraces {
+    var s = SettledTraces(); s.keep = keep
+    var found = Traces.find(under: dir).map(\.path)
+    if let r = reported, URL(fileURLWithPath: r).pathExtension == "trace", FileManager.default.fileExists(atPath: r),
+       !found.contains(where: { URL(fileURLWithPath: $0).standardizedFileURL == URL(fileURLWithPath: r).standardizedFileURL }) { found.append(r) }
+    for p in found {
+      if keep { s.kept.append(p); continue }
+      if let why = Traces.delete(p) { s.kept.append(p); s.failed[p] = why }
+    }
+    return s
   }
 
   /// The newest indexed profile of a target (same build, knobs and scenario), Time Profiler first.

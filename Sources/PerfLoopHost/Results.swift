@@ -130,10 +130,26 @@ public struct WindowState: Codable, Sendable, Equatable {
   public var occluded: Bool
   public var frame: [Double]
   public var backingScale: Double
-  public init(appActive: Bool, keyWindow: Bool, visible: Bool, occluded: Bool, frame: [Double], backingScale: Double) {
+  /// true when the key window is a visible child of the bench window (a panel, sheet or popover holding the keyboard):
+  /// the bench window counts as key then. nil when the bench window itself is key, or nothing of it is.
+  public var keyWindowIsChild: Bool?
+  public init(appActive: Bool, keyWindow: Bool, visible: Bool, occluded: Bool, frame: [Double], backingScale: Double, keyWindowIsChild: Bool? = nil) {
     self.appActive = appActive; self.keyWindow = keyWindow; self.visible = visible; self.occluded = occluded; self.frame = frame; self.backingScale = backingScale
+    self.keyWindowIsChild = keyWindowIsChild
   }
   public var trustworthy: Bool { appActive && keyWindow && visible && !occluded }
+  /// The fields that make it untrusted, as the runner names them ("keyWindow=false").
+  public var failed: [String] {
+    [(appActive, "appActive=false"), (keyWindow, "keyWindow=false"), (visible, "visible=false"), (!occluded, "occluded=true")].filter { !$0.0 }.map { $0.1 }
+  }
+
+  /// Whether `key` is `window` or a window it owns: a child window (a panel, a popover) or a sheet, at any depth,
+  /// following `parent` (AppKit: `parent ?? sheetParent`).
+  public static func owns<W: AnyObject>(_ window: W, key: W?, parent: (W) -> W?) -> Bool {
+    var w = key, depth = 0
+    while let x = w, depth < 16 { if x === window { return true }; w = parent(x); depth += 1 }
+    return false
+  }
 }
 
 public struct RepRecord: Codable, Sendable, Equatable {
@@ -154,10 +170,11 @@ public struct RepRecord: Codable, Sendable, Equatable {
   public var notes: [String]
   /// The rep's gestures together: the worst error, every stall, the median jerk (nil without a replayed gesture).
   public var smoothness: Smoothness?
-  /// `run --quiet-check S`: false when the machine wasn't quiet after S s and the rep ran anyway (nil: not checked).
+  /// `run --quiet-check S`: false when the machine wasn't quiet after S s and the rep ran anyway (nil: not checked),
+  /// the share of the cores busy then, and what kept them busy (ADAPTER.md §3: the runner reads all three).
   public var quiet: Bool? = nil
-  /// What the quiet check saw before the rep (PerfLoopKit.MachineState).
-  public var machine: MachineState? = nil
+  public var busyPct: Double? = nil
+  public var busy: [String]? = nil
 }
 
 public struct Objective: Codable, Sendable, Equatable {
