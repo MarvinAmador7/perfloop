@@ -92,7 +92,7 @@ public final class MCPServer {
       if a["behaviour_change"]?.bool == true { x.append("--behaviour-change") }
       if a["screen"]?.bool == false { x.append("--no-screen") } else { x += try self.runner(a) }
       return x },
-    Tool(name: "screen", description: "3 interleaved pairs, champion vs candidate: promising | rejected. Opens windows. Returns a job.",
+    Tool(name: "screen", description: "3 interleaved pairs, champion vs candidate: promising | rejected, or untrusted (untrusted reps decided nothing: rerun when the Mac is quiet). Opens windows. Returns a job.",
          properties: ["id": Self.prop("string", "Experiment id"), "runner": Self.runnerProp], required: ["id"], kind: .job) { [unowned self] a in
       try ["exp", "screen", Self.id(Self.req(a, "id"))] + self.runner(a) },
     Tool(name: "full", description: "5 + 5 interleaved pairs (extended to 8 + 8 and 10 + 10 while undecided), frame guards, the second fixture: won | lost | needsReview. Opens windows. Returns a job.",

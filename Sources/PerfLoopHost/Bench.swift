@@ -216,7 +216,7 @@ public final class Bench: @unchecked Sendable {
     scenarios: \(scenarios.map(\.name).joined(separator: ", "))
     fixtures: \(fixtures.map(\.name).joined(separator: ", "))
     environment: PERFLOOP_KNOBS=k=v,… PERFLOOP_GUARDS=a,b PERFLOOP_GUARD_PARAMS=k=v,… PERFLOOP_ARTIFACTS=DIR PERFLOOP_SAMPLER=off
-    exit codes: 0 pass · 1 usage · 2 harness error · 3 budget, check or guard failed · 5 untrusted (window not active: rerun)
+    exit codes: 0 pass · 1 usage · 2 harness error · 3 budget, check or guard failed · 5 untrusted (the window not active, key, visible and unoccluded: never decides)
     """
   }
 
@@ -399,7 +399,16 @@ public final class Bench: @unchecked Sendable {
     var failed = !summary.checksFailed.isEmpty || !summary.guardsFailed.filter { $0 != "snapshot-diff" }.isEmpty
     if let budget = spec.latencyBudgetMs, let l = summary.latencyMs?.median, l > budget { failed = true; notes.append("latency \(l) ms is over the budget of \(budget) ms") }
     let untrusted = records.contains { $0.window?.trustworthy == false }
-    if untrusted { notes.append("the window wasn't active, key, visible and unoccluded in every rep: these numbers decide nothing (rerun with nobody using the Mac)") }
+    if untrusted {
+      // Name the rep and the field: an app that wasn't active or a window behind another is the machine (someone used
+      // it: rerun), a window that is active and in front but not key is this app keeping the keyboard elsewhere.
+      let bad = records.filter { $0.window?.trustworthy == false }
+      let fields = bad.map { "rep \($0.index + 1): \(($0.window?.failed ?? []).joined(separator: ", "))" }.joined(separator: "; ")
+      let own = bad.allSatisfy { $0.window?.failed == ["keyWindow=false"] }
+      notes.append("the window wasn't active, key, visible and unoccluded (\(fields)): these numbers decide nothing" + (own
+        ? "; another window of this app held the keyboard, which a rerun won't change (a child window of the bench window would count as key)"
+        : " (rerun with nobody using the Mac, the screen unlocked)"))
+    }
     let verdict = untrusted ? "untrusted" : failed ? "fail" : "pass"
     let code: Int32 = untrusted ? 5 : failed ? 3 : 0
     var pj: [String: JSONValue] = params.mapValues { .string($0) }

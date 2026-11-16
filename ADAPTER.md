@@ -53,7 +53,8 @@ change. `guards`: `checks` (the scenario's own checks), `snapshot-diff` (§5), a
 
 Opens the window, drives the scenario, prints a result, exits. The runner calls it once per side of every pair (fresh
 process each time) and interleaves champion and candidate itself. Exit 0 (pass), 3 (a check, guard or budget failed),
-4 (regression) or 5 (untrusted) all carry numbers; anything else is a harness error and the pair is redone once.
+4 (regression) or 5 (untrusted) all carry numbers, but a rep that exits 5 never decides; anything else is a harness
+error and the pair is redone once.
 
 The environment it runs with:
 
@@ -76,16 +77,40 @@ extra fields are fine and missing optional ones fall back. What it reads, per re
 | `frames.steadyHz`, `frames.late` | information; `explain` reports a rate change |
 | `checks[]` `{ name, pass, detail }` | the `checks` guard: a check the candidate fails while the champion passes vetoes it |
 | `guards[]` `{ name, pass, detail, artifacts, value, limit, review }` | the named guards; `review: true` asks the owner |
-| `window { appActive, keyWindow, visible, occluded }` | all four right, or the rep is untrusted and never decides |
+| `window { appActive, keyWindow, visible, occluded }` | all four right, or the rep is untrusted and never decides (a rep without one: the result's top-level `window`) |
+| `quiet`, `busyPct`, `busy[]` | the machine when the rep started: `quiet: false` makes the rep untrusted; `busyPct` (share of the cores busy) and `busy` (what kept them busy) say why. Per rep or top level; `noise.quiet` / `noise.reasons` (deskbench) are read the same way. Optional |
 | `worstStretches[] { step, durationMs, topOurs[], topFramework[], causes[] }` | `explain`'s "where the time went" |
 | `smoothness { positionErrorP95Pt, stalls, jerkP95 }` | gesture-replay frame guards (C9) |
 | top-level `profiled: true` | the rep never feeds the objective |
+
+`keyWindow` is true when the bench window is key, **or a visible window it owns is**: a child window (a panel, a
+popover) or a sheet, at any depth. A palette or search panel that takes the keyboard is the design, not a distraction,
+and a bench that reports `keyWindow: false` for it makes every rep untrusted, every time. PerfLoopHost counts it so and
+adds `keyWindowIsChild: true`; an adapter of its own does the same (`w.isKeyWindow`, or `NSApp.keyWindow`'s
+`parent`/`sheetParent` chain reaches `w`).
+
+**Trust.** A rep decides only when its `window` was right, the machine was quiet (when the adapter says), and it didn't
+exit 5. A pair with an untrusted rep is redone once. A stage whose pairs are still untrusted decides nothing: its
+verdict is `untrusted` with the count and the cause (`screen: UNTRUSTED (6/6 reps untrusted: not quiet ×6 (busy up to
+99.8 %: swift-build)) …`), and rerunning it measures only those pairs again. The exception is one side's window wrong
+the same way in both orders while the other side's is right: the build does that, a rerun can't change it, and the
+stage says `deterministic` and stops early. (A screen whose trusted pairs already reject the candidate, a pair it
+didn't win or a guard it failed, is still rejected.)
 
 ## 4. `ab --a EXE --b EXE S --fixture F --reps 1 --json --out FILE` (optional)
 
 deskbench's own interleaved pair. An adapter whose manifest lists `verbs` without `ab` is measured through two `run`s per
 pair instead, which is what PerfLoopHost benches do. Output: `summaryA/summaryB` (the objective's median under its
 name), `buildA/buildB`, `guardsA/guardsB`, `failures[]`.
+
+The runner can't see the processes `ab` starts, so for its trust rule (§3) `ab` also reports each side's reps, one of:
+
+- `runs[]`, one per process: `{ "side": "A" | "B", "exit": 5, "quiet": false, "busyPct": 99.8, "builds": ["swift-build"],
+  "window": { … } }` (`busy` or deskbench's `builds`; every field but `side` optional, `window` as in §3);
+- `repsA` / `repsB` (or `reps[]` with `variant: "A" | "B"`): the reps as `run` reports them.
+
+An `ab` that reports neither still runs and decides as before, but nothing in it can be untrusted: every stage it
+measured says `trust: not checked` in `explain`.
 
 ## 5. `snapdiff A.png B.png --json --diff-out D.png [--guard-param snapshot-diff.tolerance=X]`
 
@@ -127,7 +152,7 @@ git checkout. `gestures [--json]` lists the built-in ones.
 
 ## 7. Exit codes
 
-0 ok · 1 usage · 2 harness error · 3 budget/check/guard failed · 4 regression beyond noise · 5 untrusted (rerun) ·
+0 ok · 1 usage · 2 harness error · 3 budget/check/guard failed · 4 regression beyond noise · 5 untrusted (never decides) ·
 6 refused (provenance) · 7 interrupted (input during the rep; the local runner's idle gate)
 
 ## 8. Schema versions

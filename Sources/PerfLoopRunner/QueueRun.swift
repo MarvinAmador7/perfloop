@@ -71,6 +71,13 @@ extension Loop {
           let why = line + ": " + (last?.reasons.prefix(3).joined(separator: "; ") ?? "")
           try q.append(QueueEvent(item: it.id, state: "failed", runner: r.name, note: why))
           res.lines.append("\(it.id): failed: \(why)")
+        } else if let u = [e.secondScreen?.stage, last].compactMap({ $0 }).first(where: { $0.verdict == "untrusted" }) {
+          // Untrusted decided nothing. A rerun can help: the item stays queued and the next queue run measures only the
+          // untrusted pairs again. A rerun can't (deterministic): it fails, with why.
+          let why = line + ": " + u.reasons.prefix(2).joined(separator: "; ")
+          let stuck = Acceptance.deterministic(u.pairs) != nil
+          try q.append(QueueEvent(item: it.id, state: stuck ? "failed" : "stopped", runner: r.name, note: why))
+          res.lines.append("\(it.id): \(stuck ? "failed" : "untrusted, still queued"): \(why)")
         } else {
           try q.append(QueueEvent(item: it.id, state: "done", runner: r.name, note: line))
           res.lines.append("\(it.id): \(line) on \(id.line)"); res.ran += 1
@@ -98,7 +105,7 @@ extension Loop {
     case "screen": return try screen(e.id)
     case "full": return try full(e.id, force: it.force)
     default:
-      if e.screen == nil || e.screen?.verdict == "error" { e = try screen(e.id) }
+      if e.screen == nil || ["error", "untrusted"].contains(e.screen?.verdict ?? "") { e = try screen(e.id) }
       if [.promising, .full].contains(e.state) || (it.force && e.state == .rejected) { e = try full(e.id, force: it.force) }
       return e
     }

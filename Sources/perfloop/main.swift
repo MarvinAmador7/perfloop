@@ -31,8 +31,8 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
           [--behaviour-change] [--patch FILE] [--no-screen] [--against ID]
                                             a candidate against the champion; screens it unless --no-screen
   exp status [ID]                           open experiments and what each needs next (with ID: its explain)
-  exp screen ID                             3 interleaved pairs: promising | rejected
-  exp full ID [--force]                     5 + 5 (→ 8 + 8 → 10 + 10 while unknown): won | lost | needsReview
+  exp screen ID                             3 interleaved pairs: promising | rejected (| untrusted: decided nothing)
+  exp full ID [--force]                     5 + 5 (→ 8 + 8 → 10 + 10 while unknown): won | lost | needsReview (| untrusted)
   exp promote ID [--owner] [--allow-dirty] [--pr URL]
                                             the champion moves to the experiment's build
   exp abandon ID [--note "…"]

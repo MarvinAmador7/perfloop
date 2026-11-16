@@ -23,9 +23,8 @@ public enum Readings {
     }
     var s = Side(objective: value, hitch: r.at("frames.hitchTimeRatioMsPerS")?.double, longest: r.at("mainThread.longestMs")?.double,
                  checksFailed: (r["checks"]?.array ?? []).filter { $0["pass"]?.bool == false }.compactMap { $0["name"]?.string })
-    if let w = r["window"], w.object != nil {
-      s.trustworthy = (w["appActive"]?.bool ?? false) && (w["keyWindow"]?.bool ?? false) && (w["visible"]?.bool ?? false) && !(w["occluded"]?.bool ?? true)
-    }
+    window(r["window"], into: &s)
+    machine(r, into: &s)
     s.steadyHz = r.at("frames.steadyHz")?.double; s.lateFrames = r.at("frames.late")?.double
     s.worstStretch = worst(r["worstStretches"]?.array ?? [])
     s.guards = r["guards"]?.array.map { $0.compactMap(GuardResult.init(json:)) }
@@ -47,25 +46,89 @@ public enum Readings {
     return s
   }
 
-  /// A whole `run --json` result: its reps, or its summary when it has none.
+  /// A whole `run --json` result: its reps, or its summary when it has none. What the result says once for every rep
+  /// (a top-level `window`, `quiet`, deskbench's `noise.quiet`, `exitCode`) fills in what a rep doesn't say itself.
   public static func sides(run v: JSONValue, metric: String) -> [Side] {
     var out = (v["reps"]?.array ?? []).map { side(rep: $0, metric: metric) }
     if out.isEmpty, let s = v["summary"] { out = [side(summary: s, metric: metric)] }
     if v["profiled"]?.bool == true { for i in out.indices { out[i].profiled = true } }
+    var top = Side(objective: nil)
+    window(v["window"], into: &top); machine(v, into: &top)
+    if top.quiet == nil, let q = v.at("noise.quiet")?.bool { top.quiet = q; if !q { top.busy = v.at("noise.reasons")?.strings } }
+    for i in out.indices {
+      if out[i].trustworthy == nil { out[i].trustworthy = top.trustworthy; out[i].windowFailed = top.windowFailed }
+      if out[i].quiet == nil { out[i].quiet = top.quiet; out[i].busyPct = out[i].busyPct ?? top.busyPct; out[i].busy = out[i].busy ?? top.busy }
+      out[i].exit = out[i].exit ?? v["exitCode"]?.double.map { Int($0) }
+    }
     return out
   }
 
   /// `ab --json`: the sides for one label ("A" or "B"). Per-rep records when the adapter includes them (`repsA`,
   /// `reps[]` with `variant`), else the label's summary.
   public static func sides(ab v: JSONValue, label: String, metric: String) -> [Side] {
-    if let rs = v["reps" + label]?.array, !rs.isEmpty { return rs.map { side(rep: $0, metric: metric) } }
-    if let rs = v["reps"]?.array?.filter({ $0["variant"]?.string == label }), !rs.isEmpty { return rs.map { side(rep: $0, metric: metric) } }
+    let ran = runs(ab: v, label: label)
+    // Per-rep records, each with its own run's exit and quiet when `runs[]` lines up with them.
+    func withRuns(_ rs: [JSONValue]) -> [Side] {
+      rs.enumerated().map { i, r in trust(of: ran.count == rs.count ? [ran[i]] : ran, into: side(rep: r, metric: metric)) }
+    }
+    if let rs = v["reps" + label]?.array, !rs.isEmpty { return withRuns(rs) }
+    if let rs = v["reps"]?.array?.filter({ $0["variant"]?.string == label }), !rs.isEmpty { return withRuns(rs) }
     guard let s = v["summary" + label] else { return [] }
     if (s["reps"]?.double ?? 1) == 0 { return [] }
     var one = side(summary: s, metric: metric)
     // The side's guards, every rep's (deskbench `guardsA`/`guardsB`).
     one.guards = v["guards" + label]?.array.map { $0.compactMap(GuardResult.init(json:)) }
-    return [one]
+    return [trust(of: ran, into: one)]
+  }
+
+  /// The label's processes as `ab` ran them (`runs[]` with `side`: deskbench's `pair`, `exit`, `quiet`, `busyPct`,
+  /// `builds`, and `window` when the adapter adds it).
+  static func runs(ab v: JSONValue, label: String) -> [JSONValue] { (v["runs"]?.array ?? []).filter { $0["side"]?.string == label } }
+
+  /// A summary side and the runs it summarises: untrusted when any of them was. Their exit code (5 wins: the bench's
+  /// own "untrusted"), quiet when all were, the busiest share and every busy process, the window fields any got wrong.
+  static func trust(of runs: [JSONValue], into s: Side) -> Side {
+    var s = s
+    guard !runs.isEmpty else { return s }
+    var each: [Side] = runs.map { r in
+      var x = Side(objective: nil)
+      window(r["window"], into: &x); machine(r, into: &x)
+      x.exit = (r["exit"] ?? r["exitCode"])?.double.map { Int($0) }
+      return x
+    }
+    if each.contains(where: { $0.exit != nil }) { s.exit = each.compactMap(\.exit).contains(5) ? 5 : each.compactMap(\.exit).max() }
+    let qs = each.compactMap(\.quiet)
+    if !qs.isEmpty { s.quiet = !qs.contains(false) }
+    let busy = each.compactMap(\.busyPct)
+    if !busy.isEmpty { s.busyPct = busy.max() }
+    let names = each.flatMap { $0.busy ?? [] }
+    if !names.isEmpty { s.busy = names.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } } }
+    each = each.filter { $0.trustworthy != nil }
+    if !each.isEmpty {
+      let failed = ((s.windowFailed ?? []) + each.flatMap { $0.windowFailed ?? [] }).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+      s.trustworthy = failed.isEmpty; s.windowFailed = failed.isEmpty ? nil : failed
+    }
+    return s
+  }
+
+  /// The window fields a rep needs right (`window { appActive, keyWindow, visible, occluded }`): any that isn't makes
+  /// the rep untrusted, and the field names say which.
+  static func window(_ w: JSONValue?, into s: inout Side) {
+    guard let w, w.object != nil else { return }
+    var failed: [String] = []
+    if w["appActive"]?.bool != true { failed.append("appActive") }
+    if w["keyWindow"]?.bool != true { failed.append("keyWindow") }
+    if w["visible"]?.bool != true { failed.append("visible") }
+    if w["occluded"]?.bool != false { failed.append("occluded") }
+    s.trustworthy = failed.isEmpty; s.windowFailed = failed.isEmpty ? nil : failed
+  }
+
+  /// Whether the machine was quiet when the rep started: `quiet`, `busyPct`, and what kept it busy (`busy`, deskbench's
+  /// `builds`).
+  static func machine(_ r: JSONValue, into s: inout Side) {
+    if let q = r["quiet"]?.bool { s.quiet = q }
+    if let b = r["busyPct"]?.double { s.busyPct = b }
+    if let n = (r["busy"] ?? r["builds"])?.strings, !n.isEmpty { s.busy = n }
   }
 
   /// What went wrong in an `ab`, if anything (its `failures[]`).

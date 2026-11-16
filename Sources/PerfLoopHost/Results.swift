@@ -130,10 +130,26 @@ public struct WindowState: Codable, Sendable, Equatable {
   public var occluded: Bool
   public var frame: [Double]
   public var backingScale: Double
-  public init(appActive: Bool, keyWindow: Bool, visible: Bool, occluded: Bool, frame: [Double], backingScale: Double) {
+  /// true when the key window is a visible child of the bench window (a panel, sheet or popover holding the keyboard):
+  /// the bench window counts as key then. nil when the bench window itself is key, or nothing of it is.
+  public var keyWindowIsChild: Bool?
+  public init(appActive: Bool, keyWindow: Bool, visible: Bool, occluded: Bool, frame: [Double], backingScale: Double, keyWindowIsChild: Bool? = nil) {
     self.appActive = appActive; self.keyWindow = keyWindow; self.visible = visible; self.occluded = occluded; self.frame = frame; self.backingScale = backingScale
+    self.keyWindowIsChild = keyWindowIsChild
   }
   public var trustworthy: Bool { appActive && keyWindow && visible && !occluded }
+  /// The fields that make it untrusted, as the runner names them ("keyWindow=false").
+  public var failed: [String] {
+    [(appActive, "appActive=false"), (keyWindow, "keyWindow=false"), (visible, "visible=false"), (!occluded, "occluded=true")].filter { !$0.0 }.map { $0.1 }
+  }
+
+  /// Whether `key` is `window` or a window it owns: a child window (a panel, a popover) or a sheet, at any depth,
+  /// following `parent` (AppKit: `parent ?? sheetParent`).
+  public static func owns<W: AnyObject>(_ window: W, key: W?, parent: (W) -> W?) -> Bool {
+    var w = key, depth = 0
+    while let x = w, depth < 16 { if x === window { return true }; w = parent(x); depth += 1 }
+    return false
+  }
 }
 
 public struct RepRecord: Codable, Sendable, Equatable {

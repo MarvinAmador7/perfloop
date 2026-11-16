@@ -78,6 +78,8 @@ public struct Pair: Codable, Sendable, Equatable {
   public var interruptions: Int?
   /// This record is an aborted rep (input arrived): never judged, always redone.
   public var interrupted: Bool?
+  /// Why the pair's first attempt couldn't decide (it failed or was untrusted), when this record is its one redo.
+  public var redone: String?
   public init(index: Int, order: String, result: String?, a: Side, b: Side, failure: String? = nil) {
     self.index = index; self.order = order; self.result = result; self.a = a; self.b = b; self.failure = failure
   }
@@ -92,6 +94,15 @@ public struct Side: Codable, Sendable, Equatable {
   /// Present only when the run says so; a profiled or untrusted rep never decides.
   public var profiled: Bool?
   public var trustworthy: Bool?
+  /// The `window` fields that were wrong (`keyWindow`, `appActive`, `visible`, `occluded`), when `trustworthy` is false.
+  public var windowFailed: [String]?
+  /// The rep's exit code, when the runner or the adapter's `ab` reports it: 5 is the bench's own "untrusted".
+  public var exit: Int?
+  /// Whether the machine was quiet when the rep started, the share of the cores busy then, and what kept them busy
+  /// (`ab`'s `runs[]`, or the result's `quiet` / `noise.quiet`). nil when the adapter doesn't say.
+  public var quiet: Bool?
+  public var busyPct: Double?
+  public var busy: [String]?
   public var steadyHz: Double?
   public var lateFrames: Double?
   public var worstStretch: StretchNote?
@@ -133,8 +144,12 @@ public struct Stage: Codable, Sendable, Equatable {
   /// `needsReview`.
   public var guardReviews: [String]?
   /// promising | rejected (screen); won | lost | unknown | noDecision (full); needsReview (either: the objective
-  /// would pass but a guard asks the owner); error when no pair produced numbers.
+  /// would pass but a guard asks the owner); untrusted (either: pairs it needs had untrusted reps, so it decided
+  /// nothing); error when no pair produced numbers.
   public var verdict: String
+  /// How many reps couldn't be trusted and why ("6/6 reps untrusted: not quiet ×6 (busy up to 99.8 %: swift-build)"),
+  /// whatever the verdict; nil when every rep could.
+  public var untrusted: String?
   public var reasons: [String]
   /// The candidate is worse than the champion beyond the band (full: and significantly). Never set by noise alone.
   public var regression: Bool?

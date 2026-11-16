@@ -62,9 +62,11 @@ perfloop ledger                              # what was tried, by whom, with wha
 seconds to minutes. Run them only when the owner says the Mac is free, with the window lock if other benches share it
 (`--runner local --lock /tmp/window.lock`), or queue them: `perfloop queue add <id>` and let
 `perfloop queue run --runner local --idle 120` (only while nobody touches the Mac) or
-`--runner ssh://user@spare-mac` (a Mac nobody uses) take them. A run on a locked screen, in the background or under a
-profiler is **untrusted** and never decides; rerun it, don't explain it away. `perfloop doctor` says what would make
-this Mac's numbers untrustworthy.
+`--runner ssh://user@spare-mac` (a Mac nobody uses) take them. A run on a locked screen, in the background, on a busy
+Mac or under a profiler is **untrusted** and never decides: a stage that needed it says `UNTRUSTED` with how many reps
+and why, and is neither rejected nor lost. Rerun it when the Mac is quiet (only the untrusted pairs run again), don't
+explain it away; when its `next:` says a rerun won't help (one side's window is wrong the same way every time), do what
+it says instead. `perfloop doctor` says what would make this Mac's numbers untrustworthy.
 
 Over MCP (`perfloop mcp`), the same verbs are tools: a stage returns a job, and `job` waits for it on the server's side,
 so never poll with `sleep`; the session's end stops its jobs.
