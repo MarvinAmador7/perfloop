@@ -96,6 +96,13 @@ runners and the queue (C10): where windowed reps run; results never mix runners
   runner check R | runner clean R           the runner's machine, session and store there; clean removes that store
   ssh runner flags: --accept-new-host-key, --remote-env K=V, --launch gui|direct
   local runner flags: --busy-apps A,B, --idle-from FILE (testing)
+                                            no rep starts while the screen is locked: the runner waits for the unlock
+                                            before it takes the window lock (--no-wait: stops instead); a rep the
+                                            screen lock interrupts is redone
+  quiet gate (local): before each rep, wait up to --quiet-timeout S (60) for a quiet machine: at most --max-load PCT
+                                            (30) of all cores busy and no build running; then the rep runs and is
+                                            recorded as not quiet (quiet: false, so it is untrusted and never decides),
+                                            or with --require-quiet the run stops (finished pairs are kept)
 
 the window lock: one bench window on this Mac at a time. Every verb that opens a window here (exp new/screen/full,
 guards, profile, sweep, exp replay --go, queue run --runner local) holds it around each rep, as do the MCP server's jobs,
@@ -112,7 +119,8 @@ struct Args {
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
                                     "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir",
-                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop", "template", "top", "label"]
+                                    "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop", "template", "top", "label",
+                                    "max-load", "quiet-timeout"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -281,8 +289,7 @@ func run(_ args: Args) throws -> Int32 {
       }).trimmingCharacters(in: .newlines))
       return 0
     }
-    let l = Loop(store: try Store.locate(store: args.one("store"), app: plan.app))
-    lockDefaultRunner(l, args)
+    let l = Loop(store: try Store.locate(store: args.one("store"), app: plan.app)); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
     let r = try l.replay(plan)
     r.lines.forEach(out)
     out("replay: \(r.mismatches == 0 ? "every step as expected" : "\(r.mismatches) step(s) not as expected")")
@@ -329,6 +336,13 @@ func run(_ args: Args) throws -> Int32 {
       let reading = lr.idle.read()
       out("idle: \(reading.idle.map { "\(Int($0)) s" } ?? "unknown")\(reading.frontmost.map { ", frontmost \($0)" } ?? "")\(reading.locked == true ? ", screen locked" : "")")
       out(g.wait(reading).map { "would wait: " + $0.text(threshold: g.threshold) } ?? "would start a rep now (idle ≥ \(Int(g.threshold)) s)")
+    } else if let lr = r as? LocalRunner, lr.idle.readLocked() == true {
+      out("screen locked: would wait for the unlock\(lr.waitWhileLocked ? "" : " (--no-wait: would stop)")")
+    }
+    if let lr = r as? LocalRunner, let q = lr.quiet {
+      let l = lr.load.readLoad()
+      if l.unknown { out("quiet: the load can't be read here (no gate)") }
+      else { out(q.busy(l).map { "not quiet: \($0); a rep would wait up to \(Int(q.timeout)) s" } ?? "quiet: \(l.busyPct.map { "\(Int($0.rounded())) %" } ?? "?") of the cores busy (≤ \(Int(q.maxLoadPct)) %), no build running") }
     }
     return 0
 
@@ -383,10 +397,8 @@ func run(_ args: Args) throws -> Int32 {
   case ("profile", _):
     guard let t = args[1] else { throw PLError.usage("usage: perfloop profile champion|exp/ID [--template time|hitches|swiftui] [--scenario S] [--fixture F] [--keep-trace]") }
     let l = try loop()
-    if args.has("runner") || args.has("idle") {
-      var o = try runnerOptions(args, gatedByDefault: false); if args.one("runner") == nil && !args.has("idle") { o.force = true }
-      l.runner = try Runners.make(args.one("runner") ?? "local", store: l.store, options: o); l.runner.log = { err($0) }; trapSignals()
-    } else { lockDefaultRunner(l, args) }
+    var o = try runnerOptions(args, gatedByDefault: false); if args.one("runner") == nil && !args.has("idle") { o.force = true }
+    l.runner = try Runners.make(args.one("runner") ?? "local", store: l.store, options: o); l.runner.log = { err($0) }; trapSignals()
     let r = try l.profile(t, template: args.one("template") ?? "time", scenario: args.one("scenario"), fixture: args.one("fixture"), keepTrace: args.has("keep-trace"))
     out(json ? PLJSON.encode(r.doc) : r.doc.text + "\nprofile: \(r.path)\nnext: perfloop diff champion exp/ID (once both have a profile)"); return 0
   case ("diff", _):
@@ -426,6 +438,12 @@ func runnerOptions(_ args: Args, gatedByDefault: Bool) throws -> RunnerOptions {
   o.acceptNewHostKey = args.has("accept-new-host-key")
   o.launch = args.one("launch")
   o.lock = lockPath(args)
+  o.noWait = args.has("no-wait")
+  var q = QuietGate()
+  if let x = args.one("max-load") { guard let v = Double(x), v > 0, v <= 100 else { throw PLError.usage("--max-load takes a share of all cores in % (1–100), e.g. 30") }; q.maxLoadPct = v }
+  if let x = args.one("quiet-timeout") { guard let v = Double(x), v >= 0 else { throw PLError.usage("--quiet-timeout takes seconds (0: don't wait, only record)") }; q.timeout = v }
+  q.require = args.has("require-quiet")
+  o.quiet = q
   for kv in args.all("remote-env") { let p = kv.split(separator: "=", maxSplits: 1).map(String.init); if p.count == 2 { o.remoteEnv[p[0]] = p[1] } }
   return o
 }
@@ -438,15 +456,10 @@ func lockPath(_ args: Args) -> String? {
   return args.one("lock") ?? WindowLock.defaultPath()
 }
 
-/// The loop's own runner (this Mac, ungated) with the window lock, and ^C taking its windows and the lock down.
-func lockDefaultRunner(_ l: Loop, _ args: Args) {
-  (l.runner as? LocalRunner)?.lockDir = lockPath(args)
-  l.runner.log = { err($0) }
-  trapSignals()
-}
-
+/// Every windowed verb runs through a runner (local by default: ungated, with the window lock), so the screen-lock
+/// wait and the quiet gate always apply.
 func useRunner(_ l: Loop, _ args: Args, gatedByDefault: Bool) throws {
-  guard let spec = args.one("runner") ?? (args.has("idle") ? "local" : nil) else { lockDefaultRunner(l, args); return }
+  let spec = args.one("runner") ?? "local"
   let r = try Runners.make(spec, store: l.store, options: runnerOptions(args, gatedByDefault: gatedByDefault))
   r.log = { err($0) }
   l.runner = r
@@ -493,4 +506,5 @@ atexit { WindowLock.releaseAll() }
 
 do { exit(try run(Args(Array(CommandLine.arguments.dropFirst())))) }
 catch let e as PLError { err(e.description); exit(e.code) }
+catch let s as RunnerStop { err(s.description); exit(6) }
 catch { err("\(error)"); exit(2) }

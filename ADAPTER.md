@@ -51,7 +51,10 @@ change. `guards`: `checks` (the scenario's own checks), `snapshot-diff` (§5), a
 
 ## 3. `run SCENARIO --fixture F --reps 1 --json [--set k=v …] [--quiet-check 0]`
 
-Opens the window, drives the scenario, prints a result, exits. The runner calls it once per side of every pair (fresh
+Opens the window, drives the scenario, prints a result, exits. `--quiet-check 0`: the runner has already waited for a
+quiet machine (its quiet gate) and records what it saw on the rep's side of the pair, so the bench shouldn't wait again
+(PerfLoopHost's `run`, called directly, waits up to `--quiet-check S`, 10 s, and marks a rep that started busy
+`"quiet": false`). The runner calls it once per side of every pair (fresh
 process each time) and interleaves champion and candidate itself. Exit 0 (pass), 3 (a check, guard or budget failed),
 4 (regression) or 5 (untrusted) all carry numbers, but a rep that exits 5 never decides; anything else is a harness
 error and the pair is redone once.
@@ -74,11 +77,12 @@ extra fields are fine and missing optional ones fall back. What it reads, per re
 | `steps[].instructions` (all steps) | `instructionsPerStep` |
 | `steps[].latencyMs` (median) | `latencyMs` |
 | `frames.hitchTimeRatioMsPerS`, `mainThread.longestMs` | frame guards (not worse beyond their band) |
+| `frames.ticks` (else `frames.p95Ms`) | 0: the rep presented no frame (screen locked, window off-screen): its frame metrics are missing, not 0, and the rep is untrusted. Report the tick count |
 | `frames.steadyHz`, `frames.late` | information; `explain` reports a rate change |
 | `checks[]` `{ name, pass, detail }` | the `checks` guard: a check the candidate fails while the champion passes vetoes it |
 | `guards[]` `{ name, pass, detail, artifacts, value, limit, review }` | the named guards; `review: true` asks the owner |
 | `window { appActive, keyWindow, visible, occluded }` | all four right, or the rep is untrusted and never decides (a rep without one: the result's top-level `window`) |
-| `quiet`, `busyPct`, `busy[]` | the machine when the rep started: `quiet: false` makes the rep untrusted; `busyPct` (share of the cores busy) and `busy` (what kept them busy) say why. Per rep or top level; `noise.quiet` / `noise.reasons` (deskbench) are read the same way. Optional |
+| `quiet`, `busyPct`, `busy[]` | the machine when the rep started: `quiet: false` makes the rep untrusted; `busyPct` (share of the cores busy) and `busy` (what kept them busy) say why. Per rep or top level; `noise.quiet` / `noise.reasons` (deskbench) are read the same way. Optional: the local runner's own quiet gate fills the same fields on each side (and its wait under `machine`), false when either saw a busy machine |
 | `worstStretches[] { step, durationMs, topOurs[], topFramework[], causes[] }` | `explain`'s "where the time went" |
 | `smoothness { positionErrorP95Pt, stalls, jerkP95 }` | gesture-replay frame guards (C9) |
 | top-level `profiled: true` | the rep never feeds the objective |
@@ -89,8 +93,8 @@ and a bench that reports `keyWindow: false` for it makes every rep untrusted, ev
 adds `keyWindowIsChild: true`; an adapter of its own does the same (`w.isKeyWindow`, or `NSApp.keyWindow`'s
 `parent`/`sheetParent` chain reaches `w`).
 
-**Trust.** A rep decides only when its `window` was right, the machine was quiet (when the adapter says), and it didn't
-exit 5. A pair with an untrusted rep is redone once. A stage whose pairs are still untrusted decides nothing: its
+**Trust.** A rep decides only when its `window` was right, the machine was quiet (when the adapter or the runner's quiet
+gate says), it presented frames, and it didn't exit 5. A pair with an untrusted rep is redone once. A stage whose pairs are still untrusted decides nothing: its
 verdict is `untrusted` with the count and the cause (`screen: UNTRUSTED (6/6 reps untrusted: not quiet ×6 (busy up to
 99.8 %: swift-build)) …`), and rerunning it measures only those pairs again. The exception is one side's window wrong
 the same way in both orders while the other side's is right: the build does that, a rerun can't change it, and the
@@ -101,7 +105,9 @@ didn't win or a guard it failed, is still rejected.)
 
 deskbench's own interleaved pair. An adapter whose manifest lists `verbs` without `ab` is measured through two `run`s per
 pair instead, which is what PerfLoopHost benches do. Output: `summaryA/summaryB` (the objective's median under its
-name), `buildA/buildB`, `guardsA/guardsB`, `failures[]`.
+name, and `frameP95Ms` or `frameTicks`: a median of 0 means the side drew no frame), `buildA/buildB`,
+`guardsA/guardsB`, `failures[]`. The runner's quiet gate runs once before each `ab` call, so both sides of the pair
+record the same machine reading.
 
 The runner can't see the processes `ab` starts, so for its trust rule (§3) `ab` also reports each side's reps, one of:
 

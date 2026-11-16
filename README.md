@@ -108,6 +108,12 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 
 `perfloop help` has every flag. Exit codes: 0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner).
 
+On this Mac, every windowed verb waits while the screen is locked, before taking the window lock (`--no-wait`: stop
+instead), with or without `--idle`; then, holding the lock, it waits up to `--quiet-timeout` (60 s) for a quiet
+machine: at most `--max-load` (30) % of the cores busy and no compiler, linker or test run going. A rep that started
+busy anyway is recorded as `"quiet": false` on its side of the pair, with the busiest processes, and is untrusted
+(`--require-quiet`: stop instead). A rep that drew no frames has no frame metrics and is untrusted too.
+
 ### The owner's flags
 
 `--force` (a full over a rejected screen, or `queue run` without the idle gate), `--owner` (decide what waits for the

@@ -32,7 +32,8 @@ public enum Acceptance {
   /// Why a pair can't decide anything (it is re-run on resume), or nil when it can.
   public static func unusable(_ p: Pair) -> String? {
     if let f = p.failure { return f }
-    if p.a.objective == nil || p.b.objective == nil { return "the objective is missing on \(p.a.objective == nil ? "the champion" : "the candidate")" }
+    // A side that drew no frame has no frame metric to be the objective: that is untrusted (below), not missing.
+    if (p.a.objective == nil && p.a.noFrames != true) || (p.b.objective == nil && p.b.noFrames != true) { return "the objective is missing on \(p.a.objective == nil ? "the champion" : "the candidate")" }
     if p.a.profiled == true || p.b.profiled == true { return "a profiler was attached: profiled runs never feed the objective" }
     if let u = untrusted(p) { return u }
     if p.interrupted == true { return "interrupted: input during the rep (redo it)" }
@@ -45,11 +46,15 @@ public enum Acceptance {
   /// the machine wasn't quiet when it started, or the bench itself said so (exit 5). Such a rep never decides.
   public static func distrust(_ s: Side) -> [String] {
     var r: [String] = []
+    if s.noFrames == true { r.append(noFramesPhrase) }
     if s.trustworthy == false { r.append(windowPhrase(s)) }
     if s.quiet == false { r.append(busyPhrase(s)) }
     if s.exit == 5 && r.isEmpty { r.append("the bench exited 5 (untrusted)") }
     return r
   }
+
+  /// A rep that presented no frame (Readings.noFrames): its frame metrics are missing, not 0.
+  static let noFramesPhrase = "no frames (screen locked or window off-screen)"
 
   static func windowPhrase(_ s: Side) -> String {
     guard let f = s.windowFailed, !f.isEmpty else { return "window not active, key, visible and unoccluded" }
@@ -73,7 +78,7 @@ public enum Acceptance {
 
   /// A pair that ran and has numbers, but whose reps can't be trusted: redone once, and never decides.
   public static func distrusted(_ p: Pair) -> Bool {
-    p.failure == nil && p.interrupted != true && p.a.objective != nil && p.b.objective != nil && p.a.profiled != true && p.b.profiled != true && untrusted(p) != nil
+    p.failure == nil && p.interrupted != true && (p.a.objective != nil || p.a.noFrames == true) && (p.b.objective != nil || p.b.noFrames == true) && p.a.profiled != true && p.b.profiled != true && untrusted(p) != nil
   }
 
   /// One side's window was wrong while the other side's was right: the build's state, not the machine's.
@@ -105,6 +110,7 @@ public enum Acceptance {
           if let b = s.busyPct { busiest = max(busiest ?? b, b) }
           for n in s.busy ?? [] where !names.contains(n) { names.append(n) }
         }
+        if s.noFrames == true { count(noFramesPhrase) }
         if s.trustworthy == false { count("the \(who)'s \(windowPhrase(s))") }
         if s.exit == 5 && s.quiet != false && s.trustworthy != false { count("exit 5 (the bench's own untrusted)") }
       }

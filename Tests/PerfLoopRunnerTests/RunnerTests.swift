@@ -314,6 +314,149 @@ final class RunnerTests: FakeBenchCase {
     lock.release()
     XCTAssertNoThrow(try loop.queueRun(on: LocalRunner(), until: nil))
   }
+
+  // MARK: the screen lock and the quiet gate, with or without --idle
+
+  /// An ungated runner (`exp screen` without --idle) on a fake machine.
+  func ungated(_ idle: FakeIdle, load: @escaping () -> LoadReading = { LoadReading(busyPct: nil) }) -> LocalRunner {
+    let r = LocalRunner(); r.idle = idle.source; r.load = ScriptedLoadSource(load); r.poll = 0.05; r.screenLockPoll = 0.05; r.quietPoll = 0.01
+    return r
+  }
+
+  func testAnUngatedRunnerWaitsWhileTheScreenIsLocked() throws {
+    try baseline()
+    let e = try candidate()
+    let idle = FakeIdle(); idle.locked = true
+    let r = ungated(idle)
+    // The wait happens before the window lock is taken: a runner waiting for an unlock never blocks another bench.
+    let lock = tmp.appendingPathComponent("window.lock"); r.lockDir = lock.path
+    var waits: [String] = [], heldWhileLocked = false
+    r.onWait = { w in
+      waits.append(w)
+      if FileManager.default.fileExists(atPath: lock.path) { heldWhileLocked = true }
+      DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { idle.locked = false }     // someone unlocks it
+    }
+    loop.runner = r
+    XCTAssertEqual(try loop.screen(e.id).state, .promising)
+    XCTAssertFalse(heldWhileLocked)
+    XCTAssertEqual(waits.first, "waiting: the screen is locked: a window behind the lock screen is never active (unlock it; --no-wait stops instead of waiting)")
+    XCTAssertEqual(adapterCalls("ab").count, 3)                     // none ran while locked
+  }
+
+  func testNoWaitStopsOnALockedScreenAndTheQueueKeepsTheItem() throws {
+    try baseline()
+    let e = try candidate()
+    let idle = FakeIdle(); idle.locked = true
+    let r = ungated(idle); r.waitWhileLocked = false
+    loop.runner = r
+    XCTAssertThrowsError(try loop.screen(e.id)) { XCTAssertTrue("\($0)".hasPrefix("the screen is locked"), "\($0)") }
+    try loop.queueAdd(e.id, stage: "screen", runner: "local")
+    let res = try loop.queueRun(on: r, until: nil)
+    XCTAssertTrue(res.stopped?.contains("--no-wait") == true, "\(res)")
+    XCTAssertEqual(loop.queue.items().first?.state, "queued")
+    XCTAssertTrue(adapterCalls("ab").isEmpty)
+  }
+
+  func testARepTheScreenLockInterruptsIsRedone() throws {
+    try baseline(["SLEEP": "1.5"])
+    let e = try candidate(values: ["SLEEP": "1.5"])
+    let idle = FakeIdle()
+    let r = ungated(idle)
+    var waits: [String] = []
+    r.onWait = { waits.append($0) }
+    // The screen locks 0.3 s into the first rep, and is unlocked 0.5 s later.
+    var once = false
+    loop.log = { line in
+      guard !once, line.contains("pair 1") else { return }
+      once = true
+      DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { idle.locked = true }
+      DispatchQueue.global().asyncAfter(deadline: .now() + 1.8) { idle.locked = false }
+    }
+    loop.runner = r
+    let x = try loop.screen(e.id)
+    XCTAssertEqual(x.state, .promising, "\(x.screen?.reasons ?? [])")
+    XCTAssertTrue(waits.contains("interrupted: the screen locked during the rep"), "\(waits)")
+    XCTAssertTrue(waits.contains { $0.hasPrefix("waiting: the screen is locked") }, "\(waits)")
+    XCTAssertEqual(x.screen?.pairs.compactMap(\.interruptions).reduce(0, +), 1)
+    XCTAssertEqual(adapterCalls("ab").count, 4)                     // 3 pairs + the aborted one
+  }
+
+  func testTheQuietGateWaitsForQuietAndRecordsIt() throws {
+    try baseline()
+    let e = try candidate()
+    let idle = FakeIdle()
+    // Busy with another agent's build for the first readings, then quiet.
+    var reads = 0
+    let r = ungated(idle) {
+      reads += 1
+      return reads <= 3 ? LoadReading(busyPct: 99.8, processes: [BusyProcess(name: "swift-frontend", pct: 380)]) : LoadReading(busyPct: 4)
+    }
+    r.quiet = QuietGate(timeout: 30)
+    var waits: [String] = []
+    r.onWait = { waits.append($0) }
+    loop.runner = r
+    let x = try loop.screen(e.id)
+    XCTAssertEqual(x.state, .promising)
+    XCTAssertEqual(waits, ["waiting up to 30 s for a quiet machine: 100 % of the cores busy (> 30 %); building: swift-frontend; busiest: swift-frontend 380 % (--max-load PCT, --quiet-timeout S, --require-quiet)"])
+    for p in x.screen?.pairs ?? [] {
+      XCTAssertEqual(p.a.quiet, true); XCTAssertEqual(p.b.quiet, true)
+      XCTAssertEqual(p.b.machine?.busyPct, 4)
+    }
+    // In the pair's record on disk, under each side.
+    let rec = try PLJSON.read(JSONValue.self, path: store.expDir(e.id).appendingPathComponent("screen/p1.pair.json").path)
+    XCTAssertEqual(rec["b"]?["quiet"]?.bool, true)
+    XCTAssertEqual(rec["a"]?["machine"]?["busyPct"]?.double, 4)
+  }
+
+  func testABusyMachineIsWaitedForThenTheRepIsMarkedNotQuiet() throws {
+    let verbs = ["VERBS": "help,list,describe,knobs,run,snapdiff"]     // measured through run: one gate per side
+    try baseline(verbs)
+    var o = Loop.NewOptions(hypothesis: "faster"); o.bench = try bench("cand", verbs.merging(["CPU": "8"]) { $1 }); o.screen = false
+    let e = try loop.new(o)
+    let idle = FakeIdle()
+    let r = ungated(idle) { LoadReading(busyPct: 80, processes: [BusyProcess(name: "swift-test", pct: 95)]) }
+    r.quiet = QuietGate(timeout: 1, retryTimeout: 0.05)
+    var waits: [String] = []
+    r.onWait = { waits.append($0) }
+    loop.runner = r
+    let x = try loop.screen(e.id)
+    let pairs = x.screen?.pairs ?? []
+    XCTAssertEqual(pairs.count, 3)
+    for p in pairs {
+      // The gate's reading feeds the trust fields (#6's), and keeps its detail under `machine`.
+      XCTAssertEqual(p.a.quiet, false); XCTAssertEqual(p.b.quiet, false)
+      XCTAssertEqual(p.b.busyPct, 80); XCTAssertEqual(p.b.busy, ["swift-test 95 %"])
+      XCTAssertTrue(p.a.machine?.why?.contains("building: swift-test") == true)
+      XCTAssertNotNil(p.redone)                                       // untrusted: redone once, untrusted again
+    }
+    // Not-quiet reps decide nothing: the screen is untrusted, and says what was busy.
+    XCTAssertEqual(x.screen?.verdict, "untrusted")
+    XCTAssertEqual(x.screen?.untrusted, "6/6 reps untrusted: not quiet ×6 (busy up to 80 %: swift-test 95 %)")
+    XCTAssertTrue(waits.contains { $0.hasPrefix("not quiet after 1 s (80 % of the cores busy (> 30 %); building: swift-test") && $0.hasSuffix("recorded as not quiet (quiet: false)") }, "\(waits)")
+    // The first wait took the whole timeout; later ones only the short retry, until a rep starts quiet again.
+    let notQuiet = waits.filter { $0.hasPrefix("not quiet after") }.count
+    XCTAssertEqual(notQuiet, 12)                                      // 3 pairs and their redos, 2 reps each
+    XCTAssertEqual(waits.filter { $0.hasPrefix("waiting up to 1 s") }.count, 1, "\(waits)")
+    XCTAssertEqual(waits.filter { $0.hasPrefix("waiting up to 0 s") }.count, notQuiet - 1, "\(waits)")
+  }
+
+  func testRequireQuietStopsInsteadOfRunningBusy() throws {
+    try baseline()
+    let e = try candidate()
+    let idle = FakeIdle()
+    let r = ungated(idle) { LoadReading(busyPct: 90) }
+    r.quiet = QuietGate(timeout: 0.1, require: true)
+    loop.runner = r
+    XCTAssertThrowsError(try loop.screen(e.id)) { err in
+      guard case RunnerStop.notQuiet = err else { return XCTFail("\(err)") }
+      XCTAssertTrue("\(err)".contains("--require-quiet"), "\(err)")
+    }
+    XCTAssertTrue(adapterCalls("ab").isEmpty)
+    // Quiet again: the stage runs from its first pair.
+    r.load = ScriptedLoadSource { LoadReading(busyPct: 3) }
+    XCTAssertEqual(try loop.screen(e.id).state, .promising)
+    withExtendedLifetime(idle) {}
+  }
 }
 
 /// The pure half: the idle rule, --until, the queue's records.

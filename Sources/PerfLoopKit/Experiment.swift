@@ -109,7 +109,8 @@ public struct Side: Codable, Sendable, Equatable {
   /// The rep's exit code, when the runner or the adapter's `ab` reports it: 5 is the bench's own "untrusted".
   public var exit: Int?
   /// Whether the machine was quiet when the rep started, the share of the cores busy then, and what kept them busy
-  /// (`ab`'s `runs[]`, or the result's `quiet` / `noise.quiet`). nil when the adapter doesn't say.
+  /// (`ab`'s `runs[]`, or the result's `quiet` / `noise.quiet`, or the local runner's quiet gate: false when either saw
+  /// a busy machine). nil when nobody checked.
   public var quiet: Bool?
   public var busyPct: Double?
   public var busy: [String]?
@@ -123,6 +124,12 @@ public struct Side: Codable, Sendable, Equatable {
   public var positionErrorP95Pt: Double?
   public var stalls: Double?
   public var jerkP95: Double?
+  /// The local runner's quiet gate when the rep started (it also sets `quiet`, `busyPct` and `busy` above): how long
+  /// it waited and why the machine wasn't quiet. nil when the runner didn't check (ssh, VM, a library caller).
+  public var machine: MachineState?
+  /// The rep presented no frames (the screen was locked, or the window was off-screen): its frame metrics are
+  /// missing, not 0, and the rep is untrusted (it never decides).
+  public var noFrames: Bool?
   public init(objective: Double?, hitch: Double? = nil, longest: Double? = nil, checksFailed: [String] = []) {
     self.objective = objective; hitchTimeRatioMsPerS = hitch; longestStretchMs = longest; self.checksFailed = checksFailed
   }

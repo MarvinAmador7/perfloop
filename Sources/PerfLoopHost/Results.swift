@@ -170,6 +170,11 @@ public struct RepRecord: Codable, Sendable, Equatable {
   public var notes: [String]
   /// The rep's gestures together: the worst error, every stall, the median jerk (nil without a replayed gesture).
   public var smoothness: Smoothness?
+  /// `run --quiet-check S`: false when the machine wasn't quiet after S s and the rep ran anyway (nil: not checked),
+  /// the share of the cores busy then, and what kept them busy (ADAPTER.md §3: the runner reads all three).
+  public var quiet: Bool? = nil
+  public var busyPct: Double? = nil
+  public var busy: [String]? = nil
 }
 
 public struct Objective: Codable, Sendable, Equatable {

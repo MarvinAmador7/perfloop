@@ -14,6 +14,8 @@ public struct Adapter {
   public struct Output {
     public var status: Int32
     public var stdout: String
+    /// The machine when the rep started (the local runner's quiet gate); nil when nobody checked.
+    public var machine: MachineState? = nil
     public var json: JSONValue? { PLJSON.firstObject(in: stdout) }
   }
 

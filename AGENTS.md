@@ -82,6 +82,15 @@ Mac is quiet (only the untrusted pairs run again), don't explain it away; when i
 side's window is wrong the same way every time), do what it says instead. `perfloop doctor` says what would make this
 Mac's numbers untrustworthy.
 
+Local runs avoid both where they can. They never start a rep on a locked screen: the runner waits for the unlock
+before taking the window lock (`--no-wait` stops instead; finished pairs are kept), and a rep during which the screen
+locks is redone. A rep that presented no frames anyway has no frame metrics (never a perfect 0) and is untrusted:
+`no frames (screen locked or window off-screen)`. Before each rep, holding the window lock, the runner waits up to
+60 s (`--quiet-timeout S`) for a quiet machine: at most 30 % of the cores busy (`--max-load PCT`) and no build or test
+run going. Then the rep runs anyway and is untrusted (`"quiet": false` on its side of the pair, `busy` naming what was
+busy, the gate's wait under `machine`); `--require-quiet` stops instead. So don't build or test while a stage runs,
+and read `waiting … for a quiet machine: building: swift-frontend` as "my own build is the noise".
+
 Over MCP (`perfloop mcp`), the same verbs are tools: a stage returns a job, and `job` waits for it on the server's side,
 so never poll with `sleep`; the session's end stops its jobs.
 

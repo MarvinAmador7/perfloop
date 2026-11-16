@@ -18,6 +18,9 @@ class FakeBenchCase: XCTestCase {
     setenv("FAKE_LOG", log.path, 1)
     store = Store(root: tmp.appendingPathComponent("home/fake-app"))
     loop = Loop(store: store)
+    // Never this Mac's real screen lock or load: a test must not wait because the Mac running it is locked or busy.
+    let local = LocalRunner(); local.idle = ScriptedIdleSource { IdleReading(idle: 1000, locked: false) }
+    loop.runner = local
     loop.log = { _ in }
     loop.championFirst = { _, i in i % 2 == 0 }                     // AB, BA, AB, … in every stage
     loop.cwd = tmp.path

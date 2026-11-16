@@ -198,8 +198,11 @@ public final class Bench: @unchecked Sendable {
       describe [--json]                     the perfloop.manifest/1 a runner reads
       knobs [--json]                        the runtime knobs this process runs with (PERFLOOP_KNOBS)
       run SCENARIO [--fixture F] [--reps N] [--set k=v] [--json] [--out FILE] [--artifacts DIR]
-          [--knob k=v] [--guards LIST] [--guard-param k=v] [--sampler on|off] [--no-activate]
-                                            drive a scenario in a window of this process; the result is perfloop.result/2
+          [--knob k=v] [--guards LIST] [--guard-param k=v] [--sampler on|off] [--no-activate] [--quiet-check S]
+                                            drive a scenario in a window of this process; the result is perfloop.result/2.
+                                            Before each rep it waits up to S s (10; perfloop's runner passes 0 and gates
+                                            itself) for a quiet machine (≤ 30 % of the cores busy, no build running),
+                                            then runs and marks the rep quiet: false
       snapdiff A.png B.png [--diff-out D.png] [--guard-param snapshot-diff.tolerance=X] [--json]
                                             the snapshot-diff guard, headless (exit 3 over tolerance)
       profile SCENARIO [--template time|hitches|swiftui] [--fixture F] [--reps N] [--set k=v] [--out DIR] [--keep-trace] [--json]
@@ -375,9 +378,14 @@ public final class Bench: @unchecked Sendable {
     let startedAt = Clock.now()
     // `profile`'s child: the first rep's window waits for the go file once it is up, and the run says when it is done.
     let waitFor = a.one("wait-for")
+    // The quiet check (perfloop's runner does its own and passes 0; a profiled run never decides, so it doesn't wait).
+    let quietDefault = waitFor != nil || a.has("profiled") ? "0" : "10"
+    guard let quietCheck = Double(a.one("quiet-check") ?? quietDefault), quietCheck >= 0 else { throw HostError.usage("--quiet-check takes seconds (0: no check)") }
 
     var records: [RepRecord] = []
+    var busyNotes: [String] = []
     for i in 0..<reps {
+      let machine = quietCheck > 0 ? await Self.waitForQuiet(QuietGate(timeout: quietCheck)) : nil
       let recorder = Recorder(nominalHz: Double(NSScreen.main?.maximumFramesPerSecond ?? 60))
       Probe.sink = recorder; Mutations.sink = recorder.causes
       let run = Run(scenario: name, fixture: fixture, params: params, rep: i, recorder: recorder, activate: activate, sampler: sampler)
@@ -403,7 +411,12 @@ public final class Bench: @unchecked Sendable {
       let rec = recorder.timeline.rep(index: i, steps: run.steps, checks: run.checks, guards: guards, window: window, notes: run.notes) { r, s in
         sampler?.annotate(&r, stretch: s.id)
       }
-      records.append(rec)
+      var r = rec
+      if let m = machine {
+        r.quiet = m.quiet; r.busyPct = m.busyPct; r.busy = m.quiet ? nil : m.busy
+        if !m.quiet { busyNotes.append("rep \(i + 1) started on a machine that wasn't quiet after \(Int(m.waitedS)) s (\(m.why ?? "busy")): its numbers are noisy") }
+      }
+      records.append(r)
       if let s = sampler, let last = recorder.timeline.stretches.last { s.discard(beforeStretch: last.id + 1) }
     }
     sampler?.stop()
@@ -414,7 +427,7 @@ public final class Bench: @unchecked Sendable {
     }
 
     let summary = ResultSummary(reps: records, metric: spec.objective.rawValue)
-    var notes: [String] = []
+    var notes: [String] = busyNotes
     var failed = !summary.checksFailed.isEmpty || !summary.guardsFailed.filter { $0 != "snapshot-diff" }.isEmpty
     if let budget = spec.latencyBudgetMs, let l = summary.latencyMs?.median, l > budget { failed = true; notes.append("latency \(l) ms is over the budget of \(budget) ms") }
     let untrusted = records.contains { $0.window?.trustworthy == false }
@@ -438,6 +451,21 @@ public final class Bench: @unchecked Sendable {
     let text = PLJSON.encode(result)
     if let o = a.one("out") { try text.write(toFile: o, atomically: true, encoding: .utf8) }
     return (code, a.has("json") ? text : explain(result))
+  }
+
+  /// Waits up to the gate's timeout for a quiet machine (HostLoad: the cores' busy share and `ps`, off the main
+  /// thread); nil where the load can't be read.
+  static func waitForQuiet(_ q: QuietGate) async -> MachineState? {
+    let t0 = Date()
+    var said = false
+    while true {
+      let r = await Task.detached { HostLoad.read() }.value
+      if r.unknown { return nil }
+      let waited = Date().timeIntervalSince(t0)
+      guard let why = q.busy(r), waited < q.timeout else { return q.state(r, waited: waited) }
+      if !said { FileHandle.standardError.write(Data("waiting up to \(Int(q.timeout)) s for a quiet machine: \(why)\n".utf8)); said = true }
+      try? await Task.sleep(nanoseconds: 500_000_000)
+    }
   }
 
   /// `record-gesture SCENARIO`: the scenario's window, a hand's gestures recorded over it. The scenario's body runs up to
