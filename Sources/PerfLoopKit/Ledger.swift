@@ -17,6 +17,9 @@ public struct LedgerEntry: Codable, Sendable, Equatable {
   /// Where a stage's numbers came from (C10): the runner and the machine model. Results are keyed by both.
   public var runner: String?
   public var machine: String?
+  /// The owner flags this change came with (`--force`, …) and how the shell showed it was the owner's (env | tty).
+  public var ownerFlags: [String]?
+  public var ownerVia: String?
 
   public struct Before: Codable, Sendable, Equatable {
     public var before: Double?
@@ -28,6 +31,16 @@ public struct LedgerEntry: Codable, Sendable, Equatable {
               runner: RunnerIdentity? = nil) {
     self.at = at; self.experiment = experiment; self.state = state; self.objective = objective; self.build = build; self.by = by; self.note = note
     self.runner = runner?.runner; machine = runner?.model
+  }
+
+  /// The line `perfloop ledger` prints.
+  public var text: String {
+    var line = "\(at) \(experiment) \(state.padding(toLength: 11, withPad: " ", startingAt: 0)) by \(by)"
+    if let r = runner { line += " on \(r)\(machine.map { " (\($0))" } ?? "")" }
+    if let o = objective { line += " · \(o.before.map { String($0) } ?? "-") → \(o.after.map { String($0) } ?? "-")" }
+    if let f = ownerFlags, !f.isEmpty { line += " · OWNER FLAG \(f.joined(separator: " "))\(ownerVia.map { " (\(OwnerAuth.viaText($0)))" } ?? "")" }
+    if let n = note { line += " · \(n)" }
+    return line
   }
 }
 

@@ -58,6 +58,9 @@ checked against §1.
   is still running when the session ends. The `job` tool waits on the server's side, up to 60 s a call, so an agent
   never needs a sleep loop. `promote` and `abandon` act as the agent. No tool takes `--force`, `--owner`,
   `--guard-tolerance` or `--allow-dirty`. Setup: README → "Agents over MCP".
+- **The owner's flags on the CLI** (`Sources/PerfLoopRunner/OwnerGate.swift`): F2 on the shell too. The CLI
+  honours an owner flag only with `PERFLOOP_OWNER=1` or a yes at a terminal, and records every use on the experiment
+  and the ledger (README → "The owner's flags"). A speed bump and a record, not a wall.
 - **`perfloop suggest`** (`Sources/PerfLoopKit/Suggest.swift`, `perfloop.suggest/1`): reads the champion's (or an
   experiment's) latest results, its newest profile and the store's sweeps, and prints hypotheses ranked by the share of
   the objective each could remove, with the evidence. They are leads, not conclusions: each says what to check first.

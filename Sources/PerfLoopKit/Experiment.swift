@@ -47,11 +47,21 @@ public struct Experiment: Codable, Sendable, Equatable {
   public var explain: String?
   public var promotedAt: String?
   public var pr: String?
+  /// An owner flag changed what happened to it (`ownerFlags` says which, how it was authorised, and what it did).
+  /// Printed in the verdict, `explain`, `exp status` and the ledger, so a PR can't leave it out unnoticed.
+  public var forced: Bool?
+  public var ownerFlags: [OwnerFlagUse]?
   public var notes: [String]
 
   public init(id: String, hypothesis: String, kind: String = "code", scenario: String, fixture: String, parent: ParentRef?, build: Build?) {
     self.id = id; createdAt = Clock.now(); state = build == nil ? .new : .built; self.hypothesis = hypothesis; self.kind = kind
     behaviourChange = false; self.parent = parent; self.build = build; self.scenario = scenario; self.fixture = fixture; notes = []
+  }
+
+  /// Records an owner flag's use (once per flag and command run).
+  public mutating func used(_ u: OwnerFlagUse) {
+    if ownerFlags?.contains(where: { $0.flag == u.flag && $0.command == u.command && $0.at == u.at }) == true { return }
+    ownerFlags = (ownerFlags ?? []) + [u]; forced = true
   }
 }
 
