@@ -34,7 +34,8 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
   exp screen ID                             3 interleaved pairs: promising | rejected
   exp full ID [--force]                     5 + 5 (→ 8 + 8 → 10 + 10 while unknown): won | lost | needsReview
   exp promote ID [--owner] [--allow-dirty] [--pr URL]
-                                            the champion moves to the experiment's build
+                                            the champion moves to the experiment's build (--force, --owner,
+                                            --allow-dirty, --guard-tolerance: the owner's flags, below)
   exp abandon ID [--note "…"]
   exp replay PLAN.json [--dry-run | --go]   a past session as experiments (SPEC §6.1); --go opens windows
   guards --exp ID [--guard-tolerance X --owner]
@@ -66,15 +67,22 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             the loop as MCP tools over stdio for a coding agent (README: Agents over MCP):
                                             stages run as jobs it polls with `job`; no owner flags
 
+owner flags: --force, --owner, --guard-tolerance, --allow-dirty are the owner's, never an agent's (AGENTS.md)
+  honoured only with PERFLOOP_OWNER=1 in the environment or a yes typed at a terminal; refused otherwise (exit 6).
+  A speed bump and a record, not security: every use is recorded in experiment.json (forced, ownerFlags), the
+  ledger, the verdict, explain and exp status
+
 runners and the queue (C10): where windowed reps run; results never mix runners
   exp screen|full ID --runner R [--idle S]  R: local (default; idle-gated only with --idle S), ssh://[user@]host[/dir],
                                             vm:tart/NAME (a macOS VM on this Mac; screens only)
   queue add ID [--stage auto|screen|full] [--runner R] [--force]
-                                            auto: the screen, then the full when promising (--force: the full anyway)
+                                            auto: the screen, then the full when promising (--force, the owner's: the
+                                            full anyway)
   queue list [--json] | queue remove QID
   queue run --runner R [--until HH:MM] [--idle S] [--force]
                                             runs queued stages on R while it is free: local waits until nobody has
-                                            touched this Mac for S s (120) and aborts a rep on input (redone); no rep
+                                            touched this Mac for S s (120; --force, the owner's: no wait) and aborts a
+                                            rep on input (redone); no rep
                                             starts after --until; ssh:// copies the build there and opens the window
                                             in the logged-in user's session (--launch direct: plain ssh)
   runner check R | runner clean R           the runner's machine, session and store there; clean removes that store
@@ -88,7 +96,7 @@ runners and the queue (C10): where windowed reps run; results never mix runners
                                             --require-quiet the run stops (finished pairs are kept)
 
 store: --store DIR, else ${PERFLOOP_HOME:-~/.perfloop}/<app>, app from --app or $PERFLOOP_APP
-exit codes  0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner needed)
+exit codes  0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner needed, an owner flag without the owner)
 """
 
 struct Args {
@@ -125,15 +133,19 @@ func run(_ args: Args) throws -> Int32 {
       return Adapter(exe: exe.path).manifest()?.app
     }
   }
+  // The owner's flags pass this gate first (OwnerGate.swift): PERFLOOP_OWNER=1 or a yes at a terminal, else refused.
+  let command = args.positional.prefix(2).joined(separator: " ")
+  let owner = (args[0] ?? "help") == "help" ? nil : try OwnerGate().check(flags: Array(args.flags.keys), command: command)
   func loop(bench: String? = nil) throws -> Loop {
     let l = Loop(store: try store(bench: bench))
     if args.has("owner") { l.by = "owner" }
+    l.owner = owner
     return l
   }
   func show(_ e: Experiment, _ l: Loop) { out(json ? PLJSON.encode(e) : l.explain(e)) }
 
   // Guard tolerances come from the champion's manifest; the owner may try another one with `guards`, never an
-  // experiment's verbs (C6, anti-Goodhart).
+  // experiment's verbs (C6, anti-Goodhart). Past the gate, so only the owner reads this.
   if args[0] == "exp" && args.has("guard-tolerance") {
     throw PLError.refused("--guard-tolerance is refused inside exp: guards and their tolerances come from the champion's manifest (the owner: perfloop guards --exp ID --guard-tolerance X --owner)")
   }
@@ -264,7 +276,7 @@ func run(_ args: Args) throws -> Int32 {
   case ("queue", "add"):
     guard let id = args[2] else { throw PLError.usage("usage: perfloop queue add ID [--stage auto|screen|full] [--runner R]") }
     let it = try loop().queueAdd(id, stage: args.one("stage") ?? "auto", runner: args.one("runner"), note: args.one("note"), force: args.has("force"))
-    out("queued \(it.id): exp \(it.experiment) \(it.stage)\(it.force ? " --force" : "") on \(it.runner ?? "any runner")"); return 0
+    out("queued \(it.id): exp \(it.experiment) \(it.stage)\(it.force ? " --force (owner flag, \(OwnerAuth.viaText(it.forceVia ?? "?")))" : "") on \(it.runner ?? "any runner")"); return 0
   case ("queue", "list"), ("queue", nil):
     let items = try loop().queue.items().filter { args.has("all") || $0.state != "removed" }
     out(json ? PLJSON.encode(items.map { ["id": $0.id, "experiment": $0.experiment, "stage": $0.stage, "runner": $0.runner ?? "", "state": $0.state, "addedAt": $0.addedAt, "note": $0.note ?? "", "lastWait": $0.lastWait ?? "", "ranOn": $0.ranOn ?? ""] }) : Queue.text(items))
@@ -277,6 +289,7 @@ func run(_ args: Args) throws -> Int32 {
     var until: Date?
     if let u = args.one("until") { guard let d = Until.parse(u) else { throw PLError.usage("--until HH:MM (24 h)") }; until = d }
     let l = try loop()
+    if args.has("force") { err("--force (owner flag, \(OwnerAuth.viaText(owner?.via ?? "?"))): reps start without the idle gate; each experiment run records it") }
     let r = try Runners.make(spec, store: l.store, options: runnerOptions(args, gatedByDefault: true))
     r.log = { err($0) }
     trapSignals()
@@ -378,16 +391,12 @@ func run(_ args: Args) throws -> Int32 {
   case ("ledger", _):
     let es = try store().ledger.entries()
     if json { out(PLJSON.encode(es)); return 0 }
-    for e in es {
-      var line = "\(e.at) \(e.experiment) \(e.state.padding(toLength: 11, withPad: " ", startingAt: 0)) by \(e.by)"
-      if let r = e.runner { line += " on \(r)\(e.machine.map { " (\($0))" } ?? "")" }
-      if let o = e.objective { line += " · \(o.before.map { String($0) } ?? "-") → \(o.after.map { String($0) } ?? "-")" }
-      if let n = e.note { line += " · \(n)" }
-      out(line)
-    }
+    for e in es { out(e.text) }
     return 0
   case ("session", "start"):
-    try store().ledger.append(LedgerEntry(experiment: "-", state: "session", by: args.has("owner") ? "owner" : "agent", note: args.one("note")))
+    var l = LedgerEntry(experiment: "-", state: "session", by: args.has("owner") ? "owner" : "agent", note: args.one("note"))
+    if let o = owner { l.ownerFlags = o.flags; l.ownerVia = o.via }
+    try store().ledger.append(l)
     out("session started"); return 0
 
   default:
@@ -396,11 +405,11 @@ func run(_ args: Args) throws -> Int32 {
 }
 
 /// The runner flags (C10). `exp screen/full` run ungated unless --idle is given; `queue run --runner local` is gated
-/// (--idle 120) unless --force.
+/// (--idle 120) unless --force (the owner's). `exp full --force` is about the screen, never the idle gate.
 func runnerOptions(_ args: Args, gatedByDefault: Bool) throws -> RunnerOptions {
   var o = RunnerOptions()
   if let i = args.one("idle") { guard let x = Double(i), x >= 0 else { throw PLError.usage("--idle takes seconds") }; o.idle = x }
-  o.force = args.has("force") || (!gatedByDefault && o.idle == nil)
+  o.force = gatedByDefault ? args.has("force") : o.idle == nil
   o.busyApps = args.one("busy-apps").map { $0.split(separator: ",").map(String.init) }
   o.idleFrom = args.one("idle-from") ?? ProcessInfo.processInfo.environment["PERFLOOP_IDLE_FROM"]
   o.acceptNewHostKey = args.has("accept-new-host-key")

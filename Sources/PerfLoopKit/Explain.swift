@@ -5,8 +5,11 @@ import Foundation
 public enum Explain {
   public static func experiment(_ e: Experiment, champion: Champion?, stop: [String] = []) -> String {
     var o: [String] = []
-    o.append("exp \(e.id) · \(e.state.rawValue) · \(e.kind) · \(e.scenario) on \(e.fixture)" + (e.secondFixture.map { " (second fixture \($0))" } ?? ""))
+    o.append("exp \(e.id) · \(e.state.rawValue) · \(e.kind) · \(e.scenario) on \(e.fixture)" + (e.secondFixture.map { " (second fixture \($0))" } ?? "")
+             + (e.forced == true ? " · FORCED (owner flag)" : ""))
     o.append("hypothesis: \(e.hypothesis)")
+    // An owner flag changed this experiment's course: say so where a PR quotes from (AGENTS.md: owner flags).
+    for u in e.ownerFlags ?? [] { o.append("owner flag: " + u.line) }
     if let p = e.parent { o.append("measured against: champion \(p.experiment) [\(p.build.line)]") }
     if let c = champion, c.experiment != e.parent?.experiment { o.append("current champion: \(c.experiment) [\(c.build.line)], chain \(c.chain)") }
     if let b = e.build { o.append("candidate: [\(b.line)]") }
@@ -81,16 +84,16 @@ public enum Explain {
     case .full: return "perfloop exp full \(e.id) (resumes at the first missing pair)"
     case .rejected: return "drop it and try the next idea; the worst stretch above is where the time went"
     case .lost: return e.full?.regression == true ? "drop it: the candidate is slower" : "drop it, or narrow the hypothesis and try again"
+    // What waits for the owner says so and gives the agent its own step; the owner's flags are in `perfloop help`.
     case .needsReview:
       if let r = (e.full ?? e.screen)?.guardReviews, !r.isEmpty {
-        return "the owner looks at the snapshots (the guards lines above list both PNGs and the diff): perfloop guards --exp \(e.id) --guard-tolerance X --owner to accept the look, or abandon it"
+        return "stop and ask the owner to look at the snapshots (the guards lines above list both PNGs and the diff): accepting the look is theirs; meanwhile, the next idea"
       }
-      return "the owner decides (no decision at 10 + 10, or a guard asks for review); perfloop exp promote \(e.id) --owner, or abandon it"
+      return "stop and ask the owner to decide (no decision at 10 + 10, or a guard asks for review): report it with this explain.txt; meanwhile, the next idea"
     case .won:
-      var s = "perfloop exp promote \(e.id)"
-      if e.behaviourChange { s += " --owner (behaviour change: the owner approves)" }
-      if e.build?.dirty == true { s += " (the build is dirty: commit and rebuild, or --allow-dirty with the owner's say)" }
-      return s
+      if e.build?.dirty == true { return "the build is dirty: commit, rebuild, and measure it again in a new experiment (promotion refuses a dirty build)" }
+      if e.behaviourChange { return "ask the owner to approve the declared behaviour change and promote it: report it with this explain.txt" }
+      return "perfloop exp promote \(e.id)"
     case .promoted: return "open a PR with exp/\(e.id)/explain.txt and the diff; after the merge: perfloop champion merged <sha>. The loop may climb on it meanwhile"
     case .abandoned: return "nothing"
     }

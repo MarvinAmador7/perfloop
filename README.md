@@ -113,6 +113,21 @@ the cores busy and no compiler, linker or test run going. A rep that started bus
 on its side of the pair, with the busiest processes (`--require-quiet`: stop instead). A rep that drew no frames has
 no frame metrics and never decides.
 
+### The owner's flags
+
+`--force` (a full over a rejected screen, or `queue run` without the idle gate), `--owner` (decide what waits for the
+owner), `--guard-tolerance` (loosen a guard) and `--allow-dirty` (promote a dirty build) override what judges the
+agent, so they are yours, never your agent's. The CLI honours one only when the shell shows it is yours:
+`PERFLOOP_OWNER=1` in the environment (scripts), or a yes typed at the prompt when stdin and stderr are a terminal.
+Anything else is refused (exit 6) with what the agent should do instead, and the refusal never names a way around it.
+
+This is a speed bump and a record, not security. An agent's shell usually has no terminal, so it never sees the
+prompt, but it can set an environment variable like anyone else. What makes a use visible is the record: every
+experiment an owner flag changed gets `forced: true` and `ownerFlags` (which flag, `env` or `tty`, the command, what it
+changed) in its `experiment.json`; its ledger lines carry `ownerFlags`/`ownerVia`; and the verdict, `explain`,
+`exp status` and `ledger` print `FORCED (owner flag)` / `OWNER FLAG --force (PERFLOOP_OWNER=1)`. Look for them in an
+agent's PR. Don't export `PERFLOOP_OWNER` in a shell profile your agents inherit: set it per command.
+
 ## Agents over MCP
 
 `perfloop mcp` serves the loop as Model Context Protocol tools over stdio, for any agent that speaks MCP:
@@ -127,7 +142,7 @@ The tools are the agent's verbs (`status`, `explain`, `suggest`, `new_experiment
 waits for it on the server's side (up to 60 s a call), so the agent never writes a sleep loop, and every job still
 running when the session ends is killed with its windows. Local runs hold a window lock (`--lock DIR`, default in the
 temporary directory). The owner's flags (`--force`, `--owner`, `--guard-tolerance`, `--allow-dirty`) are no tool's
-arguments, and no value may start with `-`. Job logs are in the store's `jobs/`. The shell CLI stays the reference;
+arguments, no value may start with `-`, and the CLI children never see `PERFLOOP_OWNER`. Job logs are in the store's `jobs/`. The shell CLI stays the reference;
 the server runs it for every call.
 
 ## A spare Mac as the runner
