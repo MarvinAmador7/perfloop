@@ -145,13 +145,16 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
                     "compositorHitchTimeRatioMsPerS": 3.4 },
   "diff": "exp/0007/diff.json", "explain": "exp/0007/explain.txt",
   "promotedAt": "…" | null, "pr": "https://github.com/…/pull/48" | null,
+  "forced": true | null,                                         // an owner flag changed its course
+  "ownerFlags": [ { "flag": "--force", "via": "env|tty", "command": "exp full", "effect": "ran the full over a screen that rejected it", "at": "…" } ] | null,
   "notes": [ "ran on local, idle-gated; 1 rep interrupted and redone" ] }
 ```
 
 `ledger.jsonl`: one line per state change, `{ "schema": "perfloop.ledger/1", "at": "…", "experiment": "0007",
 "state": "promoted", "objective": { "before": 41.2, "after": 16.9 }, "build": "sha256:…", "by": "agent|owner",
-"runner": "ssh://spare-mac.local", "machine": "Mac16,11" }` (`runner`/`machine` on a stage's line: where its
-numbers came from).
+"runner": "ssh://spare-mac.local", "machine": "Mac16,11", "ownerFlags": ["--force"], "ownerVia": "env|tty" }`
+(`runner`/`machine` on a stage's line: where its numbers came from; `ownerFlags`/`ownerVia` on a line an owner flag
+changed, and how the CLI saw it was the owner's: `PERFLOOP_OWNER=1` or a yes at a terminal).
 
 Every pair and stage records where it ran (C10): `"runner": { "runner": "local" | "ssh://host" | "vm:tart/NAME",
 "model": "Mac16,11", "host": "spare-mac", "os": "26.6.2" }`. A pair without one predates runners and counts as

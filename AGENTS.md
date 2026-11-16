@@ -34,8 +34,10 @@ perfloop ledger                              # what was tried, by whom, with wha
 2. **One idea per experiment**, said in one sentence that names the cost and why the change removes it. Two ideas in
    one build teach nothing when it loses.
 3. **Commit before `exp new`.** The bench is stamped with its commit; promotion refuses a dirty build.
-4. **Read the verdict, don't argue with it.** `rejected`: drop the change (reset your work branch) and go back to 1.
-   `promising`: run the full. `won`: promote and open a PR. `lost`: drop it. `needsReview`: stop and ask the owner.
+4. **Read the verdict, don't argue with it.** `rejected`: drop the change (reset your work branch) and go back to 1;
+   if you think the screen was borderline, say so in your report with its numbers and let the owner decide (there is
+   no way for you to get a full on it). `promising`: run the full. `won`: promote and open a PR. `lost`: drop it.
+   `needsReview`: stop and ask the owner.
 5. **Stop** when `exp status` prints `stop:` (the budget is met, no cost ≥ 5 % of the objective is left that you can
    attribute, 5 non-promising candidates in a row, or 2 h / 20 candidates spent), and report from the ledger: what you
    tried, what won, what's left.
@@ -47,8 +49,11 @@ perfloop ledger                              # what was tried, by whom, with wha
   that changes them is judged by the old ones anyway; changes to the bench are their own PR for the owner.
 - **Never make the app aware of the bench**: no `PERFLOOP_` checks outside knobs, no fixture names, no "if measured"
   branches. A blank row that is fast is still a blank row; the guards exist because the search will find it.
-- **Never pass `--guard-tolerance`, `--owner`, `--force` or `--allow-dirty`** unless the owner told you to in this
-  session. They exist for the owner.
+- **Never pass `--guard-tolerance`, `--owner`, `--force` or `--allow-dirty`, and never set `PERFLOOP_OWNER`.** They
+  exist for the owner: the CLI refuses them (exit 6) unless `PERFLOOP_OWNER=1` is set or someone types yes at a
+  terminal, and a refusal means stop and do what it says, not find another way. If the owner wants one used, they run
+  it themselves. Every use is recorded in the experiment, the ledger and `explain` (`FORCED (owner flag)`); if one
+  was used on your experiments, your PR says so.
 - **Never commit or publish `.trace` files**, stores, results with paths from someone's home, or anything with
   secrets. xctrace traces embed the recorded process's environment (tokens included). `exp new` refuses a patch that
   touches a `.trace` or a path the manifest lists in `privatePaths`.
