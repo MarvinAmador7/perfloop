@@ -148,6 +148,7 @@ Run `perfloop help` for all commands and flags, and `perfloop COMMAND --help` fo
 - [PerfLoopHost integration example](Examples/SlowList/Sources/SlowListBench/main.swift)
 - [Design and architecture](docs/design/README.md)
 - [Agent operating rules](AGENTS.md)
+- [Agentic Verification](docs/VERIFICATION.md): proving a UI change works, looks right, and costs nothing (design and roadmap)
 
 ## License
 
