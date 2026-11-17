@@ -20,6 +20,8 @@ public struct LedgerEntry: Codable, Sendable, Equatable {
   /// The owner flags this change came with (`--force`, …) and how the shell showed it was the owner's (env | tty).
   public var ownerFlags: [String]?
   public var ownerVia: String?
+  /// "same": the experiment is a feature or guard check (`exp new --expect same`); the stopping rules skip its lines.
+  public var expect: String?
 
   public struct Before: Codable, Sendable, Equatable {
     public var before: Double?
@@ -35,9 +37,10 @@ public struct LedgerEntry: Codable, Sendable, Equatable {
 
   /// The line `perfloop ledger` prints.
   public var text: String {
-    var line = "\(at) \(experiment) \(state.padding(toLength: 11, withPad: " ", startingAt: 0)) by \(by)"
+    var line = "\(at) \(experiment) \(state.padding(toLength: max(11, state.count), withPad: " ", startingAt: 0)) by \(by)"
     if let r = runner { line += " on \(r)\(machine.map { " (\($0))" } ?? "")" }
     if let o = objective { line += " · \(o.before.map { String($0) } ?? "-") → \(o.after.map { String($0) } ?? "-")" }
+    if let x = expect { line += " · expect \(x)" }
     if let f = ownerFlags, !f.isEmpty { line += " · OWNER FLAG \(f.joined(separator: " "))\(ownerVia.map { " (\(OwnerAuth.viaText($0)))" } ?? "")" }
     if let n = note { line += " · \(n)" }
     return line

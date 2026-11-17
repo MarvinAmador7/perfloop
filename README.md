@@ -81,7 +81,18 @@ perfloop exp new "Cache row ranks to remove repeated sorting during selection" \
   --bench .build/release/MyAppBench
 ```
 
-Use the returned experiment ID in `perfloop explain exp/ID`. If the verdict is `promising`, run `perfloop exp full ID`. If the full comparison says `won`, run `perfloop exp promote ID` to update the champion. Once that PR is merged, run `perfloop champion merged SHA` from the app's checkout. It checks that SHA is on main (`origin/main`, else `main`, or `--main REF`) and contains the champion's build commit, and refuses otherwise. [Bench contract and result schemas](ADAPTER.md)
+Use the returned experiment ID in `perfloop explain exp/ID`. If the verdict is `promising`, run `perfloop exp full ID`. If the screen says `inconclusive` (three pairs couldn't tell: mixed signs, or noise wider than the gain), add pairs with `perfloop exp screen ID --more 3` or run the full; `rejected` is kept for slower in every pair, a failed guard, or a gain that can't reach 5 %. If the full comparison says `won`, run `perfloop exp promote ID` to update the champion. Once that PR is merged, run `perfloop champion merged SHA` from the app's checkout. It checks that SHA is on main (`origin/main`, else `main`, or `--main REF`) and contains the champion's build commit, and refuses otherwise. [Bench contract and result schemas](ADAPTER.md)
+
+### Verify that a feature costs nothing
+
+A feature branch asks a different question: does the change cost anything? Add `--expect same`.
+
+```sh
+perfloop exp new "Sidebar toggle" --build-cmd "swift build -c release --product MyAppBench" \
+  --bench .build/release/MyAppBench --expect same
+```
+
+It runs the same interleaved pairs, guards and trust rules, and answers `noRegression`, `regressed` (by how much, on which metric, and where to look) or `inconclusive` (add pairs with `exp screen ID --more 3`, then `exp full ID`, up to 10 + 10). The test is non-inferiority per metric (the objective, and each frame guard both sides report): the paired differences' 90 % interval (Student's t) against the metric's margin, the smallest change worth calling (5 % of CPU per step, 15 % or 3 ms of latency, 25 % of a frame metric), never the run's noise band, so a noisy Mac says "can't tell" rather than "costs nothing". A faster feature costs nothing too. These experiments are never promoted, get no "drop it", and count toward none of the stopping rules. A snapshot that differs from the champion's is listed as a look for the PR, not a verdict.
 
 ## Connect an agent
 
@@ -121,6 +132,8 @@ Run `perfloop runner check ssh://user@spare-mac` before using a remote runner. L
 | --- | --- |
 | Diagnose setup and see the scenarios | `perfloop doctor --bench PATH` · `perfloop describe --bench PATH` |
 | Inspect a decision | `perfloop exp status` · `perfloop explain exp/ID` · `perfloop ledger` |
+| Check a feature costs nothing | `perfloop exp new "…" --bench PATH --expect same` |
+| Add pairs to a screen that couldn't tell | `perfloop exp screen ID --more 3` |
 | Find the next bottleneck | `perfloop suggest champion` · `perfloop causes RESULT.json` |
 | Profile a build or compare profiles | `perfloop profile champion` · `perfloop diff champion exp/ID` |
 | Measure one build, or a new scenario the champion doesn't have (no verdict) | `perfloop run BUILD --scenario S --reference S2` · `perfloop baseline S --bench PATH` |
@@ -129,12 +142,13 @@ Run `perfloop runner check ssh://user@spare-mac` before using a remote runner. L
 
 `run` and `baseline` go through the same runner as an experiment's stages and print only trusted reps' numbers; a run whose reps were all untrusted says `UNTRUSTED` and quotes nothing (exit 5). A scenario can name its own fixture in the manifest (`scenarios[].fixture`), which every verb uses when `--fixture` is absent; an unlisted `--fixture` is refused with the list ([ADAPTER.md](ADAPTER.md) §2, §3a).
 
-Run `perfloop help` for all commands and flags. Builds, experiments, `run` measurements, baselines, and the ledger live in `${PERFLOOP_HOME:-~/.perfloop}/<app>/`. Keep raw `.trace` bundles private because they can contain the recorded process's environment. `perfloop profile` deletes each trace unless `--keep-trace`. It also starts the recording with a scrubbed environment so a kept trace carries no tokens. The scrubbed environment keeps `HOME`, `USER`, `LOGNAME`, `PATH`, `SHELL`, `TMPDIR`, `LANG`, `LC_*`, `TERM`, `TZ`, `__CF_USER_TEXT_ENCODING` and `DEVELOPER_DIR`. It keeps the bench's own `PERFLOOP_` variables, but never `PERFLOOP_OWNER`, and the names the adapter declares in `profileEnv`. A name that looks like a secret (`TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `AUTH`, `SESSION`, …) never passes. `perfloop doctor` warns about a kept trace.
+Run `perfloop help` for all commands and flags, and `perfloop COMMAND --help` for one command's usage. An argument a command doesn't take (a typo, `--flag=value`, `--store DIR` passed as one argument, a stray word) is refused with its usage (exit 1) before anything runs. Builds, experiments, `run` measurements, baselines, and the ledger live in `${PERFLOOP_HOME:-~/.perfloop}/<app>/`. Keep raw `.trace` bundles private because they can contain the recorded process's environment. `perfloop profile` deletes each trace unless `--keep-trace`. It also starts the recording with a scrubbed environment so a kept trace carries no tokens. The scrubbed environment keeps `HOME`, `USER`, `LOGNAME`, `PATH`, `SHELL`, `TMPDIR`, `LANG`, `LC_*`, `TERM`, `TZ`, `__CF_USER_TEXT_ENCODING` and `DEVELOPER_DIR`. It keeps the bench's own `PERFLOOP_` variables, but never `PERFLOOP_OWNER`, and the names the adapter declares in `profileEnv`. A name that looks like a secret (`TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `AUTH`, `SESSION`, …) never passes. `perfloop doctor` warns about a kept trace.
 
 - [Adapter contract and schemas](ADAPTER.md)
 - [PerfLoopHost integration example](Examples/SlowList/Sources/SlowListBench/main.swift)
 - [Design and architecture](docs/design/README.md)
 - [Agent operating rules](AGENTS.md)
+- [Agentic Verification](docs/VERIFICATION.md): proving a UI change works, looks right, and costs nothing (design and roadmap)
 
 ## License
 

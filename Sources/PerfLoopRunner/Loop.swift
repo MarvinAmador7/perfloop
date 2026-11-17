@@ -159,6 +159,9 @@ public final class Loop {
     /// Measure against this earlier champion (an experiment in the champion's chain) instead of the current one: a
     /// second scenario's screen of a build that has just been promoted. Such an experiment is never promoted itself.
     public var against: String?
+    /// "same": a feature or guard check that the candidate costs nothing (`noRegression | regressed | inconclusive`);
+    /// nil or "faster": the optimisation loop.
+    public var expect: String?
     public init(hypothesis: String) { self.hypothesis = hypothesis }
   }
 
@@ -172,6 +175,7 @@ public final class Loop {
     let fixtures = [o.fixture, env["PERFLOOP_FIXTURE"], parentExp?.scenario == sc ? parentExp?.fixture : nil, m?.scenario(sc)?.fixture, parentExp?.fixture, m?.fixture(for: sc)]
     guard let fx = fixtures.lazy.compactMap({ $0 }).first else { throw PLError.usage("pass --fixture") }
     for f in [fx, o.secondFixture].compactMap({ $0 }) { if let m, let why = m.unknownFixture(f, whose: "the champion's manifest") { throw PLError.usage(why) } }
+    guard [nil, "faster", "same"].contains(o.expect) else { throw PLError.usage("--expect faster|same (same: a feature or guard check that the candidate costs nothing), not '\(o.expect!)'") }
     let kind = o.knobs.isEmpty ? o.kind : "knob"
     if kind == "knob", o.knobs.isEmpty { throw PLError.usage("a knob experiment needs --knobs k=v[,k=v]") }
     if let ks = m?.knobs, !ks.isEmpty || kind == "knob" {
@@ -205,16 +209,18 @@ public final class Loop {
 
     var e = Experiment(id: id, hypothesis: o.hypothesis, kind: kind, scenario: sc, fixture: fx, parent: parent, build: entry.build.embedded)
     e.knobs = o.knobs.isEmpty ? nil : o.knobs
+    e.expect = o.expect == "same" ? "same" : nil
     e.behaviourChange = o.behaviourChange
-    e.secondFixture = o.secondFixture ?? m?.scenario(sc)?.secondFixture
+    // The second fixture guards a promotion against over-fitting one fixture: an expect-same check is never promoted.
+    e.secondFixture = o.expect == "same" ? nil : o.secondFixture ?? m?.scenario(sc)?.secondFixture
     e.params = o.params.isEmpty ? nil : o.params
     e.via = kind == "knob" ? "run" : (o.via ?? env["PERFLOOP_VIA"] ?? m?.defaultVia ?? "ab")
     e.patch = patch; e.notes = notes
     if !entry.build.stamp { e.notes.append("the build predates the stamp: imported as \(entry.build.commit ?? "?")\(entry.build.note.map { " (\($0))" } ?? "")") }
     try store.save(e)
-    try store.ledger.append(LedgerEntry(experiment: id, state: ExpState.built.rawValue, build: entry.build.hash, by: by, note: o.hypothesis))
+    try store.ledger.append(line(e, LedgerEntry(experiment: id, state: ExpState.built.rawValue, build: entry.build.hash, by: by, note: o.hypothesis)))
     _ = explain(e)
-    log("exp \(id): \(o.hypothesis) [\(entry.build.line)]")
+    log("exp \(id): \(o.hypothesis) [\(entry.build.line)]\(e.expect == "same" ? " (expect same: does it cost anything?)" : "")")
     return o.screen ? try screen(id) : e
   }
 
@@ -386,17 +392,34 @@ public final class Loop {
 
   // MARK: screen, full, promote
 
-  public func screen(_ id: String) throws -> Experiment {
+  /// The screen: 3 interleaved pairs (or as many as an earlier `--more` asked for, on a rerun). `more`: add that many
+  /// pairs to a screen that couldn't tell (`inconclusive`), up to `Acceptance.maxScreenPairs`; the screen then judges
+  /// all of them. An expect-same experiment's screen is its first look (`Acceptance.same`).
+  public func screen(_ id: String, more: Int? = nil) throws -> Experiment {
     var e = try store.experiment(id)
     guard e.kind != "baseline" else { throw PLError.usage("exp \(e.id) is the baseline") }
-    if let s = e.screen, !["error", "untrusted"].contains(s.verdict) { log("exp \(e.id) is already screened (\(s.verdict))"); return e }
+    var count = e.screen?.extendedTo ?? Acceptance.screenPairs
+    if let more {
+      guard more > 0 else { throw PLError.usage("--more takes a number of pairs to add (1 or more)") }
+      guard let s = e.screen else { throw PLError.usage("exp \(e.id) isn't screened yet: perfloop exp screen \(e.id)") }
+      if e.full != nil { throw PLError.refused("exp \(e.id) has a full stage: more screen pairs change nothing; perfloop exp full \(e.id)") }
+      guard e.state == .inconclusive || s.verdict == "untrusted" else {
+        throw PLError.refused("exp \(e.id) is \(e.state.rawValue): more pairs are for a screen that couldn't tell (inconclusive). " + Explain.next(e))
+      }
+      guard count < Acceptance.maxScreenPairs else {
+        throw PLError.refused("exp \(e.id)'s screen has \(count) pairs, the most a screen takes: perfloop exp full \(e.id)")
+      }
+      count = min(count + more, Acceptance.maxScreenPairs)
+      log("exp \(e.id): adding pairs to the screen, \(count) in all")
+    } else if let s = e.screen, !["error", "untrusted"].contains(s.verdict) { log("exp \(e.id) is already screened (\(s.verdict))"); return e }
     let s = try sides(e), r = rule(e, s)
-    let ps = try pairs(e, stage: "screen", fixture: e.fixture, count: Acceptance.screenPairs, sides: s, metric: r.metric)
-    let st = Acceptance.screen(ps, metric: r.metric, guards: r.guards)
+    let ps = try pairs(e, stage: "screen", fixture: e.fixture, count: count, sides: s, metric: r.metric)
+    var st = e.expect == "same" ? Acceptance.same(ps, metric: r.metric, guards: r.guards, lastLook: false) : Acceptance.screen(ps, metric: r.metric, guards: r.guards)
+    if count > Acceptance.screenPairs { st.extendedTo = count }
     e.screen = st
     if st.verdict == "error" { e.notes.append("screen: no usable pair; rerun perfloop exp screen \(e.id)") }
     else if st.verdict == "untrusted" {}                    // decided nothing: the state stays; explain's next: says what helps
-    else { e.state = st.verdict == "promising" ? .promising : st.verdict == "needsReview" ? .needsReview : .rejected }
+    else { e.state = ExpState(rawValue: st.verdict) ?? .rejected }
     try record(e, st)
     return e
   }
@@ -405,17 +428,18 @@ public final class Loop {
     var e = try store.experiment(id)
     // A VM's frames and counters aren't a panel's: it screens, and never decides (SPEC §4.2).
     if runner.name.hasPrefix("vm:") { throw PLError.refused("\(runner.name) screens and never decides a full (a guest's frame cadence and counters aren't hardware's): run the full on this Mac or a spare one") }
+    if e.expect == "same" { return try fullSame(e) }
     if e.state == .rejected && !force { throw PLError.refused(OwnerFlags.rejectedScreen(e.id)) }
     // A screen the owner cleared of its snapshot review goes back to promising (perfloop guards --owner); the owner may
     // also run the full on a screen that still asks for review.
-    guard [.promising, .full, .rejected].contains(e.state) || (e.state == .lost && force) || (e.state == .needsReview && e.full == nil && by == "owner") else {
+    guard [.promising, .inconclusive, .full, .rejected].contains(e.state) || (e.state == .lost && force) || (e.state == .needsReview && e.full == nil && by == "owner") else {
       if e.full != nil { log("exp \(e.id) already has a full (\(e.full!.verdict))"); return e }
       throw PLError.usage("exp \(e.id) is \(e.state.rawValue): screen it first")
     }
     let s = try sides(e), r = rule(e, s)
     if force && [.rejected, .lost].contains(e.state) { ownerUsed(&e, "--force", "ran the full over a \(e.state == .rejected ? "screen that rejected it" : "full that lost")") }
     if e.state == .needsReview && by == "owner" { ownerUsed(&e, "--owner", "ran the full on a screen that asks for review") }
-    if e.state != .full { e.state = .full; try store.save(e); try store.ledger.append(stamped(LedgerEntry(experiment: e.id, state: ExpState.full.rawValue, build: e.build?.hash, by: by))) }
+    if e.state != .full { e.state = .full; try store.save(e); try store.ledger.append(line(e, LedgerEntry(experiment: e.id, state: ExpState.full.rawValue, build: e.build?.hash, by: by))) }
     var st = Stage(metric: r.metric, pairs: [], verdict: "pending")
     for look in Acceptance.fullLooks {
       let ps = try pairs(e, stage: "full", fixture: e.fixture, count: look, sides: s, metric: r.metric)
@@ -450,6 +474,36 @@ public final class Loop {
     return e
   }
 
+  /// An expect-same experiment's full: the same looks (5 + 5, then 8 + 8 and 10 + 10 while it can't tell), judged by
+  /// `Acceptance.same` at each. No second fixture and no isolation scenarios: they guard a promotion, and it is never
+  /// promoted.
+  func fullSame(_ e0: Experiment) throws -> Experiment {
+    var e = e0
+    guard [.inconclusive, .full].contains(e.state) else {
+      if [.noRegression, .regressed].contains(e.state) { log("exp \(e.id) is decided (\(e.state.rawValue)): nothing to add"); return e }
+      throw PLError.usage("exp \(e.id) is \(e.state.rawValue): screen it first (perfloop exp screen \(e.id))")
+    }
+    if e.state == .inconclusive, let f = e.full, f.verdict == "inconclusive" { log("exp \(e.id) already has a full (inconclusive at its last look)"); return e }
+    let s = try sides(e), r = rule(e, s)
+    if e.state != .full { e.state = .full; try store.save(e); try store.ledger.append(line(e, LedgerEntry(experiment: e.id, state: ExpState.full.rawValue, build: e.build?.hash, by: by))) }
+    var st = Stage(metric: r.metric, pairs: [], verdict: "pending")
+    for look in Acceptance.fullLooks {
+      let ps = try pairs(e, stage: "full", fixture: e.fixture, count: look, sides: s, metric: r.metric)
+      st = Acceptance.same(ps, metric: r.metric, guards: r.guards, lastLook: look == Acceptance.fullLooks.last)
+      if look > Acceptance.fullLooks[0] { st.extendedTo = look }
+      if st.verdict != "inconclusive" || look == Acceptance.fullLooks.last { break }
+      log("exp \(e.id): can't tell at \(look) + \(look): extending")
+    }
+    e.full = st
+    switch st.verdict {
+    case "untrusted": e.state = .full                     // resumes at the untrusted pairs
+    case "error": e.state = .inconclusive; e.notes.append("full: no usable pairs; rerun perfloop exp full \(e.id)")
+    default: e.state = ExpState(rawValue: st.verdict) ?? .inconclusive
+    }
+    try record(e, st)
+    return e
+  }
+
   public struct PromoteOptions {
     public var owner = false
     /// Promote a dirty build (SPEC §5.1 refuses one): the replay's imported working trees, with the owner's say.
@@ -466,6 +520,7 @@ public final class Loop {
     var e = try store.experiment(id)
     let (c, cEntry) = try requireChampion()
     var refusals: [String] = [], ownerNeeded: [String] = []
+    if e.expect == "same" { throw PLError.refused("not promoted: exp \(e.id) checks that a feature costs nothing (--expect same): it never moves the champion; its verdict goes in the feature's PR") }
     switch e.state {
     case .won: break
     case .needsReview: ownerNeeded.append("no decision at 10 + 10")
@@ -516,7 +571,7 @@ public final class Loop {
     e.state = .abandoned
     if let n = note { e.notes.append(n) }
     try store.save(e)
-    try store.ledger.append(LedgerEntry(experiment: e.id, state: ExpState.abandoned.rawValue, build: e.build?.hash, by: by, note: note))
+    try store.ledger.append(line(e, LedgerEntry(experiment: e.id, state: ExpState.abandoned.rawValue, build: e.build?.hash, by: by, note: note)))
     _ = explain(e)
     return e
   }
@@ -526,9 +581,17 @@ public final class Loop {
     let a = st.objective["a"] ?? [], b = st.objective["b"] ?? []
     e.explain = store.rel(store.expDir(e.id).appendingPathComponent("explain.txt"))
     try store.save(e)
-    try store.ledger.append(stamped(LedgerEntry(experiment: e.id, state: e.state.rawValue, objective: .init(before: a.isEmpty ? nil : Stats.median(a), after: b.isEmpty ? nil : Stats.median(b)),
+    try store.ledger.append(line(e, LedgerEntry(experiment: e.id, state: e.state.rawValue, objective: .init(before: a.isEmpty ? nil : Stats.median(a), after: b.isEmpty ? nil : Stats.median(b)),
                                         build: e.build?.hash, by: by, note: "\(st.verdict): " + (st.reasons.first ?? ""), runner: st.runner)))
     _ = explain(e)
+  }
+
+  /// A ledger line for the experiment: the owner flags this run used on it, and whether it is an expect-same check
+  /// (the stopping rules skip those).
+  func line(_ e: Experiment, _ l: LedgerEntry) -> LedgerEntry {
+    var l = stamped(l)
+    l.expect = e.expect
+    return l
   }
 
   // MARK: reading
@@ -538,7 +601,8 @@ public final class Loop {
   public func explain(_ e: Experiment) -> String {
     var text = Explain.experiment(e, champion: store.champion(), stop: Stopping.reasons(StopInput(session: store.ledger.currentSession())))
     // The next ideas, before the `next:` line (which stays last).
-    let s = suggestLines(e)
+    // Hypotheses for the next optimisation: not what a feature or guard check asks.
+    let s = e.expect == "same" ? [] : suggestLines(e)
     if !s.isEmpty, let r = text.range(of: "\nnext: ", options: .backwards) { text.insert(contentsOf: "\n" + s.joined(separator: "\n"), at: r.lowerBound) }
     let p = store.expDir(e.id).appendingPathComponent("explain.txt")
     try? FileManager.default.createDirectory(at: p.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -557,7 +621,7 @@ public final class Loop {
     let open = store.experiments().filter { !$0.state.terminal }
     o.append(open.isEmpty ? "no open experiments" : "open experiments:")
     for e in open {
-      o.append("  \(e.id) \(e.state.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(e.scenario)/\(e.fixture) \(e.hypothesis)\(e.forced == true ? " · FORCED (owner flag)" : "")\n      next: \(Explain.next(e))")
+      o.append("  \(e.id) \(e.state.rawValue.padding(toLength: max(11, e.state.rawValue.count), withPad: " ", startingAt: 0)) \(e.scenario)/\(e.fixture) \(e.hypothesis)\(e.expect == "same" ? " · expect same" : "")\(e.forced == true ? " · FORCED (owner flag)" : "")\n      next: \(Explain.next(e))")
     }
     // Owner flags this session, closed experiments included: a forced run is never quiet.
     let owned = store.ledger.currentSession().filter { !($0.ownerFlags ?? []).isEmpty }

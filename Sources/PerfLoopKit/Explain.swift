@@ -5,7 +5,7 @@ import Foundation
 public enum Explain {
   public static func experiment(_ e: Experiment, champion: Champion?, stop: [String] = []) -> String {
     var o: [String] = []
-    o.append("exp \(e.id) · \(e.state.rawValue) · \(e.kind) · \(e.scenario) on \(e.fixture)" + (e.secondFixture.map { " (second fixture \($0))" } ?? "")
+    o.append("exp \(e.id) · \(e.state.rawValue) · \(e.kind)\(e.expect == "same" ? " · expect same" : "") · \(e.scenario) on \(e.fixture)" + (e.secondFixture.map { " (second fixture \($0))" } ?? "")
              + (e.forced == true ? " · FORCED (owner flag)" : ""))
     o.append("hypothesis: \(e.hypothesis)")
     // An owner flag changed this experiment's course: say so where a PR quotes from (AGENTS.md: owner flags).
@@ -22,7 +22,8 @@ public enum Explain {
     o += guardSections(e)
     if let last = e.full ?? e.screen { o += look(last) }
     for n in e.notes { o.append("note: " + n) }
-    for s in stop { o.append("stop: " + s) }
+    // The stopping rules are the optimisation loop's: a feature or guard check never reads them.
+    if e.expect != "same" { for s in stop { o.append("stop: " + s) } }
     o.append("next: " + next(e))
     return o.joined(separator: "\n") + "\n"
   }
@@ -30,10 +31,14 @@ public enum Explain {
   static func stage(_ name: String, _ s: Stage) -> [String] {
     var o: [String] = []
     let use = s.pairs.filter { Acceptance.unusable($0) == nil }
-    var head = "\(name): \(s.verdict.uppercased())" + (s.verdict == "untrusted" ? " (\(s.untrusted ?? "untrusted reps"))" : "")
+    var head = "\(name): \(verdictText(s.verdict))" + (s.verdict == "untrusted" ? " (\(s.untrusted ?? "untrusted reps"))" : "")
     head += " on \(s.metric), \(use.count) pair(s) (orders \(s.pairs.map(\.order).joined(separator: " ")))"
-    if name == "screen" && s.verdict != "untrusted" { head += ", candidate won \(s.wins)/\(use.count)" }
-    if let g = s.medianGainPct { head += ", gain \(g) %" }
+    // Expect same: what it costs, not whether it won.
+    if let c = s.costs?.first { head += ", change \(c.text)" }
+    else {
+      if name == "screen" && s.verdict != "untrusted" { head += ", candidate won \(s.wins)/\(use.count)" }
+      if let g = s.medianGainPct { head += ", gain \(g) %" }
+    }
     if let b = s.band { head += ", band ±\(b) %" }
     if let p = s.mwuP { head += ", MWU p=\(p)" }
     if let p = s.signP { head += ", sign p=\(p)" }
@@ -54,6 +59,8 @@ public enum Explain {
       o.append("  pair \(p.index + 1) \(p.order): champion \(fmt(p.a.objective)) · candidate \(fmt(p.b.objective)) (\(Stats.round(-Acceptance.gainPct(p.a.objective!, p.b.objective!), 1)) %)" + redone)
     }
     for (k, g) in (s.frameGuards ?? [:]).sorted(by: { $0.key < $1.key }) { o.append("  guard \(k): \(g.a) → \(g.b) (band ±\(g.bandPct) %) \(g.pass ? "pass" : "FAIL")") }
+    // Frame guards in their own units: a % of a hitch ratio near 0 says little.
+    for c in (s.costs ?? []).dropFirst() { o.append("  frame guard \(c.metric): \(fmt(c.champion)) → \(fmt(Stats.round(c.champion + c.change, 2))), change \(c.text(units: true)): \(c.call == "same" ? "pass" : c.call == "worse" ? "WORSE" : "can't tell")") }
     o += guardLines(s)
     for r in s.reasons { o.append("  · " + r) }
     return o
@@ -79,7 +86,11 @@ public enum Explain {
     return o
   }
 
+  /// A verdict as the stage line prints it: `noRegression` → NO REGRESSION.
+  static func verdictText(_ v: String) -> String { v == "noRegression" ? "NO REGRESSION" : v.uppercased() }
+
   public static func next(_ e: Experiment) -> String {
+    if e.expect == "same", let n = sameNext(e) { return n }
     switch e.state {
     case .new: return "give it a build: perfloop exp new … --bench PATH (or --build-cmd CMD --bench PATH)"
     case .built, .screened:
@@ -89,6 +100,13 @@ public enum Explain {
     case .full:
       if let s = [e.secondScreen?.stage, e.full].compactMap({ $0 }).first(where: { $0.verdict == "untrusted" }) { return untrustedNext(s, "perfloop exp full \(e.id)", e) }
       return "perfloop exp full \(e.id) (resumes at the first missing pair)"
+    case .inconclusive:
+      if let s = e.screen, s.verdict == "untrusted" { return untrustedNext(s, "perfloop exp screen \(e.id)", e) }
+      let n = e.screen?.extendedTo ?? Acceptance.screenPairs, more = min(Acceptance.screenPairs, Acceptance.maxScreenPairs - n)
+      let full = "perfloop exp full \(e.id) (5 + 5, extended to 10 + 10 while unknown: it decides)"
+      guard more > 0 else { return "the screen can't tell at \(n) pairs: \(full), or drop it if the idea was weak" }
+      return "the screen can't tell, so don't drop it on this: perfloop exp screen \(e.id) --more \(more) (promising then needs \(Acceptance.winsNeeded(n + more)) of \(n + more) pairs won), or straight to \(full)"
+    case .noRegression, .regressed: return "nothing (an expect-same verdict)"
     case .rejected: return "drop it and try the next idea; the worst stretch above is where the time went"
     case .lost: return e.full?.regression == true ? "drop it: the candidate is slower" : "drop it, or narrow the hypothesis and try again"
     // What waits for the owner says so and gives the agent its own step; the owner's flags are in `perfloop help`.
@@ -103,6 +121,38 @@ public enum Explain {
       return "perfloop exp promote \(e.id)"
     case .promoted: return "open a PR with exp/\(e.id)/explain.txt and the diff; after the merge: perfloop champion merged <sha>. The loop may climb on it meanwhile"
     case .abandoned: return "nothing"
+    }
+  }
+
+  /// An expect-same experiment's next step, in what it means for the feature's PR; nil where it is the loop's usual one
+  /// (give it a build, screen it, resume an untrusted stage).
+  static func sameNext(_ e: Experiment) -> String? {
+    let last = e.full ?? e.screen
+    if let s = last, s.verdict == "untrusted" { return untrustedNext(s, "perfloop exp \(e.full == nil ? "screen" : "full") \(e.id)", e) }
+    let c = last?.costs?.first, m = last?.metric ?? "the objective"
+    let looks = (last?.guardReviews ?? []).isEmpty ? "" : "; the snapshots differ from the champion's (the look lines above): if the feature means to change what this scenario shows, put both PNGs and the diff in the PR, else find why"
+    switch e.state {
+    case .noRegression:
+      return "it costs nothing measurable: say so in the feature's PR with the stage line above (\"no regression on \(m): \(c?.text ?? "-")\"). Nothing to promote: an expect-same experiment never moves the champion" + looks
+    case .regressed:
+      if last.map({ !$0.guardsPassed }) == true || e.guardRuns?.last.map({ !$0.failures.isEmpty }) == true {
+        return "the feature broke what a guard checks (above): fix it, commit, and check the new build with perfloop exp new \"…\" --expect same (a regression is the feature's to fix, not a reason to drop it)"
+      }
+      let w = last?.costs?.filter { $0.call == "worse" } ?? []
+      let what = w.map { c in
+        let u = c.metric != m                                  // a frame guard: in its own units
+        return "\(c.metric) by \(c.show(c.change, units: u)) (at least \(c.low.map { c.show($0, units: u) } ?? "?"))"
+      }.joined(separator: ", ")
+      return "regressed on \(what): look at the candidate's worst stretch above, then perfloop profile exp/\(e.id) and perfloop diff champion exp/\(e.id) for where the time went; fix it, commit, and check the new build with perfloop exp new \"…\" --expect same"
+    case .inconclusive:
+      if let f = e.full {
+        guard f.verdict == "inconclusive" else { return "perfloop exp full \(e.id) (its last run had no usable pairs)" }
+        return "can't tell at \(f.repsPerSide ?? 10) + \(f.repsPerSide ?? 10) on this runner (\(m) \(c?.text ?? "-")): say exactly that in the PR, with these numbers; for a decision, check it again on a quieter runner (perfloop doctor says what is noisy here; or --runner ssh://user@spare-mac) in a new experiment"
+      }
+      let n = e.screen?.extendedTo ?? Acceptance.screenPairs, more = min(Acceptance.screenPairs, Acceptance.maxScreenPairs - n)
+      let full = "perfloop exp full \(e.id) (5 + 5, extended to 10 + 10 while it can't tell)"
+      return "can't tell yet (\(m) \(c?.text ?? "-")): add pairs: " + (more > 0 ? "perfloop exp screen \(e.id) --more \(more), or \(full)" : full)
+    default: return nil
     }
   }
 

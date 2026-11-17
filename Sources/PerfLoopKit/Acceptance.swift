@@ -151,35 +151,126 @@ public enum Acceptance {
     return out
   }
 
-  /// Screen: promising when the candidate wins every pair, the median per-pair gain is ≥ max(5 %, band), and no
-  /// guard failed. Three pairs can't reach significance (sign test p = 0.125): this filters, it doesn't decide.
+  /// Pairs a screen takes at most, `exp screen --more` included: past them the full decides.
+  public static let maxScreenPairs = 10
+
+  /// The pairs out of `n` a promising screen must win: as strong as 3 of 3 (one-sided sign test p ≤ 0.125), so a
+  /// screen grown with `--more` filters no more loosely than a 3-pair one (4 → 4, 6 → 5, 8 → 7, 10 → 8).
+  public static func winsNeeded(_ n: Int) -> Int {
+    guard n > 0 else { return 0 }
+    return (0...n).first { SignTest.p(wins: $0, losses: n - $0) <= 0.125 } ?? n
+  }
+
+  /// Screen: promising when the candidate wins every pair (with `--more`, as many as `winsNeeded`), the median per-pair
+  /// gain is ≥ max(5 %, band), and no guard failed. Three pairs can't reach significance (sign test p = 0.125): this
+  /// filters, it doesn't decide. When it isn't promising, it is `rejected` only when the pairs say the idea can't win
+  /// (a guard failed, slower in every pair, or even the one-sided 95 % high bound of the gain is under 5 %), and
+  /// `inconclusive` when they can't tell (mixed signs or a band wider than the gain): more pairs or the full decide.
   public static func screen(_ pairs: [Pair], metric: String, guards: [String]) -> Stage {
     var st = base(pairs, metric: metric, guards: guards)
     if let m = RunnerIdentity.mixed(pairs) { st.verdict = "error"; st.reasons = [m]; return st }
     let use = pairs.filter { unusable($0) == nil }
-    // Untrusted pairs never decide: unless the trusted ones already reject the candidate on their own (a pair it didn't
-    // win, a guard it failed), the screen waits for them to be measured again.
-    if pairs.contains(where: distrusted), !use.contains(where: { $0.b.objective! >= $0.a.objective! }), guardFailures(use, guards: guards).isEmpty {
+    // Untrusted pairs never decide: unless a trusted pair already rejects the candidate on its own (a guard it failed),
+    // the screen waits for them to be measured again.
+    if pairs.contains(where: distrusted), guardFailures(use, guards: guards).isEmpty {
       return untrustedStage(st, pairs, use: use)
     }
     guard !use.isEmpty else { st.verdict = "error"; st.reasons = ["no pair produced the objective \(metric)"] + pairs.compactMap(unusable); return st }
     let gains = use.map { gainPct($0.a.objective!, $0.b.objective!) }
     let med = Stats.round(Stats.median(gains), 2), threshold = max(minGainPct, st.band ?? 0)
+    let n = use.count, need = winsNeeded(max(n, screenPairs))
     st.medianGainPct = med
     st.signP = SignTest.p(wins: st.wins, losses: use.filter { $0.b.objective! > $0.a.objective! }.count)
     var r: [String] = []
-    if st.wins < use.count { r.append("the candidate won \(st.wins) of \(use.count) pairs (a screen needs all)") }
+    if st.wins < need { r.append("the candidate won \(st.wins) of \(n) pairs (a screen \(n <= screenPairs ? "needs all" : "of \(n) needs \(need)"))") }
     if med < threshold { r.append("median gain \(med) % is under max(\(Int(minGainPct)) %, band \(st.band ?? 0) %)") }
     if !st.guardsPassed { r += st.guardFailures }
     let reviews = st.guardReviews ?? []
     r += reviews.map { "needs review: " + $0 }
     if use.count < pairs.count { r.append("\(pairs.count - use.count) pair(s) unusable: " + pairs.compactMap(unusable).joined(separator: "; ")) }
-    // Three pairs can't call a regression either: a screen only filters. "Slower in every pair" is said, not judged.
-    if st.wins == 0 && -med > (st.band ?? 0) { r.append("slower in every pair (median \(med) %): a full would be needed to call it a regression") }
-    st.verdict = r.count == reviews.count && use.count >= screenPairs ? (reviews.isEmpty ? "promising" : "needsReview") : "rejected"
-    if st.verdict != "rejected" { r.append("won \(st.wins)/\(use.count) pairs, median gain \(med) % ≥ \(threshold) %") }
+    let ci = PairedT.bounds(gains)
+    if r.count == reviews.count && n >= screenPairs {
+      st.verdict = reviews.isEmpty ? "promising" : "needsReview"
+      r.append("won \(st.wins)/\(n) pairs, median gain \(med) % ≥ \(threshold) %")
+    } else if !st.guardsPassed {
+      st.verdict = "rejected"
+    } else if st.wins == 0 && n >= 2 {
+      // Three pairs can't call a regression either: a screen only filters. "Slower in every pair" is said, not judged.
+      st.verdict = "rejected"
+      r.append("slower in every pair (median \(med) %)" + (-med > (st.band ?? 0) ? ": a full would be needed to call it a regression" : ""))
+    } else if let hi = ci.high, hi < minGainPct {
+      st.verdict = "rejected"
+      r.append("even at best the gain is \(Stats.round(hi, 1)) % (one-sided 95 % bound of the mean \(Stats.round(ci.mean, 1)) %), under the \(Int(minGainPct)) % a promotion needs")
+    } else {
+      st.verdict = "inconclusive"
+      let range = ci.low.flatMap { l in ci.high.map { "\(Stats.round(l, 1)) … \(Stats.round($0, 1)) %" } }
+      r.append("can't tell: the gain could be " + (range.map { "anywhere in \($0) (90 % interval)" } ?? "anything (one pair can't bound it)") + ", around the \(Int(minGainPct)) % a promotion needs: add pairs (exp screen --more) or run the full")
+    }
     st.reasons = r
     return st
+  }
+
+  /// Expect same (a feature or guard check, `exp new --expect same`): does the candidate cost nothing? A
+  /// non-inferiority test per metric on the paired differences (`PairedT`): the objective, then each frame guard both
+  /// sides report. `noRegression` when every metric's high bound is under its margin and no guard failed; `regressed`
+  /// when a correctness guard failed or a metric's low bound is over its margin (worse beyond it, at 95 %);
+  /// `inconclusive` otherwise: the interval straddles a margin, and more pairs narrow it. The margin is the metric's
+  /// floor (`floors`: the smallest change worth calling), never the run's noise band, which a noisy Mac would widen
+  /// until anything passed. A snapshot that differs is a "look", not a verdict: a feature changes what it shows.
+  public static func same(_ pairs: [Pair], metric: String, guards: [String], lastLook: Bool) -> Stage {
+    var st = base(pairs, metric: metric, guards: guards)
+    if let m = RunnerIdentity.mixed(pairs) { st.verdict = "error"; st.reasons = [m]; return st }
+    let use = pairs.filter { unusable($0) == nil }
+    st.repsPerSide = use.count
+    // A guard the candidate failed on a trusted pair is a regression whatever the rest say; anything else waits for
+    // the untrusted pairs to be measured again.
+    let failed = guardFailures(use, guards: guards)
+    if pairs.contains(where: distrusted), failed.isEmpty { return untrustedStage(st, pairs, use: use) }
+    guard !use.isEmpty else { st.verdict = "error"; st.reasons = ["no pair produced the objective \(metric)"] + pairs.compactMap(unusable); return st }
+    st.medianGainPct = Stats.round(Stats.median(use.map { gainPct($0.a.objective!, $0.b.objective!) }), 2)
+    st.signP = SignTest.p(wins: st.wins, losses: use.filter { $0.b.objective! > $0.a.objective! }.count)
+    var costs = [cost(metric, use, \.objective)!]
+    var unchecked: [String] = []
+    for (name, pick) in frameMetrics where name != metric {
+      if let c = cost(name, use, pick) { costs.append(c) } else if name == "hitchTimeRatioMsPerS" || name == "longestStretchMs" { unchecked.append(name) }
+    }
+    st.costs = costs
+    let worse = costs.filter { $0.call == "worse" }, unsure = costs.filter { $0.call == "unsure" }
+    var r: [String] = failed
+    r += worse.map { "\($0.metric) is worse beyond its margin: \($0.text)" }
+    if !failed.isEmpty || !worse.isEmpty {
+      st.verdict = "regressed"; st.regression = !worse.isEmpty
+    } else if unsure.isEmpty {
+      st.verdict = "noRegression"
+      r.append("no cost beyond the margin on " + costs.map(\.metric).joined(separator: ", ") + " (\(use.count) pairs)")
+    } else {
+      st.verdict = "inconclusive"
+      r += unsure.map { "can't tell on \($0.metric): \($0.text)" }
+      r.append(lastLook ? "still inconclusive at \(use.count) + \(use.count): this runner can't resolve a change that small" : "add pairs: the interval narrows with them")
+    }
+    if !unchecked.isEmpty { r.append("not checked: \(unchecked.joined(separator: ", ")) (the adapter reports none per side)") }
+    r += (st.guardReviews ?? []).map { "look: " + $0 }
+    if use.count < pairs.count { r.append("\(pairs.count - use.count) pair(s) unusable: " + pairs.compactMap(unusable).joined(separator: "; ")) }
+    st.reasons = r
+    return st
+  }
+
+  /// The frame metrics a full holds not worse (jerk never: it differentiates three times and swings with the display
+  /// link's jitter), and an expect-same stage holds to its margin.
+  static let frameMetrics: [(String, (Side) -> Double?)] = [("hitchTimeRatioMsPerS", \.hitchTimeRatioMsPerS), ("longestStretchMs", \.longestStretchMs),
+                                                           ("positionErrorP95Pt", \.positionErrorP95Pt), ("stalls", \.stalls)]
+
+  /// What the candidate costs on one metric over the pairs, held to the metric's floor; nil unless both sides report
+  /// it in every pair.
+  static func cost(_ metric: String, _ use: [Pair], _ pick: (Side) -> Double?) -> CostBound? {
+    let xa = use.compactMap { pick($0.a) }, xb = use.compactMap { pick($0.b) }
+    guard !use.isEmpty, xa.count == use.count, xb.count == use.count else { return nil }
+    let ci = PairedT.bounds(zip(xa, xb).map { $1 - $0 })
+    let f = floors(metric), champion = Stats.median(xa)
+    let margin = max(abs(champion) * f.pct / 100, f.absolute)
+    let call = ci.low.map { $0 > margin } == true ? "worse" : ci.high.map { $0 < margin } == true ? "same" : "unsure"
+    func r(_ x: Double?) -> Double? { x.map { Stats.round($0, 4) } }
+    return CostBound(metric: metric, champion: Stats.round(champion, 4), change: Stats.round(ci.mean, 4), low: r(ci.low), high: r(ci.high), margin: Stats.round(margin, 4), call: call)
   }
 
   /// Full: won when Mann-Whitney U gives p < 0.05, the effect is ≥ the band (and ≥ 5 %), and the frame guards
@@ -202,10 +293,7 @@ public enum Acceptance {
     st.signP = SignTest.p(wins: st.wins, losses: use.filter { $0.b.objective! > $0.a.objective! }.count)
     // Frame guards: not worse than the champion beyond their own bands, whatever the objective did.
     var fg: [String: FrameGuard] = [:]
-    // Jerk is never a guard: it differentiates three times and swings with the display link's jitter.
-    let guarded: [(String, (Side) -> Double?)] = [("hitchTimeRatioMsPerS", \.hitchTimeRatioMsPerS), ("longestStretchMs", \.longestStretchMs),
-                                                  ("positionErrorP95Pt", \.positionErrorP95Pt), ("stalls", \.stalls)]
-    for (name, pick) in guarded where name != metric {
+    for (name, pick) in frameMetrics where name != metric {
       let xa = use.compactMap { pick($0.a) }, xb = use.compactMap { pick($0.b) }
       guard xa.count == use.count, xb.count == use.count else { continue }
       let f = floors(name), bd = Band(champion: xa, candidate: xb, floorPct: f.pct, absoluteFloor: f.absolute)
@@ -284,17 +372,21 @@ public struct StopInput: Sendable {
 }
 
 public enum Stopping {
-  /// Every rule that holds; empty means keep going.
+  /// Every rule that holds; empty means keep going. They are the optimisation loop's: an expect-same experiment's lines
+  /// (a feature or guard check) count toward none of them, and an inconclusive screen neither extends nor breaks the
+  /// streak (it decided nothing). The time budget runs from the session's start once it has an optimisation candidate.
   public static func reasons(_ i: StopInput) -> [String] {
     var r: [String] = []
     if i.budgetPassed == true { r.append("the champion meets its SPEC §1 budget") }
     if let s = i.largestAttributablePct, s < i.minSubtreePct { r.append("no attributable subtree ≥ \(Int(i.minSubtreePct)) % of the objective remains (largest \(s) %)") }
-    let screens = i.session.filter { $0.state == ExpState.promising.rawValue || $0.state == ExpState.rejected.rawValue }
+    let session = i.session.filter { $0.expect != "same" }
+    let screens = session.filter { $0.state == ExpState.promising.rawValue || $0.state == ExpState.rejected.rawValue }
     let streak = screens.reversed().prefix { $0.state == ExpState.rejected.rawValue }.count
     if streak >= i.maxNonPromisingStreak { r.append("\(streak) non-promising candidates in a row") }
-    let candidates = Set(i.session.filter { $0.state == ExpState.built.rawValue }.map(\.experiment)).count
+    let candidates = Set(session.filter { $0.state == ExpState.built.rawValue }.map(\.experiment)).count
     if candidates >= i.maxCandidates { r.append("\(candidates) candidates this session (budget \(i.maxCandidates))") }
-    if let first = i.session.first.flatMap({ Clock.date($0.at) }), i.now.timeIntervalSince(first) >= i.timeBudgetS {
+    // An owner's champion lines (set, merged) and `perfloop run`'s measurements aren't a candidate: the clock waits for one.
+    if session.contains(where: { !["session", ExpState.promoted.rawValue, "merged", "measure"].contains($0.state) }), let first = session.first.flatMap({ Clock.date($0.at) }), i.now.timeIntervalSince(first) >= i.timeBudgetS {
       r.append("the session's time budget (\(Int(i.timeBudgetS / 60)) min) is spent")
     }
     return r
