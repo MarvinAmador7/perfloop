@@ -223,6 +223,9 @@ started) and on `Examples/SlowList`. PerfLoopHost now has what deskbench had bey
 and `diff` per step, gesture replay with the smoothness meter, and a recorder for a real hand. Runners: this Mac
 (idle-gated), a spare Mac over ssh (verified on a Mac mini, trusted runs), a macOS VM with Tart (`vm:tart/NAME`, screens
 only). For agents: `perfloop mcp` and `perfloop suggest` (docs/BEYOND.md says why and what not to claim).
+Next: Agentic Verification, PerfLoop as the way an agent proves a UI change works, looks right, answers real
+input and costs nothing, not only that it is faster ([docs/VERIFICATION.md](docs/VERIFICATION.md): verdicts, the
+evidence a PR carries, the roadmap).
 
 Still open: deskbench itself moving onto PerfLoopHost (capcomd's side); a gesture recorded by a real hand (the recorder is
 built and was checked by feeding it a synthetic gesture; feel stays the owner's call); the design history in
