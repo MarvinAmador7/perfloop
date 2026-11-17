@@ -9,9 +9,28 @@ permissions:
   contents: read
 
 jobs:
+  # Whether a pull request touches anything besides docs. A docs-only PR skips the macOS job (the slow, queued one);
+  # Linux still runs every test, including the ones that check the docs' command lines.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")
+          if echo "$files" | grep -qvE '(\.md$|^docs/|^LICENSE$)'; then code=true; else code=false; fi
+          echo "$files"; echo "code=$code" | tee -a "$GITHUB_OUTPUT"
   # The package's tests, the genericity gate, and the example app that depends on it as an outside app would. No
   # window opens: the tests use fake adapters, fake ssh and scripted idle readings.
   macos:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
