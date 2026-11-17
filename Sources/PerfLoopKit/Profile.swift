@@ -142,3 +142,34 @@ extension Diff {
     return DiffInput(side: side, tree: t, notes: per == "run" ? [] : ["no step signposts: the whole recording ÷ \(n) in-process steps (settling and idle time included)"])
   }
 }
+
+/// The environment a profiled process is started with. A trace holds the recorded process's environment (xctrace's
+/// TOC lists it, tokens included), so whatever records one gets an allowlist, never the caller's whole environment:
+/// what a process needs to start and find its tools, the bench's own `PERFLOOP_` variables, and the names the adapter
+/// declares (`profileEnv` in its manifest). A name that looks like a secret is dropped even when declared.
+public enum TraceEnv {
+  /// What a process needs to start and find its tools (xcrun, the locale, its home and temporary directory).
+  public static let system: Set<String> = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "TMPDIR", "LANG", "TERM", "TZ", "__CF_USER_TEXT_ENCODING", "DEVELOPER_DIR"]
+  /// The bench's own variables (ADAPTER.md): knobs, guards, artifacts, the store, the window lock, the sampler. Never
+  /// PERFLOOP_OWNER, nor the runners' (ssh, VM passwords).
+  public static let perfloop: Set<String> = ["PERFLOOP_KNOBS", "PERFLOOP_GUARDS", "PERFLOOP_GUARD_PARAMS", "PERFLOOP_ARTIFACTS", "PERFLOOP_HOME", "PERFLOOP_APP",
+                                             "PERFLOOP_LOCK", "PERFLOOP_LOCK_HELD", "PERFLOOP_LOCK_OWNER", "PERFLOOP_SAMPLER"]
+  static let secretWords = ["TOKEN", "SECRET", "KEY", "PASSWORD", "PASSWD", "PASSPHRASE", "CREDENTIAL", "AUTH", "COOKIE", "SESSION", "PRIVATE", "SIGNING"]
+
+  /// Whether a variable's name says it holds a secret (`GITHUB_TOKEN`, `OPENAI_API_KEY`, `SSH_AUTH_SOCK`, …).
+  public static func secretLike(_ name: String) -> Bool {
+    let n = name.uppercased()
+    return secretWords.contains { n.contains($0) } || n == "PERFLOOP_OWNER"
+  }
+
+  /// Whether `name` passes: the allowlists, `LC_*`, or `declared`; never a secret-like name.
+  public static func allowed(_ name: String, declared: [String] = []) -> Bool {
+    guard !secretLike(name) else { return false }
+    return system.contains(name) || name.hasPrefix("LC_") || perfloop.contains(name) || declared.contains(name)
+  }
+
+  /// `env` with only what passes.
+  public static func scrub(_ env: [String: String], declared: [String] = []) -> [String: String] {
+    env.filter { k, _ in allowed(k, declared: declared) }
+  }
+}

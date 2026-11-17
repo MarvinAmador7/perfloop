@@ -45,7 +45,7 @@ public enum CLIArguments {
     spec("store gc", "store gc [--keep N] [--traces]", valued: ["keep"], flags: ["traces"]),
     spec("champion", "champion [--json]"),
     spec("champion set", "champion set BUILD [--merged] [--scenario S] [--fixture F] [--note \"…\"]", valued: ["scenario", "fixture", "note"], flags: ["merged"], positional: 1...1),
-    spec("champion merged", "champion merged SHA", positional: 1...1),
+    spec("champion merged", "champion merged SHA [--main REF]", valued: ["main"], positional: 1...1),
     spec("exp new", "exp new \"<hypothesis>\" [--bench PATH | --build-cmd CMD --bench PATH | --build HASH | --knobs k=v,…] [--scenario S] [--fixture F] "
          + "[--second-fixture F] [--set k=v] [--via ab|run] [--behaviour-change] [--patch FILE] [--no-screen] [--against ID] [--expect faster|same] [--exe NAME] [runner flags]",
          valued: ["bench", "exe", "build-cmd", "build", "scenario", "fixture", "second-fixture", "knobs", "set", "via", "patch", "against", "expect"],

@@ -74,8 +74,13 @@ public enum Runners {
       r.remoteEnv = o.remoteEnv
       if let l = o.launch { guard let m = SSHRunner.Launch(rawValue: l) else { throw PLError.usage("--launch gui|direct") }; r.launch = m }
       if let i = o.idle, !o.force { r.gate = IdleGate(threshold: i, busyApps: o.busyApps ?? IdleGate.defaultBusyApps) }
+      r.quiet = o.quiet
       return r
-    case .vm(let tool, let name): return try VMRunner(tool: tool, name: name, store: store)
+    case .vm(let tool, let name):
+      let r = try VMRunner(tool: tool, name: name, store: store)
+      r.quiet = o.quiet
+      if let f = o.idleFrom { r.load = FileIdleSource(path: f) }
+      return r
     }
   }
 }
@@ -96,7 +101,8 @@ public struct RunnerOptions {
   public var lock: String?
   /// Local: refuse (`RunnerStop.locked`) instead of waiting while the screen is locked (`--no-wait`).
   public var noWait = false
-  /// Local: the quiet gate (`--max-load`, `--quiet-timeout`, `--require-quiet`); on by default, nil turns it off.
+  /// The quiet gate (`--max-load`, `--quiet-timeout`, `--require-quiet`); on by default, nil turns it off. It reads the
+  /// machine whose load distorts the reps: this Mac (local), the remote Mac (ssh), this Mac as the VM's host (vm).
   public var quiet: QuietGate? = QuietGate()
   public init() {}
 }
@@ -151,6 +157,12 @@ public final class LocalRunner: Runner {
   public func close() {}
 
   public func run(_ exe: String, _ args: [String], env: [String: String], workDir: URL) throws -> Adapter.Output {
+    try run(exe, args, env: env, workDir: workDir, inherit: true)
+  }
+
+  /// `inherit` false: the child gets `env` (and the window lock's) and nothing of this process's environment (a
+  /// profile: its trace holds the recorded process's environment).
+  public func run(_ exe: String, _ args: [String], env: [String: String], workDir: URL, inherit: Bool) throws -> Adapter.Output {
     try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
     var start: IdleReading, held: (() -> Void)?, machine: MachineState?
     while true {
@@ -169,7 +181,7 @@ public final class LocalRunner: Runner {
       held?(); held = nil
     }
     defer { held?() }
-    let child = try Child(exe, args, env: env.merging(WindowLock.childEnv) { a, _ in a })
+    let child = try Child(exe, args, env: env.merging(WindowLock.childEnv) { a, _ in a }, inherit: inherit)
     var why: String?
     while child.running {
       Thread.sleep(forTimeInterval: gate == nil ? max(poll, 1) : poll)
@@ -215,31 +227,7 @@ public final class LocalRunner: Runner {
   /// can't be read here). A rep that starts busy says so (log, `onWait`, and `quiet: false` on the rep); with
   /// `--require-quiet` the run stops instead.
   func waitForQuiet(_ q: QuietGate) throws -> MachineState? {
-    let t0 = Date(), limit = quietTimedOut ? min(q.timeout, q.retryTimeout) : q.timeout
-    var said = false
-    while true {
-      let r = load.readLoad()
-      if r.unknown { return nil }
-      let waited = Date().timeIntervalSince(t0)
-      guard let why = q.busy(r) else {
-        if said { log("quiet after \(Int(waited)) s: starting the rep") }
-        quietTimedOut = false
-        return q.state(r, waited: waited)
-      }
-      if waited >= limit {
-        if q.require { throw RunnerStop.notQuiet(waited: waited, why: why) }
-        let t = "not quiet after \(Int(waited)) s (\(why)): the rep runs anyway and is recorded as not quiet (quiet: false)"
-        log(t); onWait(t)
-        quietTimedOut = true
-        return q.state(r, waited: waited)
-      }
-      if !said {
-        let t = "waiting up to \(Int(limit)) s for a quiet machine: \(why) (--max-load PCT, --quiet-timeout S, --require-quiet)"
-        log(t); onWait(t); said = true
-      }
-      try checkDeadline()
-      Thread.sleep(forTimeInterval: quietPoll)
-    }
+    try QuietWait.wait(q, on: nil, timedOut: &quietTimedOut, poll: quietPoll, read: load.readLoad, log: log, onWait: onWait, check: checkDeadline)
   }
 
   func checkDeadline() throws { if let d = deadline, Date() >= d { throw RunnerStop.deadline(d) } }
@@ -276,6 +264,44 @@ public final class LocalRunner: Runner {
   }
 }
 
+/// The quiet gate's wait, shared by the runners. Each reads the machine whose load distorts its reps: the local runner
+/// this Mac, the ssh runner the remote Mac (where the reps run), the VM runner its host (a guest's own load misses the
+/// host's contention, which is what costs its frames).
+enum QuietWait {
+  /// Waits up to the gate's timeout (the short retry after one timed out: `timedOut`) for `read` to be quiet, and
+  /// returns what the rep starts on; nil when the load can't be read. `place` names a machine other than this one in
+  /// what is said ("on mini").
+  static func wait(_ q: QuietGate, on place: String?, timedOut: inout Bool, poll: Double, read: () -> LoadReading, log: (String) -> Void, onWait: (String) -> Void,
+                   check: () throws -> Void) throws -> MachineState? {
+    let t0 = Date(), limit = timedOut ? min(q.timeout, q.retryTimeout) : q.timeout
+    let on = place.map { " on \($0)" } ?? ""
+    var said = false
+    while true {
+      let r = read()
+      if r.unknown { return nil }
+      let waited = Date().timeIntervalSince(t0)
+      guard let why = q.busy(r) else {
+        if said { log("quiet\(on) after \(Int(waited)) s: starting the rep") }
+        timedOut = false
+        return q.state(r, waited: waited)
+      }
+      if waited >= limit {
+        if q.require { throw RunnerStop.notQuiet(waited: waited, why: why + (place.map { " on \($0)" } ?? "")) }
+        let t = "not quiet\(on) after \(Int(waited)) s (\(why)): the rep runs anyway and is recorded as not quiet (quiet: false)"
+        log(t); onWait(t)
+        timedOut = true
+        return q.state(r, waited: waited)
+      }
+      if !said {
+        let t = "waiting up to \(Int(limit)) s for a quiet machine\(on): \(why) (--max-load PCT, --quiet-timeout S, --require-quiet)"
+        log(t); onWait(t); said = true
+      }
+      try check()
+      Thread.sleep(forTimeInterval: poll)
+    }
+  }
+}
+
 // MARK: processes
 
 /// A child the runner can watch while it runs and kill with its descendants (an adapter's `ab` starts one process per
@@ -288,9 +314,11 @@ public final class Child {
   static var live: [Int32: Child] = [:]
   static let liveLock = NSLock()
 
-  public init(_ exe: String, _ args: [String], env: [String: String] = [:], cwd: String? = nil, stdin: FileHandle? = nil, stderr: FileHandle = .standardError) throws {
+  /// `env` is added to this process's environment, or with `inherit` false is the child's whole environment.
+  public init(_ exe: String, _ args: [String], env: [String: String] = [:], cwd: String? = nil, stdin: FileHandle? = nil, stderr: FileHandle = .standardError,
+              inherit: Bool = true) throws {
     p.executableURL = URL(fileURLWithPath: exe); p.arguments = args
-    var e = ProcessInfo.processInfo.environment; for (k, v) in env { e[k] = v }; p.environment = e
+    var e = inherit ? ProcessInfo.processInfo.environment : [:]; for (k, v) in env { e[k] = v }; p.environment = e
     if let c = cwd { p.currentDirectoryURL = URL(fileURLWithPath: c) }
     let out = Pipe(); p.standardOutput = out; p.standardError = stderr
     p.standardInput = stdin ?? FileHandle.nullDevice

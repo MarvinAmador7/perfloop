@@ -20,11 +20,11 @@ public struct Adapter {
   }
 
   /// Runs the child to completion. stdout is captured; stderr goes to ours (`ab: A rep 1/1` progress) unless
-  /// `quiet`. `env` is added to this process's environment.
-  public static func spawn(_ exe: String, _ args: [String], env: [String: String] = [:], cwd: String? = nil, quiet: Bool = false) throws -> Output {
+  /// `quiet`. `env` is added to this process's environment, or with `inherit` false is the child's whole environment.
+  public static func spawn(_ exe: String, _ args: [String], env: [String: String] = [:], cwd: String? = nil, quiet: Bool = false, inherit: Bool = true) throws -> Output {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: exe); p.arguments = args
-    var e = ProcessInfo.processInfo.environment; for (k, v) in env { e[k] = v }; p.environment = e
+    var e = inherit ? ProcessInfo.processInfo.environment : [:]; for (k, v) in env { e[k] = v }; p.environment = e
     if let c = cwd { p.currentDirectoryURL = URL(fileURLWithPath: c) }
     let out = Pipe(); p.standardOutput = out
     p.standardError = quiet ? FileHandle.nullDevice : FileHandle.standardError
@@ -35,8 +35,13 @@ public struct Adapter {
     return Output(status: p.terminationStatus, stdout: String(decoding: data, as: UTF8.self))
   }
 
-  func call(_ args: [String], env: [String: String] = [:], quiet: Bool = false) throws -> Output {
-    guard let r = runner, let w = workDir else { return try Self.spawn(exe, args, env: env, quiet: quiet) }
+  /// `inherit` false (a profile): the adapter gets `env` and nothing else of ours; only here or on the local runner.
+  func call(_ args: [String], env: [String: String] = [:], quiet: Bool = false, inherit: Bool = true) throws -> Output {
+    guard let r = runner, let w = workDir else { return try Self.spawn(exe, args, env: env, quiet: quiet, inherit: inherit) }
+    if !inherit {
+      guard let l = r as? LocalRunner else { throw PLError.usage("a scrubbed environment runs on this Mac only (--runner local), not \(r.name)") }
+      return try l.run(exe, args, env: env, workDir: w, inherit: false)
+    }
     let o = try r.run(exe, args, env: env, workDir: w)
     if o.status != interruptedStatus { try r.fetch(w) }
     return o

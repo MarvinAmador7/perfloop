@@ -27,11 +27,9 @@ enum ProfileVerb {
     diff:    A and B are profile JSONs or .trace files: what grew and shrank, ms per step, main thread (perfloop.diff/1).
   """
 
-  /// What a recorded process keeps of our environment: no tokens, keys or logins end up in the trace.
-  static let allowedKeys: Set<String> = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "TMPDIR", "LANG", "TERM", "__CF_USER_TEXT_ENCODING", "DEVELOPER_DIR"]
-  static func scrub(_ env: [String: String]) -> [String: String] {
-    env.filter { k, _ in allowedKeys.contains(k) || k.hasPrefix("LC_") || k.hasPrefix("PERFLOOP_") }
-  }
+  /// What a recorded process keeps of our environment (TraceEnv's allowlist and the bench's `profileEnv`): no tokens,
+  /// keys or logins end up in the trace.
+  static func scrub(_ env: [String: String], declared: [String] = []) -> [String: String] { TraceEnv.scrub(env, declared: declared) }
 
   static func defaultDir(app: String, scenario: String, template: String) -> URL {
     let env = ProcessInfo.processInfo.environment
@@ -87,7 +85,7 @@ enum ProfileVerb {
     for s in a.all("set") { args += ["--set", s] }
     for k in a.all("knob") { args += ["--knob", k] }
     if a.has("no-activate") { args.append("--no-activate") }
-    let env = scrub(ProcessInfo.processInfo.environment)
+    let env = scrub(ProcessInfo.processInfo.environment, declared: bench.profileEnv)
     let exe = Bundle.main.executablePath ?? CommandLine.arguments[0]
     let child = Process()
     child.executableURL = URL(fileURLWithPath: exe); child.arguments = args; child.environment = env
