@@ -152,6 +152,10 @@ and read `waiting … for a quiet machine: building: swift-frontend` as "my own 
 Over MCP (`perfloop mcp`), the same verbs are tools: a stage returns a job, and `job` waits for it on the server's side,
 so never poll with `sleep`; the session's end stops its jobs.
 
+Every command refuses an argument it doesn't take (exit 1, naming it, with the command's usage) before it reads a store
+or opens a window; `perfloop COMMAND --help` prints the usage. Pass a flag and its value as two arguments: a shell
+variable holding `--store DIR` is one argument in zsh, and is refused.
+
 Headless and always fine: `doctor`, `describe`, `store list`, `exp status`, `explain`, `ledger`, `champion`, `causes`.
 
 Disk: every build in the store is a copy of the bench (`perfloop store gc` keeps the newest 20 and every champion);
