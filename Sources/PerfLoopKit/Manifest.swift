@@ -68,6 +68,25 @@ public struct Manifest: Codable, Sendable, Equatable {
   public func scenario(_ name: String) -> ScenarioEntry? { scenarios.first { $0.name == name } }
   public var fixtureNames: [String] { fixtures.compactMap { $0["name"]?.string } }
 
+  /// The fixture a scenario runs on when nobody names one: the scenario's own (`scenarios[].fixture`), else the
+  /// manifest's default, else the first listed.
+  public func fixture(for scenario: String?) -> String? {
+    scenario.flatMap { self.scenario($0)?.fixture } ?? defaultFixture ?? fixtureNames.first
+  }
+
+  /// Why `fixture` can't run on this manifest's bench, or nil when it can: a listed name, a listed name with
+  /// parameters (`crew@agents=24`), or an adapter's own `scheme:` form (`file:PATH`) pass; a manifest that lists no
+  /// fixtures passes anything. `whose` names the manifest in the message ("the champion's manifest").
+  public func unknownFixture(_ fixture: String, whose: String = "the manifest") -> String? {
+    let names = fixtureNames
+    let base = Self.fixtureBase(fixture)
+    if names.isEmpty || names.contains(base) || base.contains(":") { return nil }
+    return "unknown fixture '\(base)'; \(whose) has \(names.joined(separator: ", "))"
+  }
+
+  /// `crew@agents=24` → `crew`: the fixture a parametric spec names.
+  public static func fixtureBase(_ f: String) -> String { String(f.split(separator: "@", maxSplits: 1).first ?? Substring(f)) }
+
   /// For adapters without `describe` (deskbench before Phase 2): the manifest implied by `list --json`. Objectives
   /// follow SPEC §5.1 (latency scenarios keep latency, the rest climb on main-thread CPU); the guards are the
   /// scenario's own checks.
@@ -80,6 +99,7 @@ public struct Manifest: Codable, Sendable, Equatable {
       var e = ScenarioEntry(name: name, kind: kind, objective: kind == "latency" ? "latencyMs" : "mainThreadCpuMsPerStep", guards: ["checks"])
       e.summary = s["summary"]?.string; e.budget = s["budget"]?.string; e.rule = s["rule"]?.string; e.latencyBudgetMs = s["latencyBudgetMs"]?.double
       e.params = (s["params"]?.object ?? [:]).compactMapValues(\.string)
+      e.fixture = s["fixture"]?.string
       return e
     }
     let name = tool?["name"]?.string ?? "adapter"
@@ -92,7 +112,7 @@ public struct Manifest: Codable, Sendable, Equatable {
   /// fixtures. Two manifests with equal contracts judge builds the same way.
   public var contract: String {
     let s = scenarios.sorted { $0.name < $1.name }.map { e in
-      "\(e.name):\(e.objective ?? "-"):\(e.guards.sorted().joined(separator: "+")):\(PLJSON.line(e.guardParams ?? [:])):\(e.secondFixture ?? "-")"
+      "\(e.name):\(e.objective ?? "-"):\(e.guards.sorted().joined(separator: "+")):\(PLJSON.line(e.guardParams ?? [:])):\(e.secondFixture ?? "-")" + (e.fixture.map { ":fixture=\($0)" } ?? "")
     }
     return (s + ["fixtures:" + fixtureNames.sorted().joined(separator: ",")] + (isolationGuards.map { ["isolation:" + $0.joined(separator: ",")] } ?? [])).joined(separator: "\n")
   }
@@ -114,13 +134,16 @@ public struct ScenarioEntry: Codable, Sendable, Equatable {
   public var guardParams: [String: JSONValue]?
   /// Promotion needs not-worse here (SPEC §5.5, over-fitting one fixture).
   public var secondFixture: String?
+  /// The fixture this scenario runs on when nobody names one (its data: a palette scenario's search index, a reel's
+  /// column count), before the manifest's `defaultFixture`. Added 2026-11.
+  public var fixture: String?
   /// Metrics that may not get worse beyond their band (Acceptance judges them as frame guards).
   public var frameGuards: [String]?
 
   public init(name: String, kind: String, objective: String?, guards: [String] = [], params: [String: String] = [:], secondFixture: String? = nil) {
     self.name = name; self.kind = kind; self.objective = objective; self.guards = guards; self.params = params; self.secondFixture = secondFixture
   }
-  enum CodingKeys: String, CodingKey { case name, summary, kind, budget, rule, latencyBudgetMs, params, objective, guards, guardParams, secondFixture, frameGuards }
+  enum CodingKeys: String, CodingKey { case name, summary, kind, budget, rule, latencyBudgetMs, params, objective, guards, guardParams, secondFixture, frameGuards, fixture }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     name = try c.decode(String.self, forKey: .name)
@@ -131,6 +154,7 @@ public struct ScenarioEntry: Codable, Sendable, Equatable {
     objective = try c.decodeIfPresent(String.self, forKey: .objective); guards = try c.decodeIfPresent([String].self, forKey: .guards) ?? []
     guardParams = try c.decodeIfPresent([String: JSONValue].self, forKey: .guardParams); secondFixture = try c.decodeIfPresent(String.self, forKey: .secondFixture)
     frameGuards = try? c.decodeIfPresent([String].self, forKey: .frameGuards)
+    fixture = try? c.decodeIfPresent(String.self, forKey: .fixture)
   }
 }
 

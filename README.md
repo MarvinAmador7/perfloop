@@ -95,6 +95,8 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 | `exp new "<hypothesis>" --bench P \| --build-cmd C --bench P \| --knobs k=v` | a candidate; screens it |
 | `exp status [ID]` · `exp screen ID` · `exp full ID` · `exp promote ID` · `exp abandon ID` | the experiment verbs |
 | `explain exp/ID` · `ledger` · `causes RESULT.json` | what happened, in words |
+| `run champion\|exp/ID\|BUILD\|BENCH --scenario S [--fixture F] [--reps N] [--reference S2]` | one build's scenario measured on its own (opens windows, through the runner like a stage): trusted numbers, checks, where the time went; no verdict. The scenario may be one only that build has. `--reference S2` runs the champion's S2 beside each rep as a same-minutes yardstick. Stored under `runs/` (`explain run/ID`), a ledger line `measure`; exit 5 when no rep could be trusted, 3 when a check failed |
+| `baseline S --bench PATH\|--build HASH [--reps N] [--reference S2]` | first numbers (trusted reps only) and a reference snapshot for a scenario the champion doesn't have yet; once a champion has S, `exp status` says so and `run champion --scenario S` is compared with it |
 | `suggest [champion\|exp/ID\|RESULT.json]` | ranked hypotheses for the next experiment from the cause records, stacks, profile and sweep, each with its evidence and the share it could remove (leads, not conclusions) |
 | `guards --exp ID` | the correctness guards alone |
 | `session start` | the stopping rules (2 h, 20 candidates, 5 non-promising in a row) count from here |
@@ -106,7 +108,13 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 | `diff champion exp/ID` (or two profile JSONs / traces) · `trace register` | what grew and shrank between two builds, ms per step, main thread; refuses traces of other builds |
 | `gestures list` · `exp replay` | recorded and synthetic gestures; a past session as experiments |
 
-`perfloop help` has every flag. Exit codes: 0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner).
+`perfloop help` has every flag. Exit codes: 0 ok · 1 usage · 2 harness error · 3 a check failed (`run`, `baseline`) ·
+5 untrusted, no rep could be trusted (`run`, `baseline`) · 6 refused (provenance, guards, owner).
+
+Fixtures: a scenario may name its own (`scenarios[].fixture` in the manifest, `fixture:` in `bench.scenario`), which
+every verb uses when `--fixture` doesn't name one (`exp new` on a scenario other than the champion's, `run`, `profile`,
+`sweep`, the isolation scenarios); a `--fixture` the manifest doesn't list is refused with the list, and a rep whose
+result says it ran another fixture than the one asked for has no numbers (`ran fixture X, asked for Y`).
 
 On this Mac, every windowed verb waits while the screen is locked, before taking the window lock (`--no-wait`: stop
 instead), with or without `--idle`; then, holding the lock, it waits up to `--quiet-timeout` (60 s) for a quiet
@@ -139,7 +147,7 @@ claude mcp add perfloop -- /path/to/perfloop mcp --app myapp          # Claude C
 ```
 
 The tools are the agent's verbs (`status`, `explain`, `suggest`, `new_experiment`, `screen`, `full`, `promote`,
-`profile`, `diff`, `sweep`, …) with their schemas. A stage that builds or opens windows returns a job at once; `job`
+`profile`, `diff`, `sweep`, `run`, `baseline`, …) with their schemas. A stage that builds or opens windows returns a job at once; `job`
 waits for it on the server's side (up to 60 s a call), so the agent never writes a sleep loop, and every job still
 running when the session ends is killed with its windows. Local runs hold the window lock (§ The window lock;
 `mcp --lock DIR` moves it). The owner's flags (`--force`, `--owner`, `--guard-tolerance`, `--allow-dirty`) are no tool's
@@ -149,7 +157,7 @@ the server runs it for every call.
 ## The window lock
 
 Two bench windows on one Mac spoil each other's numbers, so window runs take turns at one lock, on by default: every
-perfloop verb that opens a window here (`exp new`/`screen`/`full`, `guards`, `profile`, `sweep`, `exp replay --go`,
+perfloop verb that opens a window here (`exp new`/`screen`/`full`, `run`, `baseline`, `guards`, `profile`, `sweep`, `exp replay --go`,
 `queue run --runner local`) holds it around each rep, the MCP server's jobs too, and a PerfLoopHost bench's `run`,
 `profile` and `record-gesture` hold it for their whole run when started by hand. `perfloop lock -- CMD` holds it around
 anything else (an adapter's own `ab`, a script). It lives at `$PERFLOOP_LOCK`, else `/tmp/perfloop-window-UID.lock`
@@ -195,7 +203,8 @@ organisations) and an image: `tart clone ghcr.io/cirruslabs/macos-tahoe-vanilla:
 
 ## Where things live
 
-- The store: `${PERFLOOP_HOME:-~/.perfloop}/<app>/` (builds by sha256, experiments, `ledger.jsonl`, `champion.json`).
+- The store: `${PERFLOOP_HOME:-~/.perfloop}/<app>/` (builds by sha256, experiments, `runs/` and `baselines/` from
+  `run` and `baseline`, `ledger.jsonl`, `champion.json`).
   Never in a repo; a project-local `.perfloop/` is gitignored.
 - Traces (`.trace`) carry the recorded process's environment, tokens included: never commit or share them; the store
   records their paths only. `perfloop profile` deletes each once exported and checks it is gone (`--keep-trace` keeps
