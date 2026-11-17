@@ -64,7 +64,8 @@ final class LoopTests: FakeBenchCase {
     try baseline()
     var o = Loop.NewOptions(hypothesis: "a rebuild of the same code"); o.bench = try bench("same", ["CPU": "40"])
     let e = try loop.new(o)                                              // screens by default
-    XCTAssertEqual(e.state, .rejected)
+    // At 2 % noise, three pairs almost always show the gain can't reach 5 %; now and then they can't tell.
+    XCTAssertTrue([.rejected, .inconclusive].contains(e.state), "\(e.screen!.reasons)")
     XCTAssertNotEqual(try loop.full(e.id, force: true).full?.regression, true)
   }
 
@@ -224,7 +225,7 @@ final class LoopTests: FakeBenchCase {
     let plan = ReplayPlan(schema: "perfloop.replay/1", app: "fake-replay", root: root.path, fixture: "crew17", via: "run",
                           builds: ["base", "v1", "v2", "v3"].map { ReplayBuild(name: $0, dir: "\($0)-dir", commit: "c79350e", dirty: true, note: "\($0)", confirmed: true) },
                           champion: "base",
-                          steps: [ReplayStep(do: "exp", build: "v1", hypothesis: "flags", scenario: "step", expect: "rejected"),
+                          steps: [ReplayStep(do: "exp", build: "v1", hypothesis: "flags", scenario: "step", expect: "rejected|inconclusive"),
                                   ReplayStep(do: "exp", build: "v2", hypothesis: "AppKit reel", scenario: "step", expect: "won|lost"),
                                   ReplayStep(do: "check", scenario: "step", a: "v1", b: "v2", expect: "rate change"),
                                   ReplayStep(do: "diff", build: "base", a: "trace:base.trace", b: "champion", expect: "refused"),
