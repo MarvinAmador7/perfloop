@@ -22,7 +22,7 @@ each agent's active time. The trust fixes (S1–S4, S9–S11) are merged; this f
 | 2 | **It is drawn**: the views the user should see have content | The named regions have ink after settle, above a floor or near the champion's | `snapshot-diff` (whole window vs the champion); deskbench's `built-within` knows only the reel | No generic ink guard (S14); guard work counted inside a step (S18) |
 | 3 | **It answers real input**: the key, shortcut or click reaches the intended target and focus lands where it should | The event goes through the app's own queue; the step records which menu item fired, which view took the click, and the first responder before and after | Gesture replay for scrolls only (`run.swipe`) | No key, type or click helpers; `sendEvent` vs `postEvent` cost palette ~20 min, a misrouted ⇧⌘D cost splits ~30 min (S12); no focus or hit record (S13) |
 | 4 | **It looks right**: what changed is what was meant to, and it is readable | Snapshots differ from the champion only inside declared regions; child windows and materials captured; text contrast ≥ 4.5:1 | `snapshot-diff` pixel-to-pixel, global 0.5 % tolerance, `REVIEW` sends it to the owner | No regions, no alignment, no way to declare an intended change (S16); child panels, vibrancy and title bar missing from `cacheDisplay` snapshots, no contrast or accessibility guard (S15) |
-| 5 | **It costs nothing** (a feature) or **it is faster** (an optimisation) | Existing scenarios: no change beyond the noise band, in interleaved trusted pairs. New scenarios: first numbers, with a same-minute yardstick | The optimise loop: `promising`/`rejected`, `won`/`lost` | A feature gets `REJECTED`, "drop it" and a stop streak (S6); a wide 3-pair screen closes the experiment (S7); no numbers for a scenario the champion lacks (S5) |
+| 5 | **It costs nothing** (a feature) or **it is faster** (an optimisation) | Existing scenarios: no change worth calling, in interleaved trusted pairs. New scenarios: first numbers, with a same-minute yardstick | The optimise loop: `promising`/`rejected`, `won`/`lost` | A feature gets `REJECTED`, "drop it" and a stop streak (S6); a wide 3-pair screen closes the experiment (S7); no numbers for a scenario the champion lacks (S5) |
 
 Every answer comes under the loop's trust rules, unchanged:
 
@@ -39,10 +39,10 @@ Every answer comes under the loop's trust rules, unchanged:
 | Mode | Verb | Question | Verdicts | Decides | Ledger | Status |
 |---|---|---|---|---|---|---|
 | Optimise | `exp new` (screen), `exp full`, `exp promote` | Is the candidate faster, with every guard holding? | screen `promising` · `rejected` · `needsReview`; full `won` · `lost` · `unknown` → `noDecision` · `needsReview`; both `untrusted` · `error` | Promotion of a new champion | a line per state | built |
-| Screen too wide to call | `exp screen ID --more N` | Do more pairs settle a borderline screen? | `inconclusive` (band over the gain threshold, or mixed signs); `rejected` kept for "slower in every pair" or a failed guard | Lets `exp full` run with no owner flag | `inconclusive` | **in progress** (b3) |
-| No regression | `exp new --expect same` | Does a feature branch leave existing scenarios where they were? | `no-regression` (the per-pair deltas' interval inside ±band) · `regressed` · `inconclusive`; and `untrusted` | Nothing to promote: the evidence for a PR. No "drop it", outside the stop streak and the session budget | a line per state | **in progress** (b2) |
-| Measure | `perfloop run BUILD --scenario S [--fixture F] [--reps N] [--reference S2]` | What does this build do on S, with what checks? | none: numbers, checks and guards as facts, the trust summary, the yardstick's numbers from the same minutes | Nothing | `measured` | **in progress** (b1) |
-| Baseline | `perfloop baseline S --bench B` | First numbers and reference snapshots for a scenario the champion lacks | none; later champions that have S are compared with it | Becomes the yardstick for S | `baseline` | **in progress** (b1) |
+| Screen too wide to call | `exp screen ID --more N` | Do more pairs settle a borderline screen? | `inconclusive` (the band is over the gain threshold, or the signs are mixed); `rejected` kept for "slower in every pair" or a failed guard | Lets `exp full` run with no owner flag | `inconclusive` | **in progress** (b3) |
+| No regression | `exp new --expect same` (then `exp screen --more`, `exp full`) | Does a feature branch leave existing scenarios where they were? | `noRegression` (the cost's one-sided 95 % high bound under its margin, on the objective and each frame guard) · `regressed` (the low bound over it) · `inconclusive` (the interval straddles it); and `untrusted`. The margin is the metric's floor (`Acceptance.floors`: 5 % CPU, 15 % latency, …), not the run's band | Nothing is promoted: the evidence for a PR. No "drop it", outside the stopping rules | `noRegression` · `regressed` · `inconclusive` | **in progress** (b2) |
+| Measure | `perfloop run champion\|exp/ID\|BUILD\|BENCH --scenario S [--fixture F] [--reps N] [--reference S2]` | What does this build do on S, with what checks? The scenario may be one only this build has | none: numbers, checks and guards as facts, the trust summary, the champion's S2 beside each rep as a yardstick; exit 3 when a check failed, 5 when no rep could be trusted | Nothing | `measure` (stored under `runs/`, `explain run/ID`) | **in progress** (b1) |
+| Baseline | `perfloop baseline S --bench PATH\|--build HASH [--fixture F] [--reps N] [--reference S2]` | First numbers and a reference snapshot for a scenario the champion lacks | none; once a champion has S, `run champion --scenario S` is compared with it. Trusted reps only: nothing is recorded when none could be trusted | Becomes the yardstick for S | `baseline` | **in progress** (b1) |
 | Drawn | guard `ink` (regions by rect or accessibility identifier) | Do the regions have content after settle? | per region `pass` / `fail` with the ink share against a floor, or against the champion's share where it has the region | Vetoes like any guard | in the stage | planned (v3) |
 | Focus | step record `focus {before, after}` + check | Is the first responder (or field editor) where it should be? | `pass` / `fail`, naming the responder's class and identifier | Vetoes as a check | in the stage | planned (v4) |
 | Input fired | `run.press` / `run.type` / `run.click` | Did the event reach its target? | `fired <menu item>` · `fired <other item>` (fails) · `not fired`; a click reports the hit view and what took the mouse-down, or `nobody` | Vetoes as a check | in the stage | planned (v4) |
@@ -50,6 +50,8 @@ Every answer comes under the loop's trust rules, unchanged:
 | Readable | guard `contrast` over named text regions; optional AX audit | Text ≥ 4.5:1 against its local background; controls labelled | `pass` / `fail` with the ratio; audit findings as a list | Decision 4 | in the stage | planned (v8) |
 
 `untrusted` is a verdict in every mode, and `FORCED (owner flag)` is printed on any stage an owner flag changed.
+The in-progress rows use the verbs, flags and states on the `run-baseline` and `expect-same` branches as this is
+written; their PRs are the reference where they differ.
 
 ## 3. The evidence bundle
 
@@ -60,7 +62,7 @@ One block of text an agent pastes into its PR, and the files behind it in the st
 | Section | Lines | A reviewer reads it for |
 |---|---|---|
 | Header | champion build and commit (and whether merged), candidate build and commit, runner and machine, one trust line (`18/18 reps trusted` or `UNTRUSTED 4/18: not quiet ×4 (swift-build)`), owner flags used | Were these the right builds, on a machine that could tell? |
-| Costs nothing | one line per existing scenario: `switch: no-regression · 3+3 → 5+5 pairs · median −1.2 % · band ±6.1 %`; `regressed` with the worst stretch's top frame; `inconclusive` with what would settle it | Did anything get slower, by how much, and how sure? |
+| Costs nothing | one line per existing scenario: `switch: noRegression · 5+5 pairs · +1.2 % (90 % interval −0.8 … +3.4 %, margin 15 %)`; `regressed` with the worst stretch's top frame; `inconclusive` with what would settle it | Did anything get slower, by how much, and how sure? |
 | New scenarios | per scenario: the measured objective and checks over N trusted reps, the `--reference` scenario's numbers from the same minutes, and `written in this PR` on every check and guard the champion's manifest doesn't have | What does the new thing cost, and which claims did the agent write itself? |
 | Works and drawn | each check and built-in guard, `✓ N/N trusted reps`; `flaky 2/3` is a failure, not a pass | Does it work every time, not once? |
 | Input and focus | per step: the key or click, what fired or was hit, the first responder after | Did real input do what the scenario says? |
@@ -79,7 +81,7 @@ Re-ordered for verification from the study's (b) and (c) rows. Sizes: S ≈ a da
 | # | Item | Study | Size | Status | Why here |
 |---|---|---|---|---|---|
 | v1 | `perfloop run` (one build, gated, locked, stored, no verdict), `perfloop baseline`, `--reference` yardstick; per-scenario `fixture` in the manifest, `--fixture` validated, fixture-ran in results (b1, b4) | S5, S8 | M + S | **in progress** (`run-baseline`) | Ends the bypasses: nothing else can be judged until a new scenario can be run inside the gate |
-| v2 | `exp new --expect same` with `no-regression` / `regressed` / `inconclusive`; `inconclusive` screens and `exp screen --more N` (b2, b3) | S6, S7 | M + S | **in progress** (`expect-same`) | The "costs nothing" answer, without the optimiser's words |
+| v2 | `exp new --expect same` with `noRegression` / `regressed` / `inconclusive`; `inconclusive` screens and `exp screen --more N` (b2, b3) | S6, S7 | M + S | **in progress** (`expect-same`) | The "costs nothing" answer, without the optimiser's words |
 | v3 | `ink` guard over named regions, run in its own run-loop turn after the step; `explain` warns when a step's worst stretch is bench code (c3, c6) | S14, S18 | M | planned | Caught a real bug in all four features; generic, so it judges new scenarios the agent can't have tuned |
 | v4 | `run.press` / `type` / `key` through `NSApp.postEvent` with layout-correct characters, reporting the menu item fired; `run.click` with hit and consumer; focus before and after each step (c1, c2) | S12, S13 | M + M | planned | The ~65 min the study lost to input; "it answers real input" has no evidence without it |
 | v5 | Region-scoped `snapshot-diff`, an alignment search (`moved` vs `differs`), regions declared by the agent with `--expect-look` (b5) | S16 | M | planned | Every feature changes the picture somewhere; today that is a global `REVIEW` the owner has to open |
@@ -94,12 +96,12 @@ Re-ordered for verification from the study's (b) and (c) rows. Sizes: S ≈ a da
 
 **`perfloop verify`: worth it, kept thin.** It judges nothing itself. Given the bench and the PR's new scenarios, it
 runs `exp new --expect same` on the champion's scenarios and `run` (and `baseline` when asked) on the new ones, as one
-gated, locked job (one MCP job, one `^C`), then writes the bundle and exits 0 verified, 3 regressed or a check failed, 5
-untrusted or inconclusive, 6 refused, so capcomd's verify gate or CI can call it. The reasons it earns a verb: the study's
-agents bypassed perfloop because the one-shot path was missing, and a bundle needs one place that knows which pieces
-belong to one claim. The guard against it: the agent must not choose which existing scenarios get checked. The default
-is the manifest's `verify` list (the owner's), else every champion scenario; the agent can add scenarios, never drop
-one, and anything skipped is printed under "Not verified" (decision 2).
+gated, locked job (one MCP job, one `^C`), then writes the bundle and exits 0 verified, 3 regressed or a check failed,
+5 untrusted or inconclusive, 6 refused (the codes `run` uses), so capcomd's verify gate or CI can call it. It earns a
+verb because the study's agents bypassed perfloop when the one-shot path was missing, and because a bundle needs one
+place that knows which pieces belong to one claim. The risk is choice: the agent must not pick which existing
+scenarios get checked. The default is the manifest's `verify` list (the owner's), else every champion scenario; the
+agent can add scenarios, never drop one, and anything skipped is printed under "Not verified" (decision 2).
 
 ## 5. Owner decisions
 
@@ -110,13 +112,13 @@ one, and anything skipped is printed under "Not verified" (decision 2).
 | 3 | ScreenCaptureKit looks capture needs the screen-recording permission, and the README promises none | Opt-in only (`--looks`), never a default, with a doctor check; keep `cacheDisplay` plus child windows (v7) as the default |
 | 4 | Do `contrast` and the AX audit veto, or report? | Contrast vetoes only a regression against the champion's region; a new region under 4.5:1 is `REVIEW`. The AX audit reports and never vetoes until it has run on two apps |
 | 5 | Who accepts a declared look change (`--expect-look`)? | The agent declares it; the PR's reviewer accepts it by reading the region's pictures. A difference outside the declared regions stays `REVIEW` for the owner |
-| 6 | Is `no-regression` an agent's verdict? | Yes: nothing is promoted, so no owner step. Its margin is the scenario's band, as for a win, and `inconclusive` is reported as such in the PR, never rounded to "no regression" |
+| 6 | Is `noRegression` an agent's verdict, and is its margin right? | Yes: nothing is promoted, so no owner step. The in-progress margin is each metric's floor (5 % for CPU, 15 % for latency, with absolute floors), held by a one-sided 95 % bound: keep it, and let a scenario's manifest entry tighten it. `inconclusive` is reported as such in the PR, never rounded to "no regression" |
 | 7 | Where does the bundle live? | In the PR body; the files stay in the store and are never committed (paths, pictures, possibly fixture data) |
 
 ## 6. What not to claim
 
 None of v3–v12 is built, and no agent has verified a feature through `perfloop verify` yet; v1 and v2 are being built
-as this is written. `no-regression` means no change beyond the band on these scenarios, fixtures, appearance and
+as this is written. `noRegression` means no change beyond the metric's margin on these scenarios, fixtures, appearance and
 machine, not no change. Checks the agent wrote in the same PR show what the agent believes the feature does, not that
 it is what the owner asked for. In-process input goes through the app's event queue, not the HID path, input methods
 or accessibility clients: it proves routing, not that a hand on a keyboard gets the same result. An ink guard proves
