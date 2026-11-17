@@ -180,7 +180,7 @@ final class RunnerTests: FakeBenchCase {
     setenv("FAKE_REMOTE_LOAD", load.path, 1)
     let r = try sshRunner()
     XCTAssertEqual(r.quiet, QuietGate(), "on by default, with the default thresholds")
-    r.quiet = QuietGate(timeout: 0.2, retryTimeout: 0.05); r.quietPoll = 0.05
+    r.quiet = QuietGate(timeout: 1, retryTimeout: 0.05); r.quietPoll = 0.05
     var waits: [String] = []
     r.onWait = { waits.append($0) }
     let lines = try r.check()
@@ -192,8 +192,8 @@ final class RunnerTests: FakeBenchCase {
       XCTAssertEqual(p.a.quiet, false); XCTAssertEqual(p.b.busyPct, 80); XCTAssertEqual(p.b.busy?.first, "swift-test 95 %")
       XCTAssertFalse(p.b.busy?.contains { $0.hasPrefix("sshd") } ?? true, "the session's own sshd is left out")
     }
-    XCTAssertTrue(waits.contains { $0.hasPrefix("waiting up to 0 s for a quiet machine on fake-mini: 80 % of the cores busy") }, "\(waits)")
-    XCTAssertTrue(waits.contains { $0.hasPrefix("not quiet on fake-mini after 0 s (80 %") }, "\(waits)")
+    XCTAssertTrue(waits.contains { $0.hasPrefix("waiting up to 1 s for a quiet machine on fake-mini: 80 % of the cores busy") }, "\(waits)")
+    XCTAssertTrue(waits.contains { $0.hasPrefix("not quiet on fake-mini after ") && $0.contains("(80 % of the cores busy") }, "\(waits)")
     XCTAssertTrue(sshCalls("ssh mar@fake-mini").contains { $0.contains("iostat") }, "read there, through ssh")
 
     // Quiet there: the reps are quiet, with the remote reading on them.

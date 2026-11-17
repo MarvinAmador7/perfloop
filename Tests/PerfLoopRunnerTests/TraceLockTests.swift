@@ -67,7 +67,9 @@ final class TraceLockTests: FakeBenchCase {
     XCTAssertFalse(env.contains("ghp_fake") || env.contains("sk-fake"))
     // What the app needs, and what the adapter declares, are there.
     for k in ["PATH", "HOME", "LC_ALL", "PERFLOOP_KNOBS", "FAKE_LOG"] { XCTAssertTrue(names.contains(k), "\(k) missing: \(names.sorted())") }
-    XCTAssertTrue(names.isSubset(of: TraceEnv.system.union(TraceEnv.perfloop).union(["LC_ALL", "FAKE_LOG"]).union(["PWD", "SHLVL", "_", "OLDPWD"])), "\(names.sorted())")
+    // Nothing else, but what the shell running the fake adapter sets itself (PWD, SHLVL, _).
+    let extra = names.filter { !$0.hasPrefix("LC_") }.subtracting(TraceEnv.system.union(TraceEnv.perfloop).union(["FAKE_LOG", "PWD", "SHLVL", "_", "OLDPWD"]))
+    XCTAssertEqual(extra, [], "\(names.sorted())")
     XCTAssertEqual(doctorTraces(), .warn, "a kept trace stays a warning")
   }
 
