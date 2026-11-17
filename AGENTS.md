@@ -5,6 +5,11 @@ rules; the app's `PROGRAM.md` (written by `perfloop init`, then edited by its ow
 its bench, scenarios and budgets. Copy this file next to it, or load it as a skill. If the two disagree, PROGRAM.md and
 the owner win.
 
+Verifying a feature rather than making it faster (it works, it's drawn, it answers input, it costs nothing)? Read
+[docs/VERIFICATION.md](docs/VERIFICATION.md) for the verbs and verdicts, which of them exist yet, and what your PR's
+evidence should say. A feature's own scenarios run through `perfloop run` (below), never the bench by hand; anything
+else that opens a window goes inside `perfloop lock -- …`, and your PR says its numbers are outside the ledger.
+
 ## What PerfLoop is, in one paragraph
 
 The app has a **bench**: an executable that shows the app's real views on fixture data and measures scenarios (what
