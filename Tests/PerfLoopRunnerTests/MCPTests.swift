@@ -51,7 +51,7 @@ final class MCPTests: XCTestCase {
     XCTAssertNil(server.handle(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#), "notifications get no answer")
     let tools = try XCTUnwrap(try rpc("tools/list")["result"]?["tools"]?.array)
     let names = tools.compactMap { $0["name"]?.string }
-    for t in ["status", "explain", "new_experiment", "screen", "full", "promote", "profile", "diff", "sweep", "job", "cancel_job"] { XCTAssertTrue(names.contains(t), t) }
+    for t in ["status", "explain", "new_experiment", "screen", "full", "promote", "profile", "diff", "sweep", "run", "baseline", "job", "cancel_job"] { XCTAssertTrue(names.contains(t), t) }
     XCTAssertTrue(tools.allSatisfy { $0["inputSchema"]?["type"]?.string == "object" && $0["description"]?.string?.isEmpty == false })
     // The owner's flags are no tool's argument.
     let text = PLJSON.encode(tools)
@@ -68,6 +68,17 @@ final class MCPTests: XCTestCase {
     let p = try call("promote", ["id": .string("9999")])
     XCTAssertTrue(p.isError); XCTAssertTrue(p.text.contains("refused: not won"), "stderr reaches the agent")
     XCTAssertEqual(try call("diff", ["a": .string("champion"), "b": .string("exp/0003")]).text, "ok: diff champion exp/0003 --app demo")
+  }
+
+  func testRunAndBaselineAreJobs() throws {
+    let lock = tmp.appendingPathComponent("window.lock").path
+    XCTAssertTrue(try call("run", ["target": .string("exp/7"), "scenario": .string("toggle"), "reference": .string("step"), "reps": .number(4)]).text.hasPrefix("started job j1 (run)"))
+    XCTAssertTrue(called("run exp/7 --scenario toggle --reference step --reps 4 --runner local --lock \(lock) --app demo"), "\(calls())")
+    XCTAssertTrue(try call("baseline", ["scenario": .string("toggle"), "bench": .string("/b/Bench"), "runner": .string("local-idle")]).text.hasPrefix("started job j2 (baseline)"))
+    XCTAssertTrue(called("baseline toggle --bench /b/Bench --runner local --idle 120 --lock \(lock) --app demo"), "\(calls())")
+    let r = try call("baseline", ["scenario": .string("toggle")])
+    XCTAssertTrue(r.isError); XCTAssertTrue(r.text.contains("give the bench that has the scenario"), r.text)
+    XCTAssertTrue(try call("run", ["target": .string("--force")]).isError)
   }
 
   func testValuesCantBecomeFlags() throws {

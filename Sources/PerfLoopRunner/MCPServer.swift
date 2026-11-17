@@ -137,6 +137,24 @@ public final class MCPServer {
       x += try Self.opt(a, "bench", Self.path, flag: "--bench")
       if let r = a["reps"]?.double { x += ["--reps", String(Int(r))] }
       return x + ["--lock", self.lock] },
+    Tool(name: "run", description: "One build's scenario measured on its own, no verdict: trusted numbers (untrusted reps are named, never quoted), its checks, where the time went. The scenario may be one only that build has (a feature's own, which exp can't judge until the champion has it). Opens windows. Returns a job.",
+         properties: ["target": Self.prop("string", "champion, exp/ID, a build hash in the store, or a stamped bench's path"), "scenario": Self.prop("string", "Default: the target's"),
+                      "fixture": Self.prop("string", "Default: the scenario's own, else the manifest's"), "reps": Self.prop("integer", "Reps (default 3)"),
+                      "reference": Self.prop("string", "A champion scenario run beside each rep, the same minutes: a yardstick for how fast the Mac ran"),
+                      "knobs": Self.prop("string", "k=v,k=v"), "runner": Self.runnerProp], required: ["target"], kind: .job) { [unowned self] a in
+      var x = try ["run", Self.targetOrPath(Self.req(a, "target"))] + Self.opt(a, "scenario", Self.name, flag: "--scenario") + Self.opt(a, "fixture", Self.name, flag: "--fixture")
+      x += try Self.opt(a, "reference", Self.name, flag: "--reference") + Self.opt(a, "knobs", Self.knobs, flag: "--knobs")
+      if let r = a["reps"]?.double { x += ["--reps", String(max(1, Int(r)))] }
+      return try x + self.runner(a) },
+    Tool(name: "baseline", description: "First numbers (trusted reps only) and a reference snapshot for a scenario the champion doesn't have yet (a feature's own); once a champion has it, `run` on the champion is compared with it. Records nothing when no rep could be trusted. Opens windows. Returns a job.",
+         properties: ["scenario": Self.prop("string", "The new scenario"), "bench": Self.prop("string", "The bench that has it (stamped)"), "build": Self.prop("string", "Or a build in the store (hash) or exp/ID"),
+                      "fixture": Self.prop("string", "Default: the scenario's own, else the manifest's"), "reps": Self.prop("integer", "Reps (default 5)"),
+                      "reference": Self.prop("string", "A champion scenario run beside each rep, the same minutes"), "runner": Self.runnerProp], required: ["scenario"], kind: .job) { [unowned self] a in
+      var x = try ["baseline", Self.name(Self.req(a, "scenario"))] + Self.opt(a, "bench", Self.path, flag: "--bench") + Self.opt(a, "build", Self.targetOrPath, flag: "--build")
+      guard x.contains("--bench") || x.contains("--build") else { throw Refused(description: "give the bench that has the scenario (bench) or a build in the store (build)") }
+      x += try Self.opt(a, "fixture", Self.name, flag: "--fixture") + Self.opt(a, "reference", Self.name, flag: "--reference")
+      if let r = a["reps"]?.double { x += ["--reps", String(max(1, Int(r)))] }
+      return try x + self.runner(a) },
     Tool(name: "queue_add", description: "Queues an experiment's stages for a runner (the owner's `queue run` takes them, e.g. overnight on a spare Mac).",
          properties: ["id": Self.prop("string", "Experiment id"), "stage": Self.prop("string", "auto (default: the screen, then the full when promising or inconclusive), screen or full"),
                       "runner": Self.prop("string", "ssh://user@host or local")], required: ["id"], kind: .now) { a in
@@ -318,7 +336,8 @@ public final class MCPServer {
     let tail = log.count > 6000 ? "…" + String(log.suffix(6000)) : log
     let elapsed = Int(Date().timeIntervalSince(j.started))
     let state = j.running ? "running (\(elapsed) s so far): ask again" : "finished, exit \(j.status ?? -1) after \(elapsed) s"
-    return ("job \(j.id) (\(j.tool)) \(state)\n\(tail)", !j.running && (j.status ?? 0) != 0 && (j.status ?? 0) != 6 && (j.status ?? 0) != 3 && (j.status ?? 0) != 4)
+    // 3, 4, 5 and 6 are answers (a check failed, a regression, untrusted, refused), not the tool failing.
+    return ("job \(j.id) (\(j.tool)) \(state)\n\(tail)", !j.running && ![0, 3, 4, 5, 6].contains(j.status ?? 0))
   }
 
   func jobsText() -> String {

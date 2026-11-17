@@ -385,8 +385,8 @@ public enum Stopping {
     if streak >= i.maxNonPromisingStreak { r.append("\(streak) non-promising candidates in a row") }
     let candidates = Set(session.filter { $0.state == ExpState.built.rawValue }.map(\.experiment)).count
     if candidates >= i.maxCandidates { r.append("\(candidates) candidates this session (budget \(i.maxCandidates))") }
-    // An owner's champion lines (set, merged) aren't a candidate: the clock waits for one.
-    if session.contains(where: { !["session", ExpState.promoted.rawValue, "merged"].contains($0.state) }), let first = session.first.flatMap({ Clock.date($0.at) }), i.now.timeIntervalSince(first) >= i.timeBudgetS {
+    // An owner's champion lines (set, merged) and `perfloop run`'s measurements aren't a candidate: the clock waits for one.
+    if session.contains(where: { !["session", ExpState.promoted.rawValue, "merged", "measure"].contains($0.state) }), let first = session.first.flatMap({ Clock.date($0.at) }), i.now.timeIntervalSince(first) >= i.timeBudgetS {
       r.append("the session's time budget (\(Int(i.timeBudgetS / 60)) min) is spent")
     }
     return r

@@ -81,7 +81,7 @@ enum ProfileVerb {
     let marker = out.appendingPathComponent(".recording")
     let marked = !fm.fileExists(atPath: marker.path) && fm.createFile(atPath: marker.path, contents: Data(String(getpid()).utf8))
     defer { if marked { try? fm.removeItem(at: marker) } }
-    let fixture = a.one("fixture") ?? bench.defaultFixture ?? bench.fixtures.first?.name ?? "default"
+    let fixture = a.one("fixture") ?? bench.scenarios.first { $0.name == scenario }?.fixture ?? bench.defaultFixture ?? bench.fixtures.first?.name ?? "default"
     var args = ["run", scenario, "--fixture", fixture, "--reps", a.one("reps") ?? "1", "--json", "--out", result.path, "--wait-for", go.path, "--profiled",
                 "--sampler", a.one("sampler") ?? "off"]
     for s in a.all("set") { args += ["--set", s] }

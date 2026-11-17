@@ -137,6 +137,9 @@ public struct Side: Codable, Sendable, Equatable {
   /// The rep presented no frames (the screen was locked, or the window was off-screen): its frame metrics are
   /// missing, not 0, and the rep is untrusted (it never decides).
   public var noFrames: Bool?
+  /// The fixture the rep says it ran on (the result's `fixture`), when it says; the runner checks it against the one
+  /// it asked for.
+  public var fixture: String?
   public init(objective: Double?, hitch: Double? = nil, longest: Double? = nil, checksFailed: [String] = []) {
     self.objective = objective; hitchTimeRatioMsPerS = hitch; longestStretchMs = longest; self.checksFailed = checksFailed
   }

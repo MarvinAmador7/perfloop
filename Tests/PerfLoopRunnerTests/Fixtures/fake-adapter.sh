@@ -32,6 +32,9 @@ FAKE_NORUNS=0
 FAKE_SEQ=
 FAKE_AB_EXIT=0
 FAKE_AB_REGRESSION=false
+FAKE_EXTRA=
+FAKE_STEP_FIXTURE=
+FAKE_RAN_FIXTURE=
 
 self="$0"
 log() { if [ -n "$FAKE_LOG" ]; then echo "$*" >> "$FAKE_LOG"; fi; }
@@ -77,6 +80,9 @@ JSON
 describe)
   if [ "$FAKE_DESCRIBE" != 1 ]; then echo "deskbench: unknown command 'describe'" >&2; exit 1; fi
   verbs=""; if [ -n "$FAKE_VERBS" ]; then verbs="\"verbs\": [\"$(echo "$FAKE_VERBS" | sed 's/,/", "/g')\"],"; fi
+  # FAKE_EXTRA: a scenario only this build has (a feature's own), on its own fixture, with a snapshot guard.
+  extra=""; if [ -n "$FAKE_EXTRA" ]; then extra=", { \"name\": \"$FAKE_EXTRA\", \"kind\": \"latency\", \"objective\": \"latencyMs\", \"guards\": [\"checks\", \"snapshot-diff\"], \"fixture\": \"swarm64\" }"; fi
+  stepfx=""; if [ -n "$FAKE_STEP_FIXTURE" ]; then stepfx="\"fixture\": \"$FAKE_STEP_FIXTURE\","; fi
   if [ "$FAKE_GUARDED" = 1 ]; then
   cat <<JSON
 { "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench", $verbs
@@ -91,8 +97,8 @@ JSON
   fi
   cat <<JSON
 { "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench", $verbs
-  "scenarios": [ { "name": "step", "kind": "smooth", "params": { "steps": "8" }, "objective": "$FAKE_OBJECTIVE", "guards": ["landed"], "secondFixture": "swarm64" },
-                 { "name": "switch", "kind": "latency", "objective": "latencyMs", "guards": ["checks"] } ],
+  "scenarios": [ { "name": "step", "kind": "smooth", "params": { "steps": "8" }, "objective": "$FAKE_OBJECTIVE", "guards": ["landed"], $stepfx "secondFixture": "swarm64" },
+                 { "name": "switch", "kind": "latency", "objective": "latencyMs", "guards": ["checks"] } $extra ],
   "fixtures": [ { "name": "crew17" }, { "name": "swarm64" } ],
   "knobs": [ { "name": "reel.slide", "type": "choice", "default": "ca", "choices": ["ca", "clip"] } ], "hosts": ["scene"] }
 JSON
@@ -156,7 +162,7 @@ run)
   iso=true; if [ "$fail" = '"isolation-still"' ]; then iso=false; fi
   cat <<JSON
 { "schema": "deskbench.result/1", "tool": { "name": "FakeBench", "version": "1", "configuration": "release", "build": $(build "$self") },
-  "scenario": "$sc", "fixture": "$fixture", "params": {}, "profiled": false,
+  "scenario": "$sc", "fixture": "${FAKE_RAN_FIXTURE:-$fixture}", "params": {}, "profiled": false,
   "reps": [ { "index": 0, "steps": [ $step, $step, $step, $step, $step, $step, $step, $step ],
               "frames": { "steadyHz": $FAKE_HZ, "late": $FAKE_LATE, "hitchTimeRatioMsPerS": $FAKE_HITCH },
               "mainThread": { "cpuMs": $total, "longestMs": 40 }, "bodies": {},

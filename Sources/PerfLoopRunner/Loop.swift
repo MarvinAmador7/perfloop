@@ -47,7 +47,8 @@ public final class Loop {
     let entry = try store.entry(key)
     let m = entry.manifest
     guard let sc = scenario ?? m?.scenarios.first?.name else { throw PLError.usage("pass --scenario: the build's manifest names none") }
-    guard let fx = fixture ?? m?.fixtureNames.first else { throw PLError.usage("pass --fixture: the build's manifest names none") }
+    guard let fx = fixture ?? m?.fixture(for: sc) else { throw PLError.usage("pass --fixture: the build's manifest names none") }
+    if let m, let why = m.unknownFixture(fx, whose: "the build's manifest") { throw PLError.usage(why) }
     var e = Experiment(id: store.nextID(), hypothesis: note ?? "baseline", kind: "baseline", scenario: sc, fixture: fx, parent: nil, build: entry.build.embedded)
     e.state = .promoted; e.promotedAt = Clock.now()
     if store.champion() != nil { e.notes.append("set by hand over champion \(store.champion()!.experiment): the chain restarts here") }
@@ -103,8 +104,11 @@ public final class Loop {
     let m = cEntry.manifest
     let parentExp = try? store.experiment(c.experiment)
     guard let sc = o.scenario ?? env["PERFLOOP_SCENARIO"] ?? parentExp?.scenario ?? m?.scenarios.first?.name else { throw PLError.usage("pass --scenario") }
-    if let m, m.scenario(sc) == nil { throw PLError.usage("unknown scenario '\(sc)'; the champion's manifest has \(m.scenarios.map(\.name).joined(separator: ", "))") }
-    guard let fx = o.fixture ?? env["PERFLOOP_FIXTURE"] ?? parentExp?.fixture ?? m?.fixtureNames.first else { throw PLError.usage("pass --fixture") }
+    if let m, m.scenario(sc) == nil { throw PLError.usage(Self.unknownScenario(sc, m)) }
+    // The champion's fixture for its own scenario; another scenario's own fixture (`scenarios[].fixture`) before it.
+    let fixtures = [o.fixture, env["PERFLOOP_FIXTURE"], parentExp?.scenario == sc ? parentExp?.fixture : nil, m?.scenario(sc)?.fixture, parentExp?.fixture, m?.fixture(for: sc)]
+    guard let fx = fixtures.lazy.compactMap({ $0 }).first else { throw PLError.usage("pass --fixture") }
+    for f in [fx, o.secondFixture].compactMap({ $0 }) { if let m, let why = m.unknownFixture(f, whose: "the champion's manifest") { throw PLError.usage(why) } }
     guard [nil, "faster", "same"].contains(o.expect) else { throw PLError.usage("--expect faster|same (same: a feature or guard check that the candidate costs nothing), not '\(o.expect!)'") }
     let kind = o.knobs.isEmpty ? o.kind : "knob"
     if kind == "knob", o.knobs.isEmpty { throw PLError.usage("a knob experiment needs --knobs k=v[,k=v]") }
@@ -282,7 +286,7 @@ public final class Loop {
       // The exit code the runner saw is the rep's (5: the bench's own "untrusted").
       a?.exit = status["a"].map(Int.init); b?.exit = status["b"].map(Int.init)
       Self.stamp(&a, machines["a"]); Self.stamp(&b, machines["b"])
-      var p = Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure ?? (a == nil || b == nil ? "no result" : nil))
+      var p = Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure ?? (a == nil || b == nil ? "no result" : nil) ?? Self.fixtureMismatch(p: a, b, asked: fixture))
       judgeSnapshots(&p, g, dir: pdir, sides: s)
       return p
     }
@@ -303,7 +307,7 @@ public final class Loop {
       if let got = Readings.build(ab: v, label: label)?.hash, let want, got != want { failure = "ab ran \(Build.short(got)) as \(label), the store has \(Build.short(want))" }
     }
     if a?.objective == nil || b?.objective == nil, a?.noFrames != true, b?.noFrames != true, failure == nil { failure = "the ab output has no \(metric) (an adapter older than the objective: use --via run)" }
-    var p = Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure)
+    var p = Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure ?? Self.fixtureMismatch(p: a, b, asked: fixture))
     judgeSnapshots(&p, g, dir: pdir, sides: s)
     return p
   }
@@ -556,6 +560,7 @@ public final class Loop {
     // Owner flags this session, closed experiments included: a forced run is never quiet.
     let owned = store.ledger.currentSession().filter { !($0.ownerFlags ?? []).isEmpty }
     for (i, l) in owned.enumerated() where !owned[(i + 1)...].contains(where: { $0.experiment == l.experiment }) { o.append("owner flag: " + l.text) }
+    o += baselineLines()
     for s in Stopping.reasons(StopInput(session: store.ledger.currentSession())) { o.append("stop: " + s) }
     return o.joined(separator: "\n")
   }

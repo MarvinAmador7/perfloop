@@ -136,10 +136,13 @@ Run `perfloop runner check ssh://user@spare-mac` before using a remote runner. L
 | Add pairs to a screen that couldn't tell | `perfloop exp screen ID --more 3` |
 | Find the next bottleneck | `perfloop suggest champion` · `perfloop causes RESULT.json` |
 | Profile a build or compare profiles | `perfloop profile champion` · `perfloop diff champion exp/ID` |
+| Measure one build, or a new scenario the champion doesn't have (no verdict) | `perfloop run BUILD --scenario S --reference S2` · `perfloop baseline S --bench PATH` |
 | Measure how cost grows with fixture size | `perfloop sweep select --set rows=100..5000/500` |
 | Queue an experiment | `perfloop queue add ID` · `perfloop queue run --runner local --idle 120` |
 
-Run `perfloop help` for all commands and flags. Builds, experiments, and the ledger live in `${PERFLOOP_HOME:-~/.perfloop}/<app>/`. Keep raw `.trace` bundles private because they can contain the recorded process's environment.
+`run` and `baseline` go through the same runner as an experiment's stages and print only trusted reps' numbers; a run whose reps were all untrusted says `UNTRUSTED` and quotes nothing (exit 5). A scenario can name its own fixture in the manifest (`scenarios[].fixture`), which every verb uses when `--fixture` is absent; an unlisted `--fixture` is refused with the list ([ADAPTER.md](ADAPTER.md) §2, §3a).
+
+Run `perfloop help` for all commands and flags. Builds, experiments, `run` measurements, baselines, and the ledger live in `${PERFLOOP_HOME:-~/.perfloop}/<app>/`. Keep raw `.trace` bundles private because they can contain the recorded process's environment.
 
 - [Adapter contract and schemas](ADAPTER.md)
 - [PerfLoopHost integration example](Examples/SlowList/Sources/SlowListBench/main.swift)

@@ -25,15 +25,18 @@ extension Loop {
     let (c, entry) = try requireChampion()
     if x == "champion" {
       let base = try? store.experiment(c.experiment)
-      return ProfileTarget(label: "champion-\(c.experiment)", build: entry.build.hash ?? "", knobs: c.knobs ?? [:], scenario: scenario ?? base?.scenario ?? "-",
-                           fixture: fixture ?? base?.fixture ?? "-", experiment: c.experiment)
+      let sc = scenario ?? base?.scenario ?? "-"
+      return ProfileTarget(label: "champion-\(c.experiment)", build: entry.build.hash ?? "", knobs: c.knobs ?? [:], scenario: sc,
+                           fixture: fixture ?? (sc == base?.scenario ? base?.fixture : entry.manifest?.scenario(sc)?.fixture) ?? base?.fixture ?? "-", experiment: c.experiment)
     }
     guard x.hasPrefix("exp/") else { throw PLError.usage("\(x): profile champion or exp/ID") }
     let e = try store.experiment(String(x.dropFirst(4)))
     let b = e.build ?? e.parent?.build ?? c.build
     let ck = c.experiment == e.parent?.experiment ? (c.knobs ?? [:]) : [:]
-    return ProfileTarget(label: "exp-\(e.id)", build: b.hash ?? "", knobs: ck.merging(e.knobs ?? [:]) { $1 }, scenario: scenario ?? e.scenario,
-                         fixture: fixture ?? e.fixture, experiment: e.id)
+    let sc = scenario ?? e.scenario
+    let own = sc == e.scenario ? nil : (try? store.entry(b.hash ?? ""))?.manifest?.scenario(sc)?.fixture
+    return ProfileTarget(label: "exp-\(e.id)", build: b.hash ?? "", knobs: ck.merging(e.knobs ?? [:]) { $1 }, scenario: sc,
+                         fixture: fixture ?? own ?? e.fixture, experiment: e.id)
   }
 
   /// Records a profile of `target` with its adapter's `profile` verb (it opens the window: this Mac only, through the
@@ -44,6 +47,7 @@ extension Loop {
     if let m = entry.manifest, !m.has(verb: "profile") {
       throw PLError.usage("\(target)'s adapter (\(m.adapter)) has no `profile` verb: rebuild the bench on a PerfLoopHost with profiles (or record a trace by hand and `perfloop trace register` it)")
     }
+    if let m = entry.manifest, let why = m.unknownFixture(t.fixture, whose: "\(target)'s manifest") { throw PLError.usage(why) }
     guard runner is LocalRunner else { throw PLError.usage("profiles record on this Mac (xctrace attaches to the bench here): use --runner local, not \(runner.name)") }
     let dir = store.root.appendingPathComponent("profiles").appendingPathComponent("\(t.label)-\(t.scenario)-\(template)-\(Clock.now().replacingOccurrences(of: ":", with: ""))")
     var args = ["profile", t.scenario, "--template", template, "--fixture", t.fixture, "--out", dir.path, "--json"]
