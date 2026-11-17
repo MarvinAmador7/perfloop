@@ -122,6 +122,8 @@ PerfLoopHost benches' run/profile and `perfloop lock --`. Default $PERFLOOP_LOCK
 broken; ^C and kills release it. $PERFLOOP_LOCK_OWNER (or --label) names the holder.
 
 store: --store DIR, else ${PERFLOOP_HOME:-~/.perfloop}/<app>, app from --app or $PERFLOOP_APP
+arguments: a command refuses any argument it doesn't take (exit 1, with its usage) before anything runs; a flag and its
+            value are two arguments (--store DIR, never --store=DIR or one quoted "--store DIR"); COMMAND --help: its usage
 exit codes  0 ok · 1 usage · 2 harness error · 3 a check failed (run, baseline) · 5 untrusted: no rep could be trusted (run,
             baseline) · 6 refused (provenance, guards, owner needed, an owner flag without the owner)
 """
@@ -539,7 +541,12 @@ func lockCommand(_ argv: [String]) throws -> Int32 {
 
 atexit { WindowLock.releaseAll() }
 
-do { exit(try run(Args(Array(CommandLine.arguments.dropFirst())))) }
+do {
+  let argv = Array(CommandLine.arguments.dropFirst())
+  // Arguments the subcommand doesn't take are refused before anything reads a store, takes a lock or starts a runner.
+  if case .help(let usage) = try CLIArguments.check(argv) { out(usage); exit(0) }
+  exit(try run(Args(argv)))
+}
 catch let e as PLError { err(e.description); exit(e.code) }
 catch let s as RunnerStop { err(s.description); exit(6) }
 catch { err("\(error)"); exit(2) }

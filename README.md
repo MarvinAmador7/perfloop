@@ -129,7 +129,7 @@ Run `perfloop runner check ssh://user@spare-mac` before using a remote runner. L
 
 `run` and `baseline` go through the same runner as an experiment's stages and print only trusted reps' numbers; a run whose reps were all untrusted says `UNTRUSTED` and quotes nothing (exit 5). A scenario can name its own fixture in the manifest (`scenarios[].fixture`), which every verb uses when `--fixture` is absent; an unlisted `--fixture` is refused with the list ([ADAPTER.md](ADAPTER.md) §2, §3a).
 
-Run `perfloop help` for all commands and flags. Builds, experiments, `run` measurements, baselines, and the ledger live in `${PERFLOOP_HOME:-~/.perfloop}/<app>/`. Keep raw `.trace` bundles private because they can contain the recorded process's environment.
+Run `perfloop help` for all commands and flags, and `perfloop COMMAND --help` for one command's usage. An argument a command doesn't take (a typo, `--flag=value`, `--store DIR` passed as one argument, a stray word) is refused with its usage (exit 1) before anything runs. Builds, experiments, `run` measurements, baselines, and the ledger live in `${PERFLOOP_HOME:-~/.perfloop}/<app>/`. Keep raw `.trace` bundles private because they can contain the recorded process's environment.
 
 - [Adapter contract and schemas](ADAPTER.md)
 - [PerfLoopHost integration example](Examples/SlowList/Sources/SlowListBench/main.swift)
