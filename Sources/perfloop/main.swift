@@ -50,6 +50,17 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             and the isolation scenarios; a failure demotes it, a snapshot over tolerance
                                             asks the owner; only the owner sets a tolerance (never inside exp)
   explain exp/ID                            exp/ID/explain.txt: everything needed to decide the next step
+  run champion|exp/ID|BUILD|BENCH --scenario S [--fixture F] [--reps N] [--reference S2] [--set k=v] [--knobs k=v]
+                                            one build's scenario, measured on its own (opens windows; through the runner,
+                                            like a stage): trusted numbers, checks, where the time went; no verdict.
+                                            The scenario may be one only that build has (a feature's own). --reference S2
+                                            runs the champion's S2 beside each rep, the same minutes, as a yardstick.
+                                            Stored under runs/ (explain run/ID), a ledger line `measure`. Exit 5 when no
+                                            rep could be trusted, 3 when a check failed
+  baseline S --bench PATH|--build HASH [--fixture F] [--reps N] [--reference S2]
+                                            first numbers (trusted reps only) and a reference snapshot for a scenario the
+                                            champion doesn't have yet; once a champion has S, run champion --scenario S
+                                            is compared with it. Nothing is recorded when no rep could be trusted
   suggest [champion|exp/ID|RESULT.json] [--json]
                                             hypotheses for the next experiment from what was recorded (cause fan-out,
                                             repeated bodies, hot frames of ours, framework work they ask for, a profile's
@@ -116,7 +127,8 @@ PerfLoopHost benches' run/profile and `perfloop lock --`. Default $PERFLOOP_LOCK
 broken; ^C and kills release it. $PERFLOOP_LOCK_OWNER (or --label) names the holder.
 
 store: --store DIR, else ${PERFLOOP_HOME:-~/.perfloop}/<app>, app from --app or $PERFLOOP_APP
-exit codes  0 ok · 1 usage · 2 harness error · 6 refused (provenance, guards, owner needed, an owner flag without the owner)
+exit codes  0 ok · 1 usage · 2 harness error · 3 a check failed (run, baseline) · 5 untrusted: no rep could be trusted (run,
+            baseline) · 6 refused (provenance, guards, owner needed, an owner flag without the owner)
 """
 
 struct Args {
@@ -125,7 +137,7 @@ struct Args {
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
                                     "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir",
                                     "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop", "template", "top", "label",
-                                    "max-load", "quiet-timeout", "main"]
+                                    "max-load", "quiet-timeout", "reps", "reference", "main"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -359,6 +371,8 @@ func run(_ args: Args) throws -> Int32 {
     }
     return 0
 
+  case ("run", _), ("baseline", _): return try measureCommand(args, json: json, loop: loop)
+
   case ("sweep", _): return try SweepCommand.run(Array(CommandLine.arguments.dropFirst(2)))
   case ("lock", _): return try lockCommand(Array(CommandLine.arguments.dropFirst(2)))
   case ("mcp", _):
@@ -391,6 +405,7 @@ func run(_ args: Args) throws -> Int32 {
   case ("explain", _):
     guard let id = args[1] else { throw PLError.usage("usage: perfloop explain exp/ID") }
     if SweepCommand.isSweep(id) { out(Sweep.text(try SweepCommand.read(id))); return 0 }
+    if id.hasPrefix("run/") { let s = try store(); let m = try s.measurement(id); out(Measure.text(m, store: s.rel(s.measureDir(m.id).appendingPathComponent("run.json"))).trimmingCharacters(in: .newlines)); return 0 }
     let l = try loop(); out(l.explain(try l.store.experiment(id)).trimmingCharacters(in: .newlines)); return 0
 
   case ("causes", _):
@@ -438,6 +453,26 @@ func run(_ args: Args) throws -> Int32 {
   default:
     throw PLError.usage("unknown command '\(args.positional.joined(separator: " "))'\n\n" + help)
   }
+}
+
+/// `perfloop run TARGET --scenario S` and `perfloop baseline S --bench PATH|--build HASH` (MeasureRun.swift): through
+/// the runner like a stage's reps, no verdict; the exit code says whether anything could be trusted.
+func measureCommand(_ args: Args, json: Bool, loop: (String?) throws -> Loop) throws -> Int32 {
+  let base = args[0] == "baseline"
+  let usage = base ? "usage: perfloop baseline SCENARIO --bench PATH|--build HASH [--fixture F] [--reps N] [--reference S2]"
+                   : "usage: perfloop run champion|exp/ID|BUILD|BENCH --scenario S [--fixture F] [--reps N] [--reference S2] [--set k=v] [--knobs k=v]"
+  guard let target = base ? args.one("bench") ?? args.one("build") : args[1] else { throw PLError.usage(usage) }
+  if base && args[1] == nil { throw PLError.usage(usage) }
+  var o = Loop.MeasureOptions(target: target, kind: base ? "baseline" : "run")
+  o.scenario = base ? args[1] : args.one("scenario"); o.fixture = args.one("fixture"); o.reference = args.one("reference"); o.exe = args.one("exe")
+  if let r = args.one("reps") { guard let n = Int(r), n >= 1 else { throw PLError.usage("--reps takes a count ≥ 1") }; o.reps = n }
+  o.knobs = args.all("knobs").reduce(into: [:]) { $0.merge(Adapter.knobs($1)) { $1 } }
+  o.params = args.all("set").reduce(into: [:]) { d, kv in let p = kv.split(separator: "=", maxSplits: 1).map(String.init); if p.count == 2 { d[p[0]] = p[1] } }
+  let l = try loop(FileManager.default.fileExists(atPath: Store.tilde(target)) ? target : nil)
+  try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
+  let m = try l.runScenario(o)
+  out(json ? PLJSON.encode(m) : Measure.text(m, store: l.store.rel(l.store.measureDir(m.id).appendingPathComponent("run.json"))).trimmingCharacters(in: .newlines))
+  return Loop.exitCode(m)
 }
 
 /// The runner flags (C10). `exp screen/full` run ungated unless --idle is given; `queue run --runner local` is gated

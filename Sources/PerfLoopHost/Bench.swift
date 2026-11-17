@@ -48,6 +48,8 @@ public struct ScenarioSpec: Sendable {
   public var latencyBudgetMs: Double?
   /// Promotion needs not-worse here (over-fitting one fixture).
   public var secondFixture: String?
+  /// The fixture the scenario runs on when `--fixture` doesn't name one (the bench's `defaultFixture` otherwise).
+  public var fixture: String?
 }
 
 /// A guard's outcome, as the runner reads it (PerfLoopKit's `GuardResult`, named here so a bench needs only this import).
@@ -112,11 +114,11 @@ public final class Bench: @unchecked Sendable {
 
   public func scenario(_ name: String, summary: String, kind: ScenarioKind = .smooth, objective: Metric? = nil, guards: [String] = ["checks"],
                        guardParams: [String: Double] = [:], frameGuards: [String] = ["hitchTimeRatioMsPerS", "longestStretchMs"], params: [String: String] = [:],
-                       budget: String? = nil, latencyBudgetMs: Double? = nil, secondFixture: String? = nil, _ body: @escaping ScenarioBody) {
+                       budget: String? = nil, latencyBudgetMs: Double? = nil, secondFixture: String? = nil, fixture: String? = nil, _ body: @escaping ScenarioBody) {
     precondition(bodies[name] == nil, "scenario \(name) registered twice")
     scenarios.append(ScenarioSpec(name: name, summary: summary, kind: kind, objective: objective ?? (kind == .latency ? .latencyMs : .mainThreadCpuMsPerStep),
                                   guards: guards, guardParams: guardParams, frameGuards: frameGuards, params: params, budget: budget,
-                                  latencyBudgetMs: latencyBudgetMs, secondFixture: secondFixture))
+                                  latencyBudgetMs: latencyBudgetMs, secondFixture: secondFixture, fixture: fixture))
     bodies[name] = body
   }
 
@@ -163,6 +165,7 @@ public final class Bench: @unchecked Sendable {
       e.summary = s.summary; e.budget = s.budget; e.latencyBudgetMs = s.latencyBudgetMs
       e.guardParams = s.guardParams.isEmpty ? nil : s.guardParams.mapValues { .number($0) }
       e.frameGuards = s.frameGuards
+      e.fixture = s.fixture
       return e
     }
     let ks = knobList().map { k -> KnobEntry in
@@ -325,9 +328,10 @@ public final class Bench: @unchecked Sendable {
     return p
   }
 
-  /// `name@k=v,k=v` → the named fixture with those parameters, refused outside its `parametric` ranges.
-  func resolveFixture(_ spec: String?) throws -> Fixture {
-    let s = spec ?? defaultFixture ?? fixtures.first?.name ?? "default"
+  /// `name@k=v,k=v` → the named fixture with those parameters, refused outside its `parametric` ranges. Without one, the
+  /// scenario's own fixture, else the bench's default, else the first.
+  func resolveFixture(_ spec: String?, scenario: String? = nil) throws -> Fixture {
+    let s = spec ?? scenario.flatMap { n in scenarios.first { $0.name == n }?.fixture } ?? defaultFixture ?? fixtures.first?.name ?? "default"
     let parts = s.split(separator: "@", maxSplits: 1).map(String.init)
     guard var f = fixtures.first(where: { $0.name == parts[0] }) ?? (fixtures.isEmpty ? Fixture(parts[0]) : nil) else {
       throw HostError.usage("unknown fixture '\(parts[0])' (fixtures: \(fixtures.map(\.name).joined(separator: ", ")))")
@@ -358,7 +362,7 @@ public final class Bench: @unchecked Sendable {
     guard let spec = scenarios.first(where: { $0.name == name }), let body = bodies[name] else {
       throw HostError.usage("unknown scenario '\(name)' (scenarios: \(scenarios.map(\.name).joined(separator: ", ")))")
     }
-    let fixture = try resolveFixture(a.one("fixture"))
+    let fixture = try resolveFixture(a.one("fixture"), scenario: name)
     let reps = max(1, Int(a.one("reps") ?? "3") ?? 3)
     var params = spec.params
     for kv in a.all("set") {
@@ -451,6 +455,7 @@ public final class Bench: @unchecked Sendable {
     pj["knobs"] = .object(Dictionary(uniqueKeysWithValues: ks.map { ($0.info.name, JSONValue.string($0.valueText)) }))
     var result = HostResult(tool: tool, app: app, adapter: adapter, scenario: name, fixture: fixture.name, params: pj, startedAt: startedAt, reps: records,
                             summary: summary, verdict: verdict, exitCode: Int(code), notes: notes)
+    result.expectedFixture = spec.fixture
     if a.has("profiled") { result.profiled = true; result.notes.append("recorded under a profiler: these numbers never decide") }
     let text = PLJSON.encode(result)
     if let o = a.one("out") { try text.write(toFile: o, atomically: true, encoding: .utf8) }
@@ -489,7 +494,7 @@ public final class Bench: @unchecked Sendable {
     var feed: Gesture?
     if let f = a.one("feed") { do { feed = try SyntheticGestures.load(f) } catch { return (1, "\(error)") } }
     do {
-      let fixture = try resolveFixture(a.one("fixture"))
+      let fixture = try resolveFixture(a.one("fixture"), scenario: name)
       let recorder = Recorder(nominalHz: Double(NSScreen.main?.maximumFramesPerSecond ?? 60))
       Probe.sink = recorder; Mutations.sink = recorder.causes
       let run = Run(scenario: name, fixture: fixture, params: scenarios.first { $0.name == name }?.params ?? [:], rep: 0, recorder: recorder, activate: !a.has("no-activate"), sampler: nil)

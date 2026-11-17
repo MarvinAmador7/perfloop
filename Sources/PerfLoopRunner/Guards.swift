@@ -68,7 +68,7 @@ extension Loop {
     for sc in m?.isolationGuards ?? [] where sc != e.scenario && m?.scenario(sc) != nil {
       let metric = m?.scenario(sc)?.objective ?? "mainThreadCpuMsPerStep"
       let g = guardRule(e, s, scenario: sc)
-      let p = try pairs(e, stage: "\(stagePrefix)-\(sc)", fixture: e.fixture, count: 1, sides: s, metric: metric, scenario: sc)[0]
+      let p = try pairs(e, stage: "\(stagePrefix)-\(sc)", fixture: m?.scenario(sc)?.fixture ?? e.fixture, count: 1, sides: s, metric: metric, scenario: sc)[0]
       var why = Acceptance.guardFailures([p], guards: g.guards) + Acceptance.guardReviews([p], guards: g.guards)
       if let u = Acceptance.unusable(p), p.failure != nil { why.append("couldn't run: \(u)") }
       out.append(IsolationGuard(scenario: sc, pair: p, pass: why.isEmpty, failures: why))
