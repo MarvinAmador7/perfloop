@@ -110,7 +110,10 @@ perfloop baseline S --bench PATH [--reference S2]   # first numbers + a referenc
 
 - **Never edit what judges you**: the bench target (scenarios, fixtures, guards, checks), the manifest, PROGRAM.md, the
   store (`~/.perfloop`), the PerfLoop package itself. The runner reads the rules from the *champion's* manifest, so a candidate
-  that changes them is judged by the old ones anyway; changes to the bench are their own PR for the owner.
+  that changes them is judged by the old ones anyway; changes to the bench are their own PR for the owner. One
+  exception: a feature PR may add **new** scenarios, fixtures and checks for its own feature. Mark each `written in this
+  PR` in the evidence bundle; they judge nothing until merged into the champion's manifest. Changing an existing
+  scenario, guard, band or fixture stays its own PR (docs/VERIFICATION.md §5, decision 1).
 - **Never make the app aware of the bench**: no `PERFLOOP_` checks outside knobs, no fixture names, no "if measured"
   branches. A blank row that is fast is still a blank row; the guards exist because the search will find it.
 - **Never pass `--guard-tolerance`, `--owner`, `--force` or `--allow-dirty`, never run `perfloop champion set` or
