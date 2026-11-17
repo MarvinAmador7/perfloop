@@ -47,6 +47,33 @@ perfloop ledger                              # what was tried, by whom, with wha
    attribute, 5 non-promising candidates in a row, or 2 h / 20 candidates spent), and report from the ledger: what you
    tried, what won, what's left.
 
+## Measuring without a verdict: `run` and `baseline`
+
+`exp` judges a candidate against the champion, on a scenario the champion has. Two things it can't do, and what to use
+instead of running the bench by hand (a bench run by hand skips the gates, the window lock and the ledger):
+
+```sh
+perfloop run <champion|exp/ID|BUILD|BENCH> --scenario S [--fixture F] [--reps N] [--reference S2]   # numbers, no verdict
+perfloop baseline S --bench PATH [--reference S2]   # first numbers + a reference snapshot for a scenario the champion lacks
+```
+
+- **Use `exp`** when the question is "is this change faster (or not worse) than the champion?" and the champion has
+  the scenario. Only `exp` decides anything.
+- **Use `run`** to measure one build: your feature's own new scenario (one only your branch's bench has, which `exp new`
+  refuses), a fixture you're checking, how a build behaves before you form a hypothesis. It runs the build's own
+  scenario and checks through the same runner as a stage (screen-lock wait, quiet gate, window lock), one child per rep,
+  stores `runs/<id>/` and a ledger line `measure`, and prints the trusted reps' numbers, the checks and where the time
+  went. Exit 3: the scenario's own checks failed (fix the feature first); exit 5: no rep could be trusted.
+- **Use `baseline`** once, in the feature's PR, for each new scenario: it records first numbers (trusted reps only) and
+  the window's picture. After the merge, when the champion has the scenario, `exp status` says so and `perfloop run
+  champion --scenario S` is compared with the baseline (numbers and picture). Quote the baseline in the PR.
+- **`--reference S2`** runs a champion scenario beside each rep, in the same minutes, so a reader can tell a slow
+  feature from a slow Mac ("this Mac runs 12 % slower than at the champion's full"). Use one whenever the Mac is shared.
+- **Untrusted reps are named, never quoted.** A `run` whose reps were all untrusted prints `UNTRUSTED` and no number;
+  rerun it when the Mac is quiet, and never copy an untrusted rep's value into a PR. `baseline` records nothing then.
+- A `run` or a baseline is information, not a verdict: different minutes, no interleaving with the champion. "No
+  regression" claims need an `exp`.
+
 ## Never
 
 - **Never edit what judges you**: the bench target (scenarios, fixtures, guards, checks), the manifest, PROGRAM.md, the
@@ -68,7 +95,7 @@ perfloop ledger                              # what was tried, by whom, with wha
 
 ## The machine
 
-`exp new` (it screens), `exp screen`, `exp full`, `guards`, `profile`, `sweep` and a bench's `run`/`ab` open a window
+`exp new` (it screens), `exp screen`, `exp full`, `run`, `baseline`, `guards`, `profile`, `sweep` and a bench's `run`/`ab` open a window
 and take focus for seconds to minutes. Run them only when the owner says the Mac is free, or queue them: `perfloop queue
 add <id>` and let `perfloop queue run --runner local --idle 120` (only while nobody touches the Mac) or
 `--runner ssh://user@spare-mac` (a Mac nobody uses) take them.

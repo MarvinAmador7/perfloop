@@ -38,7 +38,8 @@ candidate's, so an experiment can't change how it is judged. Without `describe`,
                    "guards": ["checks", "snapshot-diff", "rows-drawn"],
                    "guardParams": { "snapshot-diff.tolerance": 0.005 },
                    "frameGuards": ["hitchTimeRatioMsPerS", "longestStretchMs"],
-                   "secondFixture": "rows500", "latencyBudgetMs": null } ],
+                   "secondFixture": "rows500", "latencyBudgetMs": null,
+                   "fixture": "rows2000" } ],                        // optional: the scenario's own fixture
   "fixtures": [ { "name": "rows2000", "params": { "rows": "2000" }, "parametric": { "rows": [10, 50000] } } ],
   "knobs": [ { "name": "rows.rank", "type": "choice", "default": "sort", "choices": ["sort", "index"] } ],
   "defaultFixture": "rows2000", "isolationGuards": [],
@@ -48,6 +49,15 @@ candidate's, so an experiment can't change how it is judged. Without `describe`,
 
 `kind`: `smooth` and `isolation` climb on main-thread CPU per step, `latency` on the time to the frame that shows the
 change. `guards`: `checks` (the scenario's own checks), `snapshot-diff` (§5), and any name your bench judges itself.
+
+`fixture` (optional, added 2026-11): the fixture this scenario runs on when nobody names one, before `defaultFixture`.
+Give one to every scenario whose data isn't the default's (a palette scenario that needs a search index, a reel that
+needs five asks): the runner always passes `--fixture`, and without this field it passes `defaultFixture`, so a
+scenario that picks its own data inside the bench when `--fixture` is absent never gets it from the runner. Every
+verb uses it (`exp new` on a scenario other than the champion's, `run`, `baseline`, `profile`, `sweep`, the isolation
+scenarios); a `--fixture` the manifest doesn't list is refused with the list (`name@k=v` of a listed one and a
+`scheme:…` form such as `file:PATH` pass), and `doctor --bench` fails a scenario whose `fixture` isn't listed. It is
+part of the contract: a candidate that changes it needs the owner to be promoted.
 
 ## 3. `run SCENARIO --fixture F --reps 1 --json [--set k=v …] [--quiet-check 0]`
 
@@ -82,6 +92,7 @@ extra fields are fine and missing optional ones fall back. What it reads, per re
 | `checks[]` `{ name, pass, detail }` | the `checks` guard: a check the candidate fails while the champion passes vetoes it |
 | `guards[]` `{ name, pass, detail, artifacts, value, limit, review }` | the named guards; `review: true` asks the owner |
 | `window { appActive, keyWindow, visible, occluded }` | all four right, or the rep is untrusted and never decides (a rep without one: the result's top-level `window`) |
+| top-level `fixture` | the fixture that ran (`name` or `name@k=v`). A rep that says it ran another than the one the runner asked for has no numbers (`ran fixture X, asked for Y`): its data was the wrong one. PerfLoopHost adds `expectedFixture`, the scenario's own |
 | `quiet`, `busyPct`, `busy[]` | the machine when the rep started: `quiet: false` makes the rep untrusted; `busyPct` (share of the cores busy) and `busy` (what kept them busy) say why. Per rep or top level; `noise.quiet` / `noise.reasons` (deskbench) are read the same way. Optional: the local runner's own quiet gate fills the same fields on each side (and its wait under `machine`), false when either saw a busy machine |
 | `worstStretches[] { step, durationMs, topOurs[], topFramework[], causes[] }` | `explain`'s "where the time went" |
 | `smoothness { positionErrorP95Pt, stalls, jerkP95 }` | gesture-replay frame guards (C9) |
@@ -100,6 +111,22 @@ verdict is `untrusted` with the count and the cause (`screen: UNTRUSTED (6/6 rep
 the same way in both orders while the other side's is right: the build does that, a rerun can't change it, and the
 stage says `deterministic` and stops early. (A screen whose trusted pairs already reject the candidate, a pair it
 didn't win or a guard it failed, is still rejected.)
+
+## 3a. What `perfloop run` and `perfloop baseline` use
+
+They measure one build with no champion on the other side, through `run` (§3) only, one process per rep, with
+`--fixture` always given. So every protocol-1 adapter that answers `run` works with them unchanged, including one whose
+pairs go through its own `ab` (deskbench): `ab` is never called. What they read from each rep is what a pair's side
+reads: the objective, `checks[]` and `guards[]`, `worstStretches[]`, and for trust the rep's `window`, its exit code
+(5), `frames.ticks` (0: no frames) and `quiet` (the local runner's gate fills it too). A rep is untrusted on the same
+rule as in a pair, and its number is never quoted: a run whose reps were all untrusted prints `UNTRUSTED` and no number,
+and a baseline isn't recorded. An adapter that reports none of the trust fields still runs; its runs say `trust: not
+checked`.
+
+`--reference S2` runs the champion's S2 beside each rep (alternating which goes first), so it needs nothing more.
+`baseline` keeps a reference picture when the scenario guards `snapshot-diff` and the rep writes its capture as §5
+says; a later `run` of the scenario is compared with it through the champion adapter's `snapdiff` (or the measured
+build's, while the champion doesn't have the scenario). Without `snapshot-diff` there is no picture, only numbers.
 
 ## 4. `ab --a EXE --b EXE S --fixture F --reps 1 --json --out FILE` (optional)
 
@@ -185,9 +212,10 @@ adapter that can't can be wrapped instead: `perfloop lock -- BENCH ab …`.
 
 | Document | Version | Written by | Stability |
 |---|---|---|---|
-| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths` added 2026-11 |
+| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture` added 2026-11 |
 | `perfloop.build` | 1 | adapter (`tool.build`), store (`build.json`) | stable |
-| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added |
+| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11) |
+| `perfloop.measure`, `perfloop.baseline` | 1 | runner (`runs/<id>/run.json`, `baselines/<scenario>/baseline.json`) | new (2026-11); a pair's `Side` gained `fixture` (what the rep ran) |
 | `perfloop.snapdiff` | 1 (reads `deskbench.snapdiff/1`) | adapter `snapdiff` | stable |
 | `perfloop.experiment`, `perfloop.ledger`, `perfloop.champion` | 1 | runner (store) | stable since Phase 2 |
 | `perfloop.sweep`, `perfloop.queue`, `perfloop.gesture`, `perfloop.gestures` | 1 | runner / probe | stable since Phase 3–4; `perfloop.sweep` gained `walls` (2026-11) |
