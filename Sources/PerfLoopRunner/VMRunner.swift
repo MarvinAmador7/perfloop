@@ -13,6 +13,9 @@ import PerfLoopKit
 /// What a VM's numbers are good for: main-thread CPU per step on the guest's virtual CPUs. PMU counters aren't there
 /// (instructions may read zero), and display-link cadence and hitches in a guest aren't the panel's, so a VM screens and
 /// never decides a full (`exp full` refuses it).
+///
+/// The quiet gate reads this Mac, the VM's host: the guest's own load misses the host's contention (another VM, a
+/// build), which is what costs a guest its frames.
 public final class VMRunner: Runner {
   public let tool: String
   public let vm: String
@@ -32,6 +35,9 @@ public final class VMRunner: Runner {
   public var ssh: String?
   public var rsync: String?
   public var wake = true
+  /// The quiet gate (on by default from the CLI) and where it reads: the host.
+  public var quiet: QuietGate? { didSet { inner?.quiet = quiet } }
+  public var load: LoadSource = HostLoadSource() { didSet { inner?.load = load } }
   var inner: SSHRunner?
   var booted: Child?
 
@@ -82,6 +88,7 @@ public final class VMRunner: Runner {
     let r = SSHRunner(spec: spec, user: user, host: ip, port: nil, root: nil, store: store)
     r.nameOverride = name; r.identityFile = key; r.knownHostsFile = known; r.acceptNewHostKey = true
     r.log = log; r.onWait = onWait; r.deadline = deadline; r.wake = wake
+    r.quiet = quiet; r.load = load; r.quietPlace = "this Mac (\(name)'s host)"
     if let s = ssh { r.ssh = s }
     if let s = rsync { r.rsync = s }
     // sshd comes up a little after the address; the key goes in once, with the image's password.

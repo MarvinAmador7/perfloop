@@ -35,13 +35,16 @@ public struct Manifest: Codable, Sendable, Equatable {
   /// The `scheme:` forms the adapter's `--fixture` takes besides its listed names (`["file"]`: `file:PATH`). nil: not
   /// said (an adapter from before the field): any scheme passes through to it, as before; `[]`: none.
   public var fixtureSchemes: [String]?
+  /// Environment variables the adapter's `profile` needs beyond the allowlist (TraceEnv): `perfloop profile` starts it
+  /// with those and nothing else, since a trace holds the recorded process's environment. Secret-like names never pass.
+  public var profileEnv: [String]?
 
   public init(app: String, adapter: String, build: Build?, scenarios: [ScenarioEntry], fixtures: [JSONValue] = [], knobs: [KnobEntry] = [], source: String? = "describe") {
     schema = "perfloop.manifest/1"; self.protocol = 1; self.app = app; self.adapter = adapter; self.build = build
     self.scenarios = scenarios; self.fixtures = fixtures; self.knobs = knobs; self.source = source
   }
 
-  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards, gestures, verbs, privatePaths, fixtureSchemes }
+  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards, gestures, verbs, privatePaths, fixtureSchemes, profileEnv }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     schema = try c.decodeIfPresent(String.self, forKey: .schema) ?? "perfloop.manifest/1"
@@ -61,6 +64,7 @@ public struct Manifest: Codable, Sendable, Equatable {
     verbs = try? c.decodeIfPresent([String].self, forKey: .verbs)
     privatePaths = try? c.decodeIfPresent([String].self, forKey: .privatePaths)
     fixtureSchemes = try? c.decodeIfPresent([String].self, forKey: .fixtureSchemes)
+    profileEnv = try? c.decodeIfPresent([String].self, forKey: .profileEnv)
   }
 
   /// Whether the adapter answers `verb` (adapters from before `verbs` answer deskbench's).

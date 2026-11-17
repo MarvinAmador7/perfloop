@@ -45,7 +45,8 @@ candidate's, so an experiment can't change how it is judged. Without `describe`,
   "defaultFixture": "rows2000", "isolationGuards": [],
   "verbs": ["help", "list", "describe", "knobs", "run", "snapdiff", "profile", "diff"],   // optional; absent = deskbench's (with ab)
   "privatePaths": [".secrets/"],                                       // optional; never recorded in a patch
-  "fixtureSchemes": ["file"] }                                         // optional; the scheme: forms --fixture takes
+  "fixtureSchemes": ["file"],                                         // optional; the scheme: forms --fixture takes
+  "profileEnv": ["MYAPP_DATA_DIR"] }                                   // optional; what `profile` needs beyond the allowlist (§6)
 ```
 
 `kind`: `smooth` and `isolation` climb on main-thread CPU per step, `latency` on the time to the frame that shows the
@@ -143,7 +144,8 @@ deskbench's own interleaved pair. An adapter whose manifest lists `verbs` withou
 pair instead, which is what PerfLoopHost benches do. Output: `summaryA/summaryB` (the objective's median under its
 name, and `frameP95Ms` or `frameTicks`: a median of 0 means the side drew no frame), `buildA/buildB`,
 `guardsA/guardsB`, `failures[]`. The runner's quiet gate runs once before each `ab` call, so both sides of the pair
-record the same machine reading.
+record the same machine reading: this Mac's for the local runner, the remote Mac's for an ssh runner, the host's for a
+VM.
 
 The runner can't see the processes `ab` starts, so for its trust rule (§3) `ab` also reports each side's reps, one of:
 
@@ -186,6 +188,13 @@ recorded process's environment); a delete that fails leaves `traceKept: true` an
 The document adds, to SCHEMAS.md §4: `traceKept` (whether the trace is on disk at `trace`), `keepTrace` (it is there on
 purpose), `os` and `model` (from the trace's TOC), `knobs`, `treeInSteps` (what `diff` compares), and `inProcess` (the
 run's own `perfloop.result/2`, `profiled: true`).
+
+`perfloop profile` starts the adapter with a scrubbed environment, not its own: `HOME`, `USER`, `LOGNAME`, `PATH`,
+`SHELL`, `TMPDIR`, `LANG`, `LC_*`, `TERM`, `TZ`, `__CF_USER_TEXT_ENCODING`, `DEVELOPER_DIR`, the variables of §3 and the
+bench's other `PERFLOOP_` ones (`PERFLOOP_HOME`, `PERFLOOP_APP`, the window lock's, `PERFLOOP_SAMPLER`; never
+`PERFLOOP_OWNER`), and the names the manifest lists in `profileEnv`. A name that looks like a secret (`TOKEN`, `SECRET`,
+`KEY`, `PASSWORD`, `AUTH`, `SESSION`, `COOKIE`, `CREDENTIAL`, `PRIVATE`, …) never passes, declared or not. Start the
+recorded app with that environment (or less), so a kept trace carries no tokens; PerfLoopHost's does (`Bench.profileEnv`).
 
 Whatever the adapter does with its trace, `perfloop profile` checks the disk afterwards: it deletes every `.trace` under
 `--out DIR` (and the one the document's `trace` names) unless `--keep-trace`, checks each is gone, and rewrites
@@ -230,7 +239,7 @@ adapter that can't can be wrapped instead: `perfloop lock -- BENCH ab …`.
 
 | Document | Version | Written by | Stability |
 |---|---|---|---|
-| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `fixtureSchemes` added 2026-11 |
+| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `fixtureSchemes`, `profileEnv` added 2026-11 |
 | `perfloop.build` | 1 | adapter (`tool.build`), store (`build.json`) | stable |
 | `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11) |
 | `perfloop.measure`, `perfloop.baseline` | 1 | runner (`runs/<id>/run.json`, `baselines/<scenario>/baseline.json`) | new (2026-11); a pair's `Side` gained `fixture` (what the rep ran) |

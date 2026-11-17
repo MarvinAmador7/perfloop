@@ -83,6 +83,9 @@ public final class Bench: @unchecked Sendable {
   public var probes: [String] = []
   /// Paths a patch may never record (secrets, private state); see `Manifest.privatePaths`.
   public var privatePaths: [String] = []
+  /// Environment variables `profile` passes to the recorded child beyond the allowlist (TraceEnv; `Manifest.profileEnv`):
+  /// a trace holds its environment, so name only what the app needs. Secret-like names never pass.
+  public var profileEnv: [String] = []
   /// Name prefixes of the app's modules: their qualifier is dropped from sampled symbols, and their frames are "ours".
   public var appModules: [String] = []
   /// The gestures a scenario's `gesture` parameter takes besides files, for the manifest (`perfloop gestures list --bench`):
@@ -176,6 +179,7 @@ public final class Bench: @unchecked Sendable {
     m.probes = probes.isEmpty ? nil : probes; m.exitCodes = Self.exitCodes
     m.isolationGuards = isolationScenarios.isEmpty ? nil : isolationScenarios
     m.verbs = Self.verbs; m.privatePaths = privatePaths.isEmpty ? nil : privatePaths
+    m.profileEnv = profileEnv.isEmpty ? nil : profileEnv
     m.gestures = gestures.isEmpty ? nil : gestures
     // `resolveFixture` takes only registered names when there are some (any name when none): no `scheme:` form.
     m.fixtureSchemes = fixtures.isEmpty ? nil : []

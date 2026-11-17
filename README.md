@@ -73,7 +73,7 @@ perfloop store add .build/release/MyAppBench
 perfloop champion set BUILD_HASH --merged
 ```
 
-Replace `BUILD_HASH` with the hash from `store add`. After committing one candidate change, run the screen on a free Mac.
+Replace `BUILD_HASH` with the hash from `store add`. Setting the champion is the owner's job, because every later verdict is judged against it. `champion set` asks you to type `yes` at your terminal, or accepts `PERFLOOP_OWNER=1` on that one command in a script. Nothing else confirms it, and an agent is refused. The same gate covers the owner flags (`--force`, `--owner`, `--guard-tolerance`, `--allow-dirty`) and `exp replay --go`. Every use is recorded in the experiment, the ledger, `exp status` and `champion.json` (`setBy`). After committing one candidate change, run the screen on a free Mac.
 
 ```sh
 perfloop exp new "Cache row ranks to remove repeated sorting during selection" \
@@ -81,7 +81,7 @@ perfloop exp new "Cache row ranks to remove repeated sorting during selection" \
   --bench .build/release/MyAppBench
 ```
 
-Use the returned experiment ID in `perfloop explain exp/ID`. If the verdict is `promising`, run `perfloop exp full ID`. If the screen says `inconclusive` (three pairs couldn't tell: mixed signs, or noise wider than the gain), add pairs with `perfloop exp screen ID --more 3` or run the full; `rejected` is kept for slower in every pair, a failed guard, or a gain that can't reach 5 %. If the full comparison says `won`, run `perfloop exp promote ID` to update the champion. [Bench contract and result schemas](ADAPTER.md)
+Use the returned experiment ID in `perfloop explain exp/ID`. If the verdict is `promising`, run `perfloop exp full ID`. If the screen says `inconclusive` (three pairs couldn't tell: mixed signs, or noise wider than the gain), add pairs with `perfloop exp screen ID --more 3` or run the full; `rejected` is kept for slower in every pair, a failed guard, or a gain that can't reach 5 %. If the full comparison says `won`, run `perfloop exp promote ID` to update the champion. Once that PR is merged, run `perfloop champion merged SHA` from the app's checkout. It checks that SHA is on main (`origin/main`, else `main`, or `--main REF`) and contains the champion's build commit, and refuses otherwise. [Bench contract and result schemas](ADAPTER.md)
 
 ### Verify that a feature costs nothing
 
@@ -114,7 +114,7 @@ args = ["mcp", "--app", "myapp"]
 claude mcp add perfloop -- /path/to/perfloop mcp --app myapp
 ```
 
-Long-running stages return jobs that the agent can wait on through MCP. The server stops outstanding jobs when the session ends. [Agent workflow and tooling](docs/BEYOND.md)
+Long-running stages return jobs that the agent can wait on through MCP. The server stops outstanding jobs when the session ends. No tool takes an owner flag, and no tool sets, merges or replays the champion. [Agent workflow and tooling](docs/BEYOND.md)
 
 ## Where benchmarks run
 
@@ -124,7 +124,7 @@ Long-running stages return jobs that the agent can wait on through MCP. The serv
 | Spare Mac over SSH | Screens and full comparisons on a dedicated machine with an unlocked console session |
 | Tart macOS VM | Screening candidates in a guest on the host Mac |
 
-Run `perfloop runner check ssh://user@spare-mac` before using a remote runner. Local window runs wait for the screen to unlock and take turns through a shared window lock. Runs that start on a busy machine or fail to present usable frames are untrusted and cannot decide a verdict.
+Run `perfloop runner check ssh://user@spare-mac` before using a remote runner. Local window runs wait for the screen to unlock and take turns through a shared window lock. Runs that start on a busy machine or fail to present usable frames are untrusted and cannot decide a verdict. The quiet gate checks load on the machine whose load affects the reps, never on the Mac that runs `perfloop`. That is this Mac for local runs, the remote Mac over SSH (`iostat` and `ps` there), and the host for a VM, because the guest can't see contention on the host. The flags and thresholds are the same for all three: `--max-load` 30 % of cores, `--quiet-timeout` 60 s, `--require-quiet`.
 
 ## Reference
 
@@ -142,7 +142,7 @@ Run `perfloop runner check ssh://user@spare-mac` before using a remote runner. L
 
 `run` and `baseline` go through the same runner as an experiment's stages and print only trusted reps' numbers; a run whose reps were all untrusted says `UNTRUSTED` and quotes nothing (exit 5). A scenario can name its own fixture in the manifest (`scenarios[].fixture`), which every verb uses when `--fixture` is absent; an unlisted `--fixture` is refused with the list ([ADAPTER.md](ADAPTER.md) §2, §3a). An adapter's own `scheme:` form such as `file:PATH` isn't on the list; a `file:` fixture whose file isn't on the Mac the reps run on (this one, or the `--runner ssh://` one, which is asked) is refused before anything runs. `run` writes a ledger line `measure`, `baseline` a line `baseline`.
 
-Run `perfloop help` for all commands and flags, and `perfloop COMMAND --help` for one command's usage. An argument a command doesn't take (a typo, `--flag=value`, `--store DIR` passed as one argument, a stray word) is refused with its usage (exit 1) before anything runs. Builds, experiments, `run` measurements, baselines, and the ledger live in `${PERFLOOP_HOME:-~/.perfloop}/<app>/`. Keep raw `.trace` bundles private because they can contain the recorded process's environment.
+Run `perfloop help` for all commands and flags, and `perfloop COMMAND --help` for one command's usage. An argument a command doesn't take (a typo, `--flag=value`, `--store DIR` passed as one argument, a stray word) is refused with its usage (exit 1) before anything runs. Builds, experiments, `run` measurements, baselines, and the ledger live in `${PERFLOOP_HOME:-~/.perfloop}/<app>/`. Keep raw `.trace` bundles private because they can contain the recorded process's environment. `perfloop profile` deletes each trace unless `--keep-trace`. It also starts the recording with a scrubbed environment so a kept trace carries no tokens. The scrubbed environment keeps `HOME`, `USER`, `LOGNAME`, `PATH`, `SHELL`, `TMPDIR`, `LANG`, `LC_*`, `TERM`, `TZ`, `__CF_USER_TEXT_ENCODING` and `DEVELOPER_DIR`. It keeps the bench's own `PERFLOOP_` variables, but never `PERFLOOP_OWNER`, and the names the adapter declares in `profileEnv`. A name that looks like a secret (`TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `AUTH`, `SESSION`, …) never passes. `perfloop doctor` warns about a kept trace.
 
 - [Adapter contract and schemas](ADAPTER.md)
 - [PerfLoopHost integration example](Examples/SlowList/Sources/SlowListBench/main.swift)

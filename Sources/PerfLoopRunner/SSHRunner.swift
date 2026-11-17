@@ -40,6 +40,14 @@ public final class SSHRunner: Runner {
   public var remoteEnv: [String: String] = [:]
   /// Gate reps on the remote Mac's own idle time too (`--idle` on an ssh runner; off by default: it's a spare Mac).
   public var gate: IdleGate?
+  /// The quiet gate before each rep (on by default from the CLI, as locally). It reads the remote Mac, where the reps
+  /// run (`remoteLoad`), unless `load` names another machine (the VM runner: its host). nil: no gate.
+  public var quiet: QuietGate?
+  public var load: LoadSource?
+  /// The machine the quiet gate reads, as its messages name it (default: the host).
+  var quietPlace: String?
+  public var quietPoll = 0.5
+  var quietTimedOut = false
   /// Wake the display before a rep (`caffeinate -u`). Off for the fake in tests.
   public var wake = ProcessInfo.processInfo.environment["PERFLOOP_SSH_WAKE"] != "0"
   public var deadline: Date?
@@ -267,6 +275,12 @@ public final class SSHRunner: Runner {
     // be unlocked (and, with --idle, for the Mac to be idle).
     if let gate { try waitForIdle(gate) } else if launch == .gui { try waitForUnlock() }
     if let d = deadline, Date() >= d { throw RunnerStop.deadline(d) }
+    // The quiet gate reads the machine the reps run on (or the VM's host), never this one.
+    var machine: MachineState?
+    if let q = quiet {
+      machine = try QuietWait.wait(q, on: quietPlace ?? host, timedOut: &quietTimedOut, poll: quietPoll, read: { load?.readLoad() ?? remoteLoad() }, log: log, onWait: onWait,
+                                   check: { if let d = deadline, Date() >= d { throw RunnerStop.deadline(d) } })
+    }
     let rwork = map(workDir.path), ctl = rwork + "/.perfloop-run"
     guard rwork.hasPrefix(remoteRoot + "/") else { throw PLError.harness("\(name): \(workDir.path) isn't under the store \(localRoot)") }
     let rexe = map(exe), rargs = args.map(map)
@@ -316,14 +330,32 @@ public final class SSHRunner: Runner {
           try? remoteKill(ctl)
           child.kill()
           _ = child.finish()
-          return Adapter.Output(status: interruptedStatus, stdout: "")
+          return Adapter.Output(status: interruptedStatus, stdout: "", machine: machine)
         }
         if now.idle != nil { last = now }
       }
     }
     let o = child.finish()
     if o.status == 255 { throw PLError.harness("\(name): the connection to \(host) dropped during the rep (ssh exit 255); it is redone on resume") }
-    return Adapter.Output(status: o.status, stdout: unmap(o.stdout))
+    return Adapter.Output(status: o.status, stdout: unmap(o.stdout), machine: machine)
+  }
+
+  /// The remote Mac's load, for the quiet gate: the share of its cores busy over a second (`iostat`: 100 − idle) and
+  /// its processes (`ps`), less this session's own. Unknown when nothing could be read (the gate then doesn't wait).
+  func remoteLoad() -> LoadReading {
+    guard let r = try? remote("""
+    echo "load=$(iostat -n 0 -c 2 -w 1 2>/dev/null | tail -n 1 | awk '$3 ~ /^[0-9.]+$/ { print 100 - $3 }')"
+    ps -A -o pid=,pcpu=,comm= 2>/dev/null
+    """, check: false) else { return LoadReading(busyPct: nil) }
+    return Self.remoteLoad(r.out)
+  }
+
+  /// The parsing half of `remoteLoad`, for tests: `load=PCT`, then `ps` lines (HostLoad.parse).
+  static func remoteLoad(_ text: String) -> LoadReading {
+    var pct: Double?, rest: [Substring] = []
+    for l in text.split(separator: "\n") { if l.hasPrefix("load=") { pct = Double(l.dropFirst(5)) } else { rest.append(l) } }
+    let ps = HostLoad.parse(rest.joined(separator: "\n")).filter { p in !p.name.hasPrefix("sshd") && !["sh", "iostat", "awk", "tail"].contains(p.name) }
+    return LoadReading(busyPct: pct, processes: ps)
   }
 
   /// Kills the rep's script and its descendants there.
@@ -422,6 +454,12 @@ public final class SSHRunner: Runner {
     }
     if let r = try? remote("echo cores=$(sysctl -n hw.logicalcpu 2>/dev/null); echo load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}'); ps -Ao pcpu=,comm= -r 2>/dev/null | head -8", check: false),
        let line = Self.loadLine(r.out) { o.append(line) }
+    if let q = quiet {
+      let l = load?.readLoad() ?? remoteLoad(), at = quietPlace ?? host
+      if l.unknown { o.append("quiet gate: the load on \(at) can't be read (no gate)") }
+      else { o.append("quiet gate, on \(at): " + (q.busy(l).map { "not quiet: \($0); a rep would wait up to \(Int(q.timeout)) s" }
+                                                   ?? "quiet: \(l.busyPct.map { "\(Int($0.rounded())) %" } ?? "?") of the cores busy (≤ \(Int(q.maxLoadPct)) %), no build running")) }
+    }
     return o
   }
 

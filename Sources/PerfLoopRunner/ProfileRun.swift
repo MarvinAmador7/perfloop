@@ -5,7 +5,9 @@ import PerfLoopKit
 // knobs), kept in the store as a `perfloop.profile/2` and indexed by build, knobs, scenario and template, so that
 // `perfloop diff champion exp/ID` finds both sides by name and checks their provenance. The trace holds the recorded
 // process's environment (tokens included): once the adapter returns, the runner deletes every `.trace` it left unless
-// `--keep-trace`, checks that it is gone, and the profile says what is on disk, not what the adapter meant to do.
+// `--keep-trace`, checks that it is gone, and the profile says what is on disk, not what the adapter meant to do. And
+// the adapter starts with a scrubbed environment (TraceEnv: an allowlist and the names its manifest declares in
+// `profileEnv`), so a kept trace carries no tokens even when the adapter passes its whole environment on.
 
 extension Loop {
   /// What a name like `champion` or `exp/0007` stands for: the build to record, the knobs it runs with, and the scenario
@@ -60,7 +62,8 @@ extension Loop {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     try? String(ProcessInfo.processInfo.processIdentifier).write(to: marker, atomically: true, encoding: .utf8)
     let o: Adapter.Output
-    do { o = try Adapter(exe: entry.executable, runner: runner, workDir: dir).call(args) } catch {
+    let env = TraceEnv.scrub(ProcessInfo.processInfo.environment, declared: entry.manifest?.profileEnv ?? [])
+    do { o = try Adapter(exe: entry.executable, runner: runner, workDir: dir).call(args, env: env, inherit: false) } catch {
       let s = settleTraces(dir: dir, reported: nil, keep: keepTrace); try? FileManager.default.removeItem(at: marker)
       if s.kept.isEmpty { throw error }
       throw PLError.harness("\(error)" + s.failureNote)

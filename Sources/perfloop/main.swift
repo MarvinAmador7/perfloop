@@ -27,8 +27,11 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             environment); --traces also those kept on purpose with --keep-trace
   champion [--json]                         the champion and its parent chain back to main
   champion set BUILD [--merged] [--scenario S] [--fixture F] [--note "…"]
-                                            the first champion (owner); later experiments inherit scenario and fixture
-  champion merged SHA                       the champion's PR landed at SHA: the chain restarts there
+                                            the first champion; later experiments inherit scenario and fixture. The
+                                            owner's (it picks what every verdict is judged against): the owner flags' gate
+  champion merged SHA [--main REF]          the champion's PR landed at SHA: the chain restarts there. Checked in the app's
+                                            checkout (here): SHA is on main (REF, else origin/main, else main) and
+                                            contains the champion's build commit; refused otherwise
   exp new "<hypothesis>" [--bench PATH | --build-cmd CMD --bench PATH | --build HASH | --knobs k=v,…]
           [--scenario S] [--fixture F] [--second-fixture F] [--set k=v] [--via ab|run]
           [--behaviour-change] [--patch FILE] [--no-screen] [--against ID] [--expect faster|same]
@@ -47,7 +50,8 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             the champion moves to the experiment's build (--force, --owner,
                                             --allow-dirty, --guard-tolerance: the owner's flags, below)
   exp abandon ID [--note "…"]
-  exp replay PLAN.json [--dry-run | --go]   a past session as experiments (SPEC §6.1); --go opens windows
+  exp replay PLAN.json [--dry-run | --go]   a past session as experiments (SPEC §6.1); --go opens windows and sets the
+                                            plan's champion (the owner's: the owner flags' gate)
   guards --exp ID [--guard-tolerance X --owner]
                                             the correctness guards alone (C6): a fresh pair of the experiment's scenario
                                             and the isolation scenarios; a failure demotes it, a snapshot over tolerance
@@ -95,10 +99,11 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             a window, e.g. a bench's own `ab`); exits with CMD's status
   lock [--json]                             who holds the window lock now: free, held (pid, command, label, since) or stale
 
-owner flags: --force, --owner, --guard-tolerance, --allow-dirty are the owner's, never an agent's (AGENTS.md)
-  honoured only with PERFLOOP_OWNER=1 in the environment or a yes typed at a terminal; refused otherwise (exit 6).
-  A speed bump and a record, not security: every use is recorded in experiment.json (forced, ownerFlags), the
-  ledger, the verdict, explain and exp status
+owner flags: --force, --owner, --guard-tolerance, --allow-dirty are the owner's, never an agent's (AGENTS.md), and so
+  are champion set and exp replay --go. Honoured only with PERFLOOP_OWNER=1 in the environment or a yes typed at a
+  terminal (nothing else: no Touch ID, no password); refused otherwise (exit 6). A speed bump and a record, not
+  security: every use is recorded in experiment.json (forced, ownerFlags), the ledger, the verdict, explain and exp
+  status (champion set: also champion.json's setBy)
 
 runners and the queue (C10): where windowed reps run; results never mix runners
   exp screen|full ID --runner R [--idle S]  R: local (default; idle-gated only with --idle S), ssh://[user@]host[/dir],
@@ -143,7 +148,7 @@ struct Args {
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
                                     "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir",
                                     "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop", "template", "top", "label",
-                                    "max-load", "quiet-timeout", "reps", "reference"]
+                                    "max-load", "quiet-timeout", "reps", "reference", "main"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -260,18 +265,23 @@ func run(_ args: Args) throws -> Int32 {
 
   case ("champion", "set"):
     guard let b = args[2] else { throw PLError.usage("usage: perfloop champion set BUILD [--merged]") }
-    let c = try loop().setChampion(build: b, merged: args.has("merged"), scenario: args.one("scenario"), fixture: args.one("fixture"), note: args.one("note"))
-    out(json ? PLJSON.encode(c) : "champion \(c.experiment) [\(c.build.line)], chain \(c.chain)"); return 0
+    // The owner's: it picks what every later verdict is judged against (OwnerGate, as the owner flags).
+    let auth = try OwnerGate().check(command: "champion set")
+    let l = try loop(); l.owner = auth
+    let c = try l.setChampion(build: b, merged: args.has("merged"), scenario: args.one("scenario"), fixture: args.one("fixture"), note: args.one("note"))
+    out(json ? PLJSON.encode(c) : "champion \(c.experiment) [\(c.build.line)], chain \(c.chain) · set by the owner (\(OwnerAuth.viaText(auth.via)))"); return 0
   case ("champion", "merged"):
-    guard let sha = args[2] else { throw PLError.usage("usage: perfloop champion merged SHA") }
-    let c = try loop().markMerged(commit: sha)
-    out(json ? PLJSON.encode(c) : "champion \(c.experiment) merged at \(sha)"); return 0
+    guard let sha = args[2] else { throw PLError.usage("usage: perfloop champion merged SHA [--main REF]") }
+    let l = try loop()
+    let (c, v) = try l.markMerged(commit: sha, main: args.one("main"))
+    out(json ? PLJSON.encode(c) : "champion \(c.experiment) merged at \(v.commit) (\(v.checked))"); return 0
   case ("champion", _):
     let s = try store()
     guard let c = s.champion() else { throw PLError.usage("no champion yet: perfloop champion set BUILD --merged") }
     if json { out(PLJSON.encode(c)); return 0 }
     out("champion \(c.experiment) since \(c.since) [\(c.build.line)]")
     out("  \(c.merged ? "merged" : "unmerged"), chain \(c.chain)")
+    if let u = c.setBy { out("  set by hand: " + u.line) }
     for (k, v) in c.objectives.sorted(by: { $0.key < $1.key }) { out("  \(k): \(v)") }
     if let k = c.knobs { out("  knob debt: \(Adapter.knobString(k))") }
     return 0
@@ -321,7 +331,10 @@ func run(_ args: Args) throws -> Int32 {
       }).trimmingCharacters(in: .newlines))
       return 0
     }
-    let l = Loop(store: try Store.locate(store: args.one("store"), app: plan.app)); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
+    // The owner's: it sets the plan's champion and promotes its builds (OwnerGate, as the owner flags).
+    let auth = try OwnerGate().check(command: "exp replay")
+    let l = Loop(store: try Store.locate(store: args.one("store"), app: plan.app)); l.owner = auth
+    try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
     let r = try l.replay(plan)
     r.lines.forEach(out)
     out("replay: \(r.mismatches == 0 ? "every step as expected" : "\(r.mismatches) step(s) not as expected")")

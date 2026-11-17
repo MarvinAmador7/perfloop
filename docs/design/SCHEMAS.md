@@ -183,6 +183,9 @@ verdict is `"untrusted"` when the pairs it needs are (ADAPTER.md §3, Trust).
 "parents": ["0005", "0002"], "mergedAncestor": "9bcd41a", "objectives": { "step": 16.9, "switch": 153.2 }, "since": "…" }`.
 `parents` is the chain of earlier champions back to the newest merged one, and `mergedAncestor` is that merged commit,
 so the loop can climb on unmerged champions (owner's decision, SPEC §7) and every champion still traces back to `main`.
+A champion set by hand (`champion set`, the owner's) has `"setBy": { "flag": "champion set", "via": "env|tty", "command":
+"champion set", "effect": "…", "at": "…" }`; one that won its place has none. `champion merged SHA` writes the full
+commit to `mergedAncestor` once it has checked SHA is on main and contains the build's commit.
 
 ## 7. `perfloop.sweep/1`
 

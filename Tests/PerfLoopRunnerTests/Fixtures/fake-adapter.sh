@@ -93,7 +93,7 @@ describe)
                    "guardParams": { "built-within.ms": 300, "snapshot-diff.tolerance": 0.005 }, "frameGuards": ["hitchTimeRatioMsPerS", "longestStretchMs"], "secondFixture": "swarm64" },
                  { "name": "burst", "kind": "isolation", "objective": "mainThreadCpuMsPerStep", "guards": ["checks", "built-within"] } ],
   "isolationGuards": ["burst"],
-  "fixtures": [ { "name": "crew17" }, { "name": "swarm64" } ],
+  "fixtures": [ { "name": "crew17" }, { "name": "swarm64" } ], "profileEnv": ["FAKE_LOG", "FAKE_TRACE_STUCK", "FAKE_PROFILE_FAIL", "FAKE_API_TOKEN"],
   "knobs": [ { "name": "reel.slide", "type": "choice", "default": "ca", "choices": ["ca", "clip"] } ], "hosts": ["scene"] }
 JSON
   exit 0
@@ -102,7 +102,7 @@ JSON
 { "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench", $verbs $schemes
   "scenarios": [ { "name": "step", "kind": "smooth", "params": { "steps": "8" }, "objective": "$FAKE_OBJECTIVE", "guards": ["landed"], $stepfx "secondFixture": "swarm64" },
                  { "name": "switch", "kind": "latency", "objective": "latencyMs", "guards": ["checks"] } $extra ],
-  "fixtures": [ { "name": "crew17" }, { "name": "swarm64" } ],
+  "fixtures": [ { "name": "crew17" }, { "name": "swarm64" } ], "profileEnv": ["FAKE_LOG", "FAKE_TRACE_STUCK", "FAKE_PROFILE_FAIL", "FAKE_API_TOKEN"],
   "knobs": [ { "name": "reel.slide", "type": "choice", "default": "ca", "choices": ["ca", "clip"] } ], "hosts": ["scene"] }
 JSON
   ;;
@@ -196,8 +196,9 @@ profile)
   done
   log "profile $sc $fixture template=$tmpl knobs=$knobs out=$out"
   mkdir -p "$out"
-  # Like an adapter that implements `profile` itself and never deletes its trace (nor says so): the runner must.
-  mkdir -p "$out/$sc-$tmpl.trace"; echo "FAKE_TOKEN=secret" > "$out/$sc-$tmpl.trace/environment"
+  # Like an adapter that implements `profile` itself and never deletes its trace (nor says so): the runner must. Its
+  # "trace" holds the environment it ran with, as xctrace's does.
+  mkdir -p "$out/$sc-$tmpl.trace"; env > "$out/$sc-$tmpl.trace/environment"
   if [ -n "$FAKE_TRACE_STUCK" ]; then mkdir -p "$out/stuck.trace"; echo x > "$out/stuck.trace/environment"; chmod 555 "$out/stuck.trace"; fi
   [ -n "$FAKE_PROFILE_FAIL" ] && exit 2
   echo "{ \"schema\": \"perfloop.profile/2\", \"template\": \"Time Profiler\", \"scenario\": \"$sc\", \"fixture\": \"$fixture\", \"process\": \"fake\", \"durationS\": 1,

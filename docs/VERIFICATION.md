@@ -105,7 +105,10 @@ agent can add scenarios, never drop one, and anything skipped is printed under "
 
 ## 5. Owner decisions
 
-| # | Decision | Recommendation |
+Decided on 17 November 2026: the owner accepted every recommendation below as written. They are the rules now; build
+to them and don't re-ask.
+
+| # | Decision | Decided |
 |---|---|---|
 | 1 | May a feature PR add scenarios, fixtures and checks to the bench, when AGENTS.md says "never edit what judges you"? | Yes for **new** scenarios only, each marked `written in this PR` in the bundle; they judge nothing until the PR is merged and they are in the champion's manifest. Changes to existing scenarios, guards, bands or fixtures stay their own PR. Update AGENTS.md "Never" with that line |
 | 2 | Which existing scenarios must `perfloop verify` check by default? | A `verify` list in the manifest, set by the owner (a fast subset, ~5 min of windows); every scenario when absent. The agent adds, never removes |
@@ -117,8 +120,8 @@ agent can add scenarios, never drop one, and anything skipped is printed under "
 
 ## 6. What not to claim
 
-None of v3–v12 is built, and no agent has verified a feature through `perfloop verify` yet; v1 is merged (#9) and
-v2 is in review (#8) as this is written. `noRegression` means no change beyond the metric's margin on these scenarios,
+None of v3–v12 is built, and no agent has verified a feature through `perfloop verify` yet; v1 (#9) and v2 (#8) are
+merged. `noRegression` means no change beyond the metric's margin on these scenarios,
 fixtures, appearance and machine, not no change. Checks the agent wrote in the same PR show what the agent believes the
 feature does, not that it is what the owner asked for. In-process input goes through the app's event queue, not the
 HID path, input methods or accessibility clients: it proves routing, not that a hand on a keyboard gets the same
