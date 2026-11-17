@@ -276,6 +276,9 @@ final class OwnerFlagTests: FakeBenchCase {
     // --main names another branch.
     try git("branch", "release", firstMain)
     XCTAssertTrue(refusal { try self.loop.markMerged(commit: merge, main: "release") }.contains("is not on release"))
+    // The CLI takes --main (strict arguments), and nothing else new.
+    XCTAssertNoThrow(try CLIArguments.check(["champion", "merged", "abc1234", "--main", "release"]))
+    XCTAssertThrowsError(try CLIArguments.check(["champion", "merged", "abc1234", "--branch", "release"]))
     // A champion whose build records no commit can't be checked.
     try championFrom("")
     XCTAssertTrue(refusal { try self.loop.markMerged(commit: merge) }.contains("records no commit"))

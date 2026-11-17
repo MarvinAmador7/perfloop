@@ -45,11 +45,11 @@ public enum CLIArguments {
     spec("champion set", "champion set BUILD [--merged] [--scenario S] [--fixture F] [--note \"…\"]", valued: ["scenario", "fixture", "note"], flags: ["merged"], positional: 1...1),
     spec("champion merged", "champion merged SHA [--main REF]", valued: ["main"], positional: 1...1),
     spec("exp new", "exp new \"<hypothesis>\" [--bench PATH | --build-cmd CMD --bench PATH | --build HASH | --knobs k=v,…] [--scenario S] [--fixture F] "
-         + "[--second-fixture F] [--set k=v] [--via ab|run] [--behaviour-change] [--patch FILE] [--no-screen] [--against ID] [--expect faster|same] [--exe NAME] [runner flags]",
-         valued: ["bench", "exe", "build-cmd", "build", "scenario", "fixture", "second-fixture", "knobs", "set", "via", "patch", "against", "expect"],
+         + "[--second-fixture F] [--set k=v] [--via ab|run] [--behaviour-change] [--patch FILE] [--no-screen] [--against ID] [--exe NAME] [runner flags]",
+         valued: ["bench", "exe", "build-cmd", "build", "scenario", "fixture", "second-fixture", "knobs", "set", "via", "patch", "against"],
          flags: ["behaviour-change", "behavior-change", "no-screen"], positional: 1...1, runner: true),
     spec("exp status", "exp status [ID]", positional: 0...1),
-    spec("exp screen", "exp screen ID [--more [N]] [runner flags]", flags: ["more"], positional: 1...1, runner: true),
+    spec("exp screen", "exp screen ID [runner flags]", positional: 1...1, runner: true),
     spec("exp full", "exp full ID [runner flags]", flags: ["force", "owner"], positional: 1...1, runner: true),
     spec("exp promote", "exp promote ID [--pr URL]", valued: ["pr"], flags: ["owner", "allow-dirty"], positional: 1...1),
     spec("exp abandon", "exp abandon ID [--note \"…\"]", valued: ["note"], positional: 1...1),
@@ -119,8 +119,7 @@ public enum CLIArguments {
           i += 2; continue
         }
         guard s.flags.contains(k) else { throw PLError.usage("unknown argument '\(a)' for \(name)\n\(s.usage)") }
-        // `--more` takes a count when the next word is a number (the CLI's Args.countValued).
-        i += k == "more" && i + 1 < argv.count && Int(argv[i + 1]) != nil ? 2 : 1; continue
+        i += 1; continue
       }
       if skipped < cmdCount { skipped += 1; i += 1; continue }
       positional += 1

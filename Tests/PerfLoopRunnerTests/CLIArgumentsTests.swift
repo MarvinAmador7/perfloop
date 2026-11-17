@@ -61,7 +61,7 @@ final class CLIArgumentsTests: XCTestCase {
                                         "build_cmd": .string("swift build"), "knobs": .string("a=b"), "scenario": .string("s"), "fixture": .string("f"),
                                         "behaviour_change": .bool(true), "screen": .bool(true), "runner": .string("local-idle"), "pr": .string("u"), "note": .string("n"),
                                         "template": .string("time"), "a": .string("champion"), "b": .string("exp/0003"), "set": .array([.string("rows=1..4")]),
-                                        "reps": .number(2), "reference": .string("r"), "build": .string("abc123"), "stage": .string("full"), "wait_s": .number(0), "expect": .string("same"), "more": .number(3)]
+                                        "reps": .number(2), "reference": .string("r"), "build": .string("abc123"), "stage": .string("full"), "wait_s": .number(0)]
     var checked = 0
     for t in s.tools where !["job", "jobs", "cancel_job"].contains(t.name) {
       for variant in [t.properties.keys.filter { $0 != "build" || t.properties["bench"] == nil }, Array(t.required)] {
