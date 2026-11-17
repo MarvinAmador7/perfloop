@@ -73,7 +73,7 @@ final class AcceptanceTests: XCTestCase {
     p[1].b.profiled = true
     p[2].failure = "exit 2"
     let s = Acceptance.screen(p, metric: cpu, guards: [])
-    XCTAssertEqual(s.verdict, "rejected"); XCTAssertEqual(s.objective["a"]?.count, 1)
+    XCTAssertEqual(s.verdict, "inconclusive", "one usable pair can't reject an idea it won"); XCTAssertEqual(s.objective["a"]?.count, 1)
     XCTAssertTrue(Acceptance.unusable(p[1])!.contains("profiler"))
   }
 

@@ -93,11 +93,12 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 | `store add PATH` · `store import DIR --commit SHA` · `store list` · `store gc [--traces]` | the content-addressed build store; gc also deletes `.trace` bundles left in it |
 | `champion` · `champion set BUILD --merged` · `champion merged SHA` | the build to beat, and its chain back to a merged commit |
 | `exp new "<hypothesis>" --bench P \| --build-cmd C --bench P \| --knobs k=v` | a candidate; screens it |
-| `exp status [ID]` · `exp screen ID` · `exp full ID` · `exp promote ID` · `exp abandon ID` | the experiment verbs |
+| `exp new … --expect same` | a feature or guard check: does the change cost anything? `noRegression` \| `regressed` \| `inconclusive`, never promoted (§ Feature PRs) |
+| `exp status [ID]` · `exp screen ID [--more N]` · `exp full ID` · `exp promote ID` · `exp abandon ID` | the experiment verbs; a screen that can't tell says `inconclusive` and takes more pairs (`--more`) or the full |
 | `explain exp/ID` · `ledger` · `causes RESULT.json` | what happened, in words |
 | `suggest [champion\|exp/ID\|RESULT.json]` | ranked hypotheses for the next experiment from the cause records, stacks, profile and sweep, each with its evidence and the share it could remove (leads, not conclusions) |
 | `guards --exp ID` | the correctness guards alone |
-| `session start` | the stopping rules (2 h, 20 candidates, 5 non-promising in a row) count from here |
+| `session start` | the stopping rules (2 h, 20 candidates, 5 non-promising in a row) count from here; `--expect same` checks count toward none |
 | `sweep SCENARIO --set rows=100..5000/500 [--budget-ms X]` | a cost curve over a fixture parameter or knob, with a fitted slope and where it crosses the frame (or your) budget: inside the measured range, extrapolated ×k, or not claimed past 4× |
 | `queue add ID` · `queue list` · `queue remove QID` · `queue run --runner R` · `runner check R` · `runner clean R` | runners: `local` (idle-gated), `ssh://host` |
 | `mcp [--app NAME]` | the loop as MCP tools for a coding agent, stages as jobs (§ Agents over MCP) |
@@ -113,6 +114,30 @@ instead), with or without `--idle`; then, holding the lock, it waits up to `--qu
 machine: at most `--max-load` (30) % of the cores busy and no compiler, linker or test run going. A rep that started
 busy anyway is recorded as `"quiet": false` on its side of the pair, with the busiest processes, and is untrusted
 (`--require-quiet`: stop instead). A rep that drew no frames has no frame metrics and is untrusted too.
+
+### Feature PRs: `--expect same`
+
+The loop's verdicts are an optimiser's (promising, won, promoted). A feature PR asks something else: does the change
+cost anything? `exp new … --expect same` measures the same interleaved pairs, with the same guards and trust rules,
+and decides by a non-inferiority test per metric (the objective, and each frame guard both sides report): the mean
+per-pair difference's 90 % interval (paired t; each end a one-sided 95 % bound) against the metric's margin, the
+smallest change worth calling (5 % of CPU per step, 15 % or 3 ms of latency, 25 % of a frame metric), never the run's
+noise band.
+
+| verdict | when | `next:` |
+|---|---|---|
+| `noRegression` | every interval's high end is under its margin, and no guard failed | it costs nothing: quote the line in the PR |
+| `regressed` | a guard failed, or an interval's low end is over its margin | by how much, on which metric, and where to look |
+| `inconclusive` | an interval straddles a margin | add pairs: `exp screen ID --more 3`, then `exp full ID` (5 + 5 to 10 + 10) |
+
+A faster feature costs nothing too (one-sided: a gain never fails it). These experiments are never promoted, get no
+"drop it", and stay out of the stopping rules. A snapshot that differs from the champion's is a `look:` line, not a
+verdict. Adapters with their own `ab` work unchanged (ADAPTER.md §4 says what the verdict reads from it).
+
+The optimisation screen says `inconclusive` too, when three pairs can't tell (mixed signs, or a band wider than the
+gain: the gain's interval reaches past 5 %): `exp screen ID --more N` adds pairs (up to 10; promising then needs as
+many won as a 3-pair screen's evidence: 5 of 6, 8 of 10), and `exp full ID` runs without an owner flag. `rejected`
+is kept for slower in every pair, a failed guard, or a gain that can't reach 5 % even at its interval's high end.
 
 ### The owner's flags
 

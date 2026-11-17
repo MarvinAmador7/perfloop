@@ -8,7 +8,7 @@ import Glibc
 
 /// The queue (C10): experiments waiting for a free runner. `queue add` appends to `queue.jsonl`; `queue run --runner R`
 /// takes the oldest queued item for R (or any runner), runs its stage (`screen`, `full`, or `auto`: the screen, then
-/// the full when the screen is promising) on R, and records where it ran and why it waited. Results land in the
+/// the full when the screen is promising or couldn't tell) on R, and records where it ran and why it waited. Results land in the
 /// ledger as any stage's do. One `queue run` per runner at a time (a lock in the store).
 extension Loop {
   public var queue: Queue { Queue(path: store.root.appendingPathComponent("queue.jsonl").path) }
@@ -22,7 +22,7 @@ extension Loop {
     // A rejected screen is terminal, but the owner may queue its full anyway (--force).
     if e.state == .rejected && !force && stage != "screen" { throw PLError.refused(OwnerFlags.rejectedScreen(e.id)) }
     if e.state.terminal && !(e.state == .rejected && force && stage != "screen") { throw PLError.refused("exp \(e.id) is \(e.state.rawValue): nothing left to run") }
-    if stage == "full" && e.state == .built { throw PLError.usage("exp \(e.id) isn't screened: queue it with --stage auto (screen, then full when promising)") }
+    if stage == "full" && e.state == .built { throw PLError.usage("exp \(e.id) isn't screened: queue it with --stage auto (screen, then full when promising or inconclusive)") }
     let q = queue
     if let dup = q.items().first(where: { $0.experiment == e.id && ($0.state == "queued" || $0.state == "running") }) {
       throw PLError.refused("exp \(e.id) is already queued as \(dup.id) (\(dup.stage) on \(dup.runner ?? "any runner"))")
@@ -116,7 +116,8 @@ extension Loop {
     case "full": e = try full(e.id, force: it.force)
     default:
       if e.screen == nil || ["error", "untrusted"].contains(e.screen?.verdict ?? "") { e = try screen(e.id) }
-      if [.promising, .full].contains(e.state) || (it.force && e.state == .rejected) { e = try full(e.id, force: it.force) }
+      // A screen that couldn't tell gets its full too (it decides; an expect-same check's extends to 10 + 10).
+      if [.promising, .inconclusive, .full].contains(e.state) || (it.force && e.state == .rejected) { e = try full(e.id, force: it.force) }
     }
     if ungated {
       owner = saved

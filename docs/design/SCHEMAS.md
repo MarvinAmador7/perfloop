@@ -126,15 +126,17 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
 ## 6. `perfloop.experiment/1` and the ledger
 
 ```jsonc
-{ "schema": "perfloop.experiment/1", "id": "0007", "createdAt": "…", "state": "new|built|screened|promising|rejected|full|won|lost|needsReview|promoted|abandoned",
+{ "schema": "perfloop.experiment/1", "id": "0007", "createdAt": "…", "state": "new|built|screened|promising|inconclusive|rejected|full|won|lost|needsReview|promoted|abandoned|noRegression|regressed",
   "hypothesis": "sizeThatFits answers itself so Auto Layout never sizes 16 hosting views",
   "kind": "code" | "knob", "behaviourChange": false,
+  "expect": "same" | null,                                       // same: a feature or guard check (noRegression|regressed|inconclusive), never promoted
   "parent": { "experiment": "0005", "build": { …build… } },     // the champion at creation
   "patch": "exp/0007/patch.diff" | null, "knobs": { "reel.slide": "clip" } | null,
   "build": { …build… } | null,
   "scenario": "step", "fixture": "crew17", "secondFixture": "swarm64",
   "screen": { "pairs": 3, "results": [ "screen/a1.json", "screen/b1.json", … ], "objective": { "a": [..], "b": [..] },
-              "wins": 3, "medianGainPct": 61.2, "band": 8.1, "guardsPassed": true, "guardReviews": null, "verdict": "promising" },   // needsReview: a guard asks the owner
+              "wins": 3, "medianGainPct": 61.2, "band": 8.1, "guardsPassed": true, "guardReviews": null, "verdict": "promising",   // needsReview: a guard asks the owner; inconclusive: more pairs or the full
+              "extendedTo": 6 },                                 // the pairs asked for, when `exp screen --more` added some
   "full":   { "repsPerSide": 5, "extendedTo": 8, "mwuP": 0.004, "effectPct": 58.9, "band": 7.0,
               "frameGuards": { "hitchTimeRatioMsPerS": { "a": 41.0, "b": 2.1, "pass": true }, "longestStretchMs": { … } },
               "verdict": "won" },
@@ -149,6 +151,11 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
   "ownerFlags": [ { "flag": "--force", "via": "env|tty", "command": "exp full", "effect": "ran the full over a screen that rejected it", "at": "…" } ] | null,
   "notes": [ "ran on local, idle-gated; 1 rep interrupted and redone" ] }
 ```
+
+An expect-same stage (screen or full) has `"costs": [ { "metric": "mainThreadCpuMsPerStep", "champion": 40.1, "change": 0.2,
+"low": -0.3, "high": 0.7, "margin": 2.0, "call": "same|worse|unsure" }, … ]`: the objective first, then each frame guard
+both sides report, in the metric's units (`change` is the mean of candidate − champion over the pairs; `low`/`high` its
+one-sided 95 % bounds, null with one pair; `margin` the metric's floor). Its ledger lines carry `"expect": "same"`.
 
 `ledger.jsonl`: one line per state change, `{ "schema": "perfloop.ledger/1", "at": "…", "experiment": "0007",
 "state": "promoted", "objective": { "before": 41.2, "after": 16.9 }, "build": "sha256:…", "by": "agent|owner",

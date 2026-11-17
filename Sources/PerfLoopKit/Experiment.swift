@@ -1,11 +1,14 @@
 import Foundation
 
-/// An experiment's life (SCHEMAS.md §6). `new` → `built` → screened: `promising` | `rejected` → full: `won` | `lost` |
-/// `needsReview` (no decision at 10 + 10, or a guard asks the owner) → `promoted` | `abandoned`.
+/// An experiment's life (SCHEMAS.md §6). `new` → `built` → screened: `promising` | `inconclusive` (more pairs, or the
+/// full) | `rejected` → full: `won` | `lost` | `needsReview` (no decision at 10 + 10, or a guard asks the owner) →
+/// `promoted` | `abandoned`. An expect-same experiment (a feature or guard check, `exp new --expect same`) ends
+/// `noRegression` | `regressed`, or stays `inconclusive`; it never moves the champion.
 public enum ExpState: String, Codable, Sendable, CaseIterable {
   case new, built, screened, promising, rejected, full, won, lost, needsReview, promoted, abandoned
+  case inconclusive, noRegression, regressed
   /// Nothing more will happen to it.
-  public var terminal: Bool { [.rejected, .lost, .promoted, .abandoned].contains(self) }
+  public var terminal: Bool { [.rejected, .lost, .promoted, .abandoned, .noRegression, .regressed].contains(self) }
 }
 
 /// `perfloop.experiment/1`: one hypothesis, one build or knob vector, its screen and full against the champion it
@@ -18,6 +21,10 @@ public struct Experiment: Codable, Sendable, Equatable {
   public var hypothesis: String
   /// code | knob | baseline (the first champion, set by hand).
   public var kind: String
+  /// What the experiment expects of the candidate: nil, faster (the optimisation loop: promising, won, promoted); or
+  /// "same": a feature or guard check that it costs nothing (`noRegression` | `regressed` | `inconclusive`), which
+  /// gets no "drop it", stays out of the stopping rules, and is never promoted.
+  public var expect: String?
   public var behaviourChange: Bool
   /// The champion at creation.
   public var parent: ParentRef?
@@ -168,11 +175,15 @@ public struct Stage: Codable, Sendable, Equatable {
   /// whatever the verdict; nil when every rep could.
   public var untrusted: String?
   public var reasons: [String]
-  /// The candidate is worse than the champion beyond the band (full: and significantly). Never set by noise alone.
+  /// The candidate is worse than the champion beyond the band (full: and significantly; expect same: a cost's low
+  /// bound over its margin). Never set by noise alone.
   public var regression: Bool?
-  // Full only.
+  /// Expect same: what the candidate costs on the objective, then on each frame guard both sides report.
+  public var costs: [CostBound]?
   public var repsPerSide: Int?
+  /// The pairs the stage was asked for, when more than its first look's: the full's extension, a screen's `--more`.
   public var extendedTo: Int?
+  // Full only.
   public var mwuP: Double?
   public var signP: Double?
   public var effectPct: Double?
@@ -183,6 +194,40 @@ public struct Stage: Codable, Sendable, Equatable {
     self.metric = metric; self.pairs = pairs; objective = ["a": [], "b": []]; wins = 0; guardsPassed = true; guardFailures = []
     self.verdict = verdict; reasons = []
   }
+}
+
+/// What a candidate costs on one metric (expect same): the mean per-pair difference, candidate − champion, in the
+/// metric's units (positive: slower, or worse), its 90 % interval (`PairedT`), and the margin it is held to.
+public struct CostBound: Codable, Sendable, Equatable {
+  public var metric: String
+  /// The champion's median over the pairs: what the percentages are of.
+  public var champion: Double
+  public var change: Double
+  /// One-sided 95 % bounds on `change`; nil with one pair.
+  public var low: Double?
+  public var high: Double?
+  /// The smallest change worth calling (`Acceptance.floors`: a share of the champion's median, or the metric's
+  /// absolute floor), never the run's noise band.
+  public var margin: Double
+  /// same: `high` < `margin` · worse: `low` > `margin` · unsure: neither (the interval straddles the margin).
+  public var call: String
+  public init(metric: String, champion: Double, change: Double, low: Double?, high: Double?, margin: Double, call: String) {
+    self.metric = metric; self.champion = champion; self.change = change; self.low = low; self.high = high; self.margin = margin; self.call = call
+  }
+
+  /// `x` as a signed % of the champion's median, or in the metric's units (`units`, or when the median is 0).
+  public func show(_ x: Double, units: Bool = false) -> String {
+    let u = units || champion == 0
+    let v = u ? Stats.round(x, 2) : Stats.round(x / abs(champion) * 100, 1)
+    return (v > 0 ? "+" : "") + Explain.fmt(v) + (u ? "" : " %")
+  }
+  /// "+1.2 % (90 % interval -0.8 % … +3.4 %, margin 5 %)"; `units`: in the metric's units ("+0.4 (… margin 2)").
+  public func text(units: Bool = false) -> String {
+    let m = show(margin, units: units).replacingOccurrences(of: "+", with: "")
+    let ci = low.flatMap { l in high.map { "90 % interval \(show(l, units: units)) … \(show($0, units: units)), " } } ?? "one pair: no interval, "
+    return "\(show(change, units: units)) (\(ci)margin \(m))"
+  }
+  public var text: String { text() }
 }
 
 public struct FrameGuard: Codable, Sendable, Equatable {

@@ -29,6 +29,9 @@ FAKE_BUSY=6.9
 FAKE_KEY=true
 FAKE_RUN_EXIT=0
 FAKE_NORUNS=0
+FAKE_SEQ=
+FAKE_AB_EXIT=0
+FAKE_AB_REGRESSION=false
 
 self="$0"
 log() { if [ -n "$FAKE_LOG" ]; then echo "$*" >> "$FAKE_LOG"; fi; }
@@ -115,6 +118,16 @@ ab)
   if [ "$FAKE_SLEEP" != 0 ]; then sleep "$FAKE_SLEEP"; fi
   s=$$
   ca=$(cpu_of "$a" "$fixture" "" "$s"); cb=$(cpu_of "$b" "$fixture" "" "$((s + 7))")
+  # FAKE_SEQ (a build's, whichever side it runs on): its CPU per `ab` call, in order and cycling (the n-th ab line in
+  # FAKE_LOG), so a test can lay out pairs that win and lose exactly.
+  seqn() { k=$(grep -c "^ab " "$FAKE_LOG"); n=$(echo "$1" | awk -F, '{ print NF }'); echo "$1" | cut -d, -f$(( (k - 1) % n + 1 )); }
+  if [ -n "$FAKE_LOG" ]; then
+    sq=$(val "$a" FAKE_SEQ); if [ -n "$sq" ]; then ca=$(seqn "$sq"); fi
+    sq=$(val "$b" FAKE_SEQ); if [ -n "$sq" ]; then cb=$(seqn "$sq"); fi
+  fi
+  # deskbench's own comparison of the pair (FAKE_AB_REGRESSION, FAKE_AB_EXIT of either build): exit 4 on a regression.
+  abx=$(val "$a" FAKE_AB_EXIT); if [ "$abx" = 0 ]; then abx=$(val "$b" FAKE_AB_EXIT); fi
+  abr=$(val "$a" FAKE_AB_REGRESSION); if [ "$abr" = false ]; then abr=$(val "$b" FAKE_AB_REGRESSION); fi
   summ() { echo "{ \"reps\": 1, \"objective\": { \"name\": \"mainThreadCpuMsPerStep\", \"value\": $2 }, \"mainThreadCpuMsPerStep\": { \"n\": 1, \"median\": $2 },
     \"hitchTimeRatioMsPerS\": { \"median\": $(val "$1" FAKE_HITCH) }, \"longestStretchMs\": { \"median\": 40 }, \"steadyHz\": { \"median\": $(val "$1" FAKE_HZ) },
     \"lateFrames\": { \"median\": $(val "$1" FAKE_LATE) }, \"checksFailed\": [ $(checks "$1" "$sc") ], \"aNewField\": { \"x\": 1 } }"; }
@@ -124,11 +137,12 @@ ab)
   runs="\"runs\": [ $(run_of "$a" A), $(run_of "$b" B) ],"
   if [ "$(val "$a" FAKE_NORUNS)" = 1 ]; then runs=""; fi
   json="{ \"schema\": \"deskbench.ab/1\", \"scenario\": \"$sc\", \"fixture\": \"$fixture\", \"a\": \"$a\", \"b\": \"$b\", \"repsPerSide\": 1, $runs
-  \"summaryA\": $(summ "$a" "$ca"), \"summaryB\": $(summ "$b" "$cb"), \"comparison\": [], \"failures\": [], \"regression\": false, \"improvement\": false,
+  \"summaryA\": $(summ "$a" "$ca"), \"summaryB\": $(summ "$b" "$cb"), \"comparison\": [], \"failures\": [], \"regression\": $abr, \"improvement\": false,
   \"objective\": \"mainThreadCpuMsPerStep\", \"guardsFailed\": [], \"notes\": [], \"buildA\": $(build "$a"), \"buildB\": $(build "$b"), \"counterbalanced\": true,
   \"guardsA\": $(guards "$a" "$sc" "$PERFLOOP_ARTIFACTS/A"), \"guardsB\": $(guards "$b" "$sc" "$PERFLOOP_ARTIFACTS/B") }"
   if [ -n "$out" ]; then echo "$json" > "$out"; fi
   echo "$json"
+  exit "$abx"
   ;;
 run)
   sc=$1; shift; fixture=crew17

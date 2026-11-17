@@ -31,11 +31,16 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
   champion merged SHA                       the champion's PR landed at SHA: the chain restarts there
   exp new "<hypothesis>" [--bench PATH | --build-cmd CMD --bench PATH | --build HASH | --knobs k=v,…]
           [--scenario S] [--fixture F] [--second-fixture F] [--set k=v] [--via ab|run]
-          [--behaviour-change] [--patch FILE] [--no-screen] [--against ID]
-                                            a candidate against the champion; screens it unless --no-screen
+          [--behaviour-change] [--patch FILE] [--no-screen] [--against ID] [--expect faster|same]
+                                            a candidate against the champion; screens it unless --no-screen.
+                                            --expect same: a feature or guard check that it costs nothing (a feature
+                                            PR): no-regression | regressed | inconclusive, never promoted, out of the
+                                            stopping rules
   exp status [ID]                           open experiments and what each needs next (with ID: its explain)
-  exp screen ID                             3 interleaved pairs: promising | rejected (| untrusted: decided nothing)
-  exp full ID [--force]                     5 + 5 (→ 8 + 8 → 10 + 10 while unknown): won | lost | needsReview (| untrusted)
+  exp screen ID [--more [N]]                3 interleaved pairs: promising | inconclusive | rejected (| untrusted:
+                                            decided nothing); --more N (3) adds pairs to a screen that couldn't tell
+  exp full ID [--force]                     5 + 5 (→ 8 + 8 → 10 + 10 while unknown): won | lost | needsReview (| untrusted),
+                                            after a promising or inconclusive screen
   exp promote ID [--owner] [--allow-dirty] [--pr URL]
                                             the champion moves to the experiment's build (--force, --owner,
                                             --allow-dirty, --guard-tolerance: the owner's flags, below)
@@ -84,8 +89,8 @@ runners and the queue (C10): where windowed reps run; results never mix runners
   exp screen|full ID --runner R [--idle S]  R: local (default; idle-gated only with --idle S), ssh://[user@]host[/dir],
                                             vm:tart/NAME (a macOS VM on this Mac; screens only)
   queue add ID [--stage auto|screen|full] [--runner R] [--force]
-                                            auto: the screen, then the full when promising (--force, the owner's: the
-                                            full anyway)
+                                            auto: the screen, then the full when promising or inconclusive (--force,
+                                            the owner's: the full anyway)
   queue list [--json] | queue remove QID
   queue run --runner R [--until HH:MM] [--idle S] [--force]
                                             runs queued stages on R while it is free: local waits until nobody has
@@ -127,10 +132,14 @@ struct Args {
       let a = argv[i]
       if a.hasPrefix("--") {
         let k = String(a.dropFirst(2))
-        if Self.valued.contains(k), i + 1 < argv.count { flags[k, default: []].append(argv[i + 1]); i += 2 } else { flags[k, default: []].append("1"); i += 1 }
+        if Self.valued.contains(k) || k == "expect", i + 1 < argv.count { flags[k, default: []].append(argv[i + 1]); i += 2 }
+        else if Self.countValued.contains(k) { let n = i + 1 < argv.count ? Int(argv[i + 1]) : nil; flags[k, default: []].append(n.map(String.init) ?? ""); i += n == nil ? 1 : 2 }
+        else { flags[k, default: []].append("1"); i += 1 }
       } else { positional.append(a); i += 1 }
     }
   }
+  /// Flags whose value is optional: taken when the next word is a number (`--more`, `--more 5`).
+  static let countValued: Set<String> = ["more"]
   func has(_ k: String) -> Bool { flags[k] != nil }
   func one(_ k: String) -> String? { flags[k]?.last }
   func all(_ k: String) -> [String] { flags[k] ?? [] }
@@ -257,7 +266,7 @@ func run(_ args: Args) throws -> Int32 {
     o.knobs = args.all("knobs").reduce(into: [:]) { $0.merge(Adapter.knobs($1)) { $1 } }
     o.params = args.all("set").reduce(into: [:]) { d, kv in let p = kv.split(separator: "=", maxSplits: 1).map(String.init); if p.count == 2 { d[p[0]] = p[1] } }
     o.behaviourChange = args.has("behaviour-change") || args.has("behavior-change"); o.via = args.one("via"); o.patch = args.one("patch")
-    o.screen = !args.has("no-screen"); o.against = args.one("against")
+    o.screen = !args.has("no-screen"); o.against = args.one("against"); o.expect = args.one("expect")
     let l = try loop(bench: o.bench); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
     show(try l.new(o), l); return 0
   case ("exp", "status"):
@@ -265,9 +274,14 @@ func run(_ args: Args) throws -> Int32 {
     if let id = args[2] { show(try l.store.experiment(id), l) } else { out(json ? PLJSON.encode(l.store.experiments().filter { !$0.state.terminal }) : l.status()) }
     return 0
   case ("exp", "screen"):
-    guard let id = args[2] else { throw PLError.usage("usage: perfloop exp screen ID") }
+    guard let id = args[2] else { throw PLError.usage("usage: perfloop exp screen ID [--more [N]]") }
+    // --more alone adds a screen's worth (3).
+    let more = try args.one("more").map { v -> Int in
+      guard let n = v.isEmpty ? Acceptance.screenPairs : Int(v), n > 0 else { throw PLError.usage("--more takes a number of pairs, e.g. --more 3") }
+      return n
+    }
     let l = try loop(); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
-    show(try l.screen(id), l); return 0
+    show(try l.screen(id, more: more), l); return 0
   case ("exp", "full"):
     guard let id = args[2] else { throw PLError.usage("usage: perfloop exp full ID") }
     let l = try loop(); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
