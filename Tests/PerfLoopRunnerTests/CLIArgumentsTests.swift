@@ -55,13 +55,24 @@ final class CLIArgumentsTests: XCTestCase {
   }
 
   /// Every tool the MCP server offers builds a command line the CLI takes.
+  /// Flags added by other verbs reach this table too: `exp new --expect`, `exp screen --more [N]`.
+  func testExpectAndMoreAreTaken() throws {
+    for argv in [["exp", "new", "h", "--build", "abc", "--expect", "same"], ["exp", "screen", "0002", "--more"], ["exp", "screen", "0002", "--more", "5"],
+                 ["exp", "screen", "0002", "--more", "--runner", "local-idle"]] {
+      XCTAssertNoThrow(try CLIArguments.check(argv), "\(argv)")
+    }
+    XCTAssertThrowsError(try CLIArguments.check(["exp", "new", "h", "--build", "abc", "--expect"]))
+    XCTAssertThrowsError(try CLIArguments.check(["exp", "screen", "0002", "--more", "lots"]))
+  }
+
   func testEveryMCPToolBuildsACommandTheCLITakes() throws {
     let s = MCPServer(cli: "/bin/false", baseArgs: ["--app", "demo"], jobsDir: FileManager.default.temporaryDirectory, lock: "/tmp/l")
     let samples: [String: JSONValue] = ["id": .string("0007"), "target": .string("exp/0007"), "hypothesis": .string("h"), "bench": .string("/b/Bench"),
                                         "build_cmd": .string("swift build"), "knobs": .string("a=b"), "scenario": .string("s"), "fixture": .string("f"),
                                         "behaviour_change": .bool(true), "screen": .bool(true), "runner": .string("local-idle"), "pr": .string("u"), "note": .string("n"),
                                         "template": .string("time"), "a": .string("champion"), "b": .string("exp/0003"), "set": .array([.string("rows=1..4")]),
-                                        "reps": .number(2), "reference": .string("r"), "build": .string("abc123"), "stage": .string("full"), "wait_s": .number(0)]
+                                        "reps": .number(2), "reference": .string("r"), "build": .string("abc123"), "stage": .string("full"), "wait_s": .number(0),
+                                        "expect": .string("same"), "more": .number(3)]
     var checked = 0
     for t in s.tools where !["job", "jobs", "cancel_job"].contains(t.name) {
       for variant in [t.properties.keys.filter { $0 != "build" || t.properties["bench"] == nil }, Array(t.required)] {
