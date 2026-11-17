@@ -7,8 +7,9 @@ import XCTest
 final class LoopTests: FakeBenchCase {
   func testEndToEndAWinIsPromoted() throws {
     let base = try baseline()
+    let built = try appRepo()
     var o = Loop.NewOptions(hypothesis: "sizeThatFits answers itself")
-    o.bench = try bench("cand", ["CPU": "8", "COMMIT": "e6d3625"]); o.screen = false
+    o.bench = try bench("cand", ["CPU": "8", "COMMIT": built]); o.screen = false
     var e = try loop.new(o)
     XCTAssertEqual(e.id, "0001"); XCTAssertEqual(e.state, .built); XCTAssertEqual(e.scenario, "step"); XCTAssertEqual(e.fixture, "crew17")
     XCTAssertEqual(e.secondFixture, "swarm64"); XCTAssertEqual(e.parent?.experiment, "0000"); XCTAssertEqual(e.via, "ab")
@@ -42,7 +43,9 @@ final class LoopTests: FakeBenchCase {
     // The next experiment climbs on the unmerged champion; the owner then merges and the chain restarts.
     var o2 = Loop.NewOptions(hypothesis: "heads first"); o2.bench = try bench("cand2", ["CPU": "1.5"]); o2.screen = false
     XCTAssertEqual(try loop.new(o2).parent?.experiment, "0001")
-    XCTAssertEqual(try loop.markMerged(commit: "9bcd41a").chain, "0001 (merged 9bcd41a)")
+    let merge = try mergeWork()
+    XCTAssertEqual(try loop.markMerged(commit: String(merge.prefix(7))).champion.chain, "0001 (merged \(merge.prefix(12)))")
+    XCTAssertEqual(store.champion()?.mergedAncestor, merge, "the full commit, as git resolved it")
     XCTAssertThrowsError(try loop.promote("0002"))                      // not won (not even screened)
   }
 

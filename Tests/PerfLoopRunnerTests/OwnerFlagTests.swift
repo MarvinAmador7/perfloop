@@ -47,7 +47,7 @@ final class OwnerFlagTests: FakeBenchCase {
     XCTAssertTrue(asked()[0].contains("An agent answers no and asks the owner"), asked()[0])
     for answer in ["no", "y", "", nil] as [String?] {
       XCTAssertThrowsError(try gate(terminal: true, answer: answer).0.check(flags: ["force"], command: "exp full")) { e in
-        XCTAssertEqual((e as? PLError)?.code, 6); XCTAssertTrue("\(e)".contains("not confirmed: nothing ran"), "\(e)")
+        XCTAssertEqual((e as? PLError)?.code, 6); XCTAssertTrue("\(e)".contains("not confirmed (only a typed yes confirms): nothing ran"), "\(e)")
       }
     }
     // The variable needs no prompt.
@@ -157,5 +157,136 @@ final class OwnerFlagTests: FakeBenchCase {
     let s = MCPServer(cli: "/bin/echo", jobsDir: tmp.appendingPathComponent("jobs"))
     s.env = ["PERFLOOP_OWNER": "1", "OTHER": "x"]
     XCTAssertNil(s.childEnv["PERFLOOP_OWNER"]); XCTAssertEqual(s.childEnv["OTHER"], "x")
+  }
+
+  // MARK: the champion
+
+  func testChampionSetIsTheOwnersAndPassesTheSameGate() throws {
+    // An agent's shell: refused, with the agent's own way (a win, promoted), and nothing ran.
+    for env in [[:], ["PERFLOOP_OWNER": "0"]] {
+      let (g, asked) = gate(env: env)
+      XCTAssertThrowsError(try g.check(command: "champion set")) { e in
+        XCTAssertEqual((e as? PLError)?.code, 6)
+        let m = "\(e)"
+        XCTAssertTrue(m.contains("`perfloop champion set` is the owner's: it picks the champion, the build every later verdict is judged against"), m)
+        XCTAssertTrue(m.contains("nothing ran"), m); XCTAssertTrue(m.contains("If you are an agent, stop: don't run it, don't set PERFLOOP_OWNER"), m)
+        XCTAssertTrue(m.contains("only when one of your experiments wins and is promoted (perfloop exp promote ID)"), m)
+        XCTAssertTrue(m.contains("ask the owner to set it"), m)
+      }
+      XCTAssertEqual(asked(), [])
+    }
+    // The owner: the variable, or a yes at a terminal (and only a yes).
+    XCTAssertEqual(try gate(env: ["PERFLOOP_OWNER": "1"]).0.check(command: "champion set"), OwnerAuth(flags: ["champion set"], via: "env", command: "champion set"))
+    let (yes, asked) = gate(terminal: true, answer: "yes")
+    XCTAssertEqual(try yes.check(command: "champion set").via, "tty")
+    XCTAssertTrue(asked()[0].contains("`perfloop champion set` is the owner's"), asked()[0])
+    XCTAssertThrowsError(try gate(terminal: true, answer: "y").0.check(command: "champion set")) { XCTAssertTrue("\($0)".contains("champion set not confirmed"), "\($0)") }
+    // exp replay --go sets the plan's champion: the same gate.
+    XCTAssertThrowsError(try gate().0.check(command: "exp replay")) { e in
+      XCTAssertTrue("\(e)".contains("sets the plan's champion"), "\(e)"); XCTAssertTrue("\(e)".contains("--dry-run"), "\(e)")
+    }
+  }
+
+  func testTheGateSaysATypedYesIsTheOnlyConfirmation() throws {
+    let (g, asked) = gate(terminal: true, answer: nil)
+    XCTAssertThrowsError(try g.check(flags: ["force"], command: "exp full")) { XCTAssertTrue("\($0)".contains("not confirmed (only a typed yes confirms): nothing ran"), "\($0)") }
+    XCTAssertTrue(asked()[0].contains("Type yes to go on (anything else stops it; this typed yes is the only confirmation perfloop asks for)"), asked()[0])
+    XCTAssertThrowsError(try gate().0.check(flags: ["force"], command: "exp full")) { e in
+      let m = "\(e)"
+      XCTAssertTrue(m.contains("no terminal to type yes at"), m)
+      XCTAssertTrue(m.contains("Only the owner confirms, by typing yes when they run it at their own terminal (or with PERFLOOP_OWNER=1 on their own command line); there is no other way"), m)
+    }
+  }
+
+  func testChampionSetIsRecordedLikeAnOwnerFlag() throws {
+    let e = try store.add(try bench("base", ["CPU": "40"]))
+    loop.owner = OwnerAuth(flags: ["champion set"], via: "env", command: "champion set")
+    let c = try loop.setChampion(build: e.build.hash!, merged: true, scenario: "step", fixture: "crew17")
+    // champion.json says who set it and how.
+    XCTAssertEqual(c.setBy?.flag, "champion set"); XCTAssertEqual(c.setBy?.via, "env")
+    XCTAssertEqual(store.champion()?.setBy, c.setBy)
+    XCTAssertTrue(c.setBy!.effect.contains("every later verdict is judged against it"), c.setBy!.effect)
+    // The baseline experiment, its ledger line, explain and status, as an owner flag's use.
+    let base = try store.experiment(c.experiment)
+    XCTAssertEqual(base.ownerFlags?.map(\.flag), ["champion set"]); XCTAssertEqual(base.forced, true)
+    let l = try XCTUnwrap(store.ledger.entries().last)
+    XCTAssertEqual(l.ownerFlags, ["champion set"]); XCTAssertEqual(l.ownerVia, "env"); XCTAssertEqual(l.by, "owner")
+    XCTAssertTrue(l.text.contains("OWNER FLAG champion set (PERFLOOP_OWNER=1)"), l.text)
+    XCTAssertTrue(loop.explain(base).contains("owner flag: champion set (PERFLOOP_OWNER=1, champion set"), loop.explain(base))
+    XCTAssertTrue(loop.status().contains("OWNER FLAG champion set"), loop.status())
+    // A champion that wins its place has no setBy.
+    var o = Loop.NewOptions(hypothesis: "faster"); o.bench = try bench("fast", ["CPU": "8"])
+    let won = try loop.full(try loop.new(o).id)
+    loop.owner = nil
+    _ = try loop.promote(won.id)
+    XCTAssertNil(store.champion()?.setBy)
+    // champion.json from before the field reads as before.
+    var old = try XCTUnwrap(store.champion()); old.setBy = nil
+    XCTAssertFalse(PLJSON.encode(old).contains("setBy"))
+  }
+
+  // MARK: champion merged: checked, not gated
+
+  /// A champion built from `built` (the work branch's commit, in the app's checkout).
+  func championFrom(_ built: String) throws {
+    let e = try store.add(try bench("base", ["CPU": "40", "COMMIT": built]))
+    try loop.setChampion(build: e.build.hash!, merged: false, scenario: "step", fixture: "crew17")
+  }
+
+  func refusal(_ f: () throws -> Any) -> String {
+    var m = ""
+    XCTAssertThrowsError(try f()) { e in XCTAssertEqual((e as? PLError)?.code, 6, "\(e)"); m = "\(e)" }
+    return m
+  }
+
+  func testChampionMergedIsCheckedAgainstMainAndTheBuildCommit() throws {
+    // Not a checkout: nothing can be checked.
+    try championFrom("abc1234")
+    XCTAssertTrue(refusal { try self.loop.markMerged(commit: "abc1234") }.contains("isn't a git checkout"))
+
+    let built = try appRepo()
+    try championFrom(built)
+    let firstMain = try git("rev-parse", "main")
+    // An unknown commit.
+    XCTAssertTrue(refusal { try self.loop.markMerged(commit: "0123456789abcdef") }.contains("isn't a commit in this checkout"))
+    XCTAssertTrue(refusal { try self.loop.markMerged(commit: "--all") }.contains("isn't a commit in this checkout"))
+    // The build commit itself, still only on the PR's branch: not on main.
+    var m = refusal { try self.loop.markMerged(commit: built) }
+    XCTAssertTrue(m.contains("is not on main (checked: git merge-base --is-ancestor"), m); XCTAssertTrue(m.contains("git fetch origin"), m)
+    // A commit on main that doesn't contain the build: not the PR's merge.
+    m = refusal { try self.loop.markMerged(commit: firstMain) }
+    XCTAssertTrue(m.contains("doesn't contain champion"), m); XCTAssertTrue(m.contains("build commit \(built.prefix(12))"), m)
+    XCTAssertTrue(m.contains("squashed or rebased"), m); XCTAssertTrue(m.contains("perfloop champion set BUILD --merged"), m)
+    XCTAssertEqual(store.champion()?.merged, false, "a refusal changes nothing")
+    XCTAssertFalse(store.ledger.entries().contains { $0.state == "merged" })
+
+    // The PR merged: main has a commit that contains the build. Anyone may say so (no owner flag).
+    let merge = try mergeWork()
+    // origin/main is what counts when there is one: a stale one refuses until it is fetched.
+    try git("update-ref", "refs/remotes/origin/main", firstMain)
+    m = refusal { try self.loop.markMerged(commit: merge) }
+    XCTAssertTrue(m.contains("is not on origin/main"), m)
+    try git("update-ref", "refs/remotes/origin/main", merge)
+    let (c, v) = try loop.markMerged(commit: merge)
+    XCTAssertTrue(c.merged); XCTAssertEqual(c.mergedAncestor, merge); XCTAssertEqual(c.parents, [])
+    XCTAssertEqual(v.checked, "checked: on origin/main, contains the build commit \(built.prefix(12))")
+    let l = try XCTUnwrap(store.ledger.entries().last)
+    XCTAssertEqual(l.state, "merged"); XCTAssertEqual(l.by, "agent"); XCTAssertNil(l.ownerFlags)
+    XCTAssertEqual(l.note, "merged at \(merge) (\(v.checked))")
+    // --main names another branch.
+    try git("branch", "release", firstMain)
+    XCTAssertTrue(refusal { try self.loop.markMerged(commit: merge, main: "release") }.contains("is not on release"))
+    // A champion whose build records no commit can't be checked.
+    try championFrom("")
+    XCTAssertTrue(refusal { try self.loop.markMerged(commit: merge) }.contains("records no commit"))
+  }
+
+  func testNoMCPToolSetsOrMergesTheChampion() throws {
+    let s = MCPServer(cli: "/bin/echo", jobsDir: tmp.appendingPathComponent("jobs"))
+    let names = s.tools.map(\.name)
+    for n in names { XCTAssertFalse(n.contains("set") || n.contains("merge") || n.contains("replay"), n) }
+    let champion = try XCTUnwrap(s.tools.first { $0.name == "champion" })
+    XCTAssertEqual(try champion.args([:]), ["champion"])
+    XCTAssertEqual(try champion.args(["set": .string("x"), "merged": .string("abc")]), ["champion"], "arguments it doesn't declare are ignored")
   }
 }

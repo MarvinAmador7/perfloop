@@ -43,6 +43,29 @@ class FakeBenchCase: XCTestCase {
     return dir.path
   }
 
+  /// git in the app's checkout (`loop.cwd`, the test's directory), as a test's own user; its output, trimmed.
+  @discardableResult
+  func git(_ args: String...) throws -> String {
+    let o = try Adapter.spawn("/usr/bin/env", ["git", "-C", tmp.path, "-c", "user.name=perfloop-tests", "-c", "user.email=tests@example.com", "-c", "commit.gpgsign=false",
+                                                "-c", "init.defaultBranch=main"] + args, quiet: true)
+    guard o.status == 0 else { throw PLError.harness("git \(args.joined(separator: " ")) exited \(o.status)") }
+    return o.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// The app's checkout: `main` with a first commit, and a work branch with the champion's commit on it (not merged).
+  /// Returns that commit.
+  func appRepo() throws -> String {
+    try git("init", "-q"); try git("commit", "-q", "--allow-empty", "-m", "the app")
+    try git("checkout", "-q", "-b", "work"); try git("commit", "-q", "--allow-empty", "-m", "the fix")
+    return try git("rev-parse", "HEAD")
+  }
+
+  /// Merges `work` into `main` (a merge commit, as a PR's merge button makes one) and returns the merge.
+  func mergeWork() throws -> String {
+    try git("checkout", "-q", "main"); try git("merge", "-q", "--no-ff", "work", "-m", "Merge the fix")
+    return try git("rev-parse", "HEAD")
+  }
+
   func adapterCalls(_ verb: String) -> [String] {
     ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init).filter { $0.hasPrefix(verb + " ") }
   }

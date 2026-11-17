@@ -32,13 +32,16 @@ public struct Manifest: Codable, Sendable, Equatable {
   /// Paths (substrings of a patch's file names) that must never be recorded in an experiment's patch: the app's
   /// secrets and private state. `.trace` files are refused whatever this says.
   public var privatePaths: [String]?
+  /// Environment variables the adapter's `profile` needs beyond the allowlist (TraceEnv): `perfloop profile` starts it
+  /// with those and nothing else, since a trace holds the recorded process's environment. Secret-like names never pass.
+  public var profileEnv: [String]?
 
   public init(app: String, adapter: String, build: Build?, scenarios: [ScenarioEntry], fixtures: [JSONValue] = [], knobs: [KnobEntry] = [], source: String? = "describe") {
     schema = "perfloop.manifest/1"; self.protocol = 1; self.app = app; self.adapter = adapter; self.build = build
     self.scenarios = scenarios; self.fixtures = fixtures; self.knobs = knobs; self.source = source
   }
 
-  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards, gestures, verbs, privatePaths }
+  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards, gestures, verbs, privatePaths, profileEnv }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     schema = try c.decodeIfPresent(String.self, forKey: .schema) ?? "perfloop.manifest/1"
@@ -57,6 +60,7 @@ public struct Manifest: Codable, Sendable, Equatable {
     isolationGuards = try? c.decodeIfPresent([String].self, forKey: .isolationGuards)
     verbs = try? c.decodeIfPresent([String].self, forKey: .verbs)
     privatePaths = try? c.decodeIfPresent([String].self, forKey: .privatePaths)
+    profileEnv = try? c.decodeIfPresent([String].self, forKey: .profileEnv)
   }
 
   /// Whether the adapter answers `verb` (adapters from before `verbs` answer deskbench's).

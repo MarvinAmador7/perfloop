@@ -5,8 +5,13 @@ import Foundation
 /// (`PERFLOOP_OWNER=1` in its environment, or a yes typed at a terminal), and every run that used one says so in
 /// `experiment.json`, the ledger, the verdict, `explain` and `exp status`. That is a speed bump and a record, not
 /// security: an agent's shell can set the variable too, and the record is what makes it visible in a PR.
+///
+/// The owner's commands (`champion set`, `exp replay --go`) pass the same gate: they pick the champion, the build every
+/// later verdict is judged against, so an agent never runs them either.
 public enum OwnerFlags {
   public static let all = ["force", "owner", "guard-tolerance", "allow-dirty"]
+  /// Commands that are the owner's whatever their flags (OwnerGate.check(command:)).
+  public static let commands = ["champion set", "exp replay"]
 
   /// What the flag does, for the prompt and the refusal.
   public static func effect(_ flag: String, command: String) -> String {
@@ -18,6 +23,8 @@ public enum OwnerFlags {
     case "owner": return "it acts as the owner: approves a promotion or a full that waits for the owner, clears a snapshot review"
     case "guard-tolerance": return "it changes what a correctness guard tolerates"
     case "allow-dirty": return "it promotes a build with uncommitted changes"
+    case "champion set": return "it picks the champion, the build every later verdict is judged against"
+    case "exp replay": return "it sets the plan's champion, the build every later verdict is judged against, and promotes the plan's builds, dirty ones too"
     default: return "it overrides what judges the agent"
     }
   }
@@ -41,6 +48,10 @@ public enum OwnerFlags {
       return "a snapshot over tolerance is the owner's to look at: report it with the PNGs and the diff its explain.txt lists"
     case "allow-dirty":
       return "commit, rebuild, and measure the build again in a new experiment"
+    case "champion set":
+      return "the champion moves only when one of your experiments wins and is promoted (perfloop exp promote ID); if there is no champion yet, or it looks wrong, ask the owner to set it"
+    case "exp replay":
+      return "print the plan (perfloop exp replay PLAN.json --dry-run) and ask the owner to run it"
     default: return "stop and ask the owner"
     }
   }
@@ -48,7 +59,7 @@ public enum OwnerFlags {
 
 /// How a shell showed it was the owner's: `env` (`PERFLOOP_OWNER=1`) or `tty` (a yes typed at a terminal).
 public struct OwnerAuth: Codable, Sendable, Equatable {
-  /// The owner flags as passed: `--force`, `--owner`, ….
+  /// The owner flags as passed: `--force`, `--owner`, …; or the owner command (`champion set`).
   public var flags: [String]
   public var via: String
   /// The command they came with (`exp full`, `queue add`, …).
@@ -64,9 +75,10 @@ public struct OwnerAuth: Codable, Sendable, Equatable {
   }
 }
 
-/// One use of an owner flag that changed what happened to an experiment (`experiment.json` → `ownerFlags`).
+/// One use of an owner flag that changed what happened to an experiment (`experiment.json` → `ownerFlags`), or of an
+/// owner command (`champion set`: on the baseline experiment and `champion.json` → `setBy`).
 public struct OwnerFlagUse: Codable, Sendable, Equatable {
-  /// `--force`, `--owner`, `--guard-tolerance` or `--allow-dirty`.
+  /// `--force`, `--owner`, `--guard-tolerance` or `--allow-dirty`; `champion set` for the command.
   public var flag: String
   /// env | tty (OwnerAuth), or `library` when a caller of PerfLoopRunner set it without the CLI's gate.
   public var via: String

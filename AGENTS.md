@@ -25,6 +25,7 @@ perfloop exp new "<one-sentence hypothesis>" --build-cmd "<build>" --bench <benc
 perfloop exp new "<hypothesis>" --knobs name=value          # an idea the app already has as a knob: no rebuild
 perfloop exp full <id>                       # when the screen says promising
 perfloop exp promote <id>                    # when the full says won; then a PR with explain.txt and the patch
+perfloop champion merged <sha>               # once that PR is on main (git fetch first): checked, from the app's checkout
 perfloop ledger                              # what was tried, by whom, with what result
 ```
 
@@ -49,8 +50,10 @@ perfloop ledger                              # what was tried, by whom, with wha
   that changes them is judged by the old ones anyway; changes to the bench are their own PR for the owner.
 - **Never make the app aware of the bench**: no `PERFLOOP_` checks outside knobs, no fixture names, no "if measured"
   branches. A blank row that is fast is still a blank row; the guards exist because the search will find it.
-- **Never pass `--guard-tolerance`, `--owner`, `--force` or `--allow-dirty`, and never set `PERFLOOP_OWNER`.** They
-  exist for the owner: the CLI refuses them (exit 6) unless `PERFLOOP_OWNER=1` is set or someone types yes at a
+- **Never pass `--guard-tolerance`, `--owner`, `--force` or `--allow-dirty`, never run `perfloop champion set` or
+  `perfloop exp replay --go`, and never set `PERFLOOP_OWNER`.** They exist for the owner (the champion is what every
+  verdict is judged against: the owner sets the first one, and it moves only when your experiment wins and is
+  promoted): the CLI refuses them (exit 6) unless `PERFLOOP_OWNER=1` is set or someone types yes at a
   terminal, and a refusal means stop and do what it says, not find another way. If the owner wants one used, they run
   it themselves. Every use is recorded in the experiment, the ledger and `explain` (`FORCED (owner flag)`); if one
   was used on your experiments, your PR says so.
@@ -101,7 +104,8 @@ traces are hundreds of MB. Delete what you made once its numbers are recorded.
 
 Traces: `perfloop profile` deletes the `.trace` once exported and its `trace:` line says what is on disk: `deleted`, or
 `KEPT at <path>` (`--keep-trace`, or a delete that failed: the notes say why). A kept trace holds the recorded process's
-environment, tokens included: delete it once read (`perfloop store gc --traces`). `perfloop doctor` fails while a stray
+environment: perfloop starts the profile with a scrubbed one (README: Where things live), but delete it once read
+anyway (`perfloop store gc --traces`). `perfloop doctor` fails while a stray
 one is in the store; `perfloop store gc` deletes those.
 
 ## Ask the owner

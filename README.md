@@ -46,7 +46,7 @@ swift build -c release --product MyAppBench
 perfloop doctor --bench .build/release/MyAppBench
 export PERFLOOP_APP=myapp
 perfloop store add .build/release/MyAppBench
-perfloop champion set <hash> --merged
+perfloop champion set <hash> --merged                     # you, the owner: it asks you to type yes (§ The owner's flags)
 # hand PROGRAM.md and PerfLoop's AGENTS.md to your coding agent
 ```
 
@@ -91,7 +91,7 @@ host answers the runner's whole contract (`ADAPTER.md`): `list`, `describe`, `ru
 | `init --app NAME [--dir D] [--package]` | scaffold a bench target and PROGRAM.md |
 | `describe --bench PATH` | the adapter's manifest |
 | `store add PATH` · `store import DIR --commit SHA` · `store list` · `store gc [--traces]` | the content-addressed build store; gc also deletes `.trace` bundles left in it |
-| `champion` · `champion set BUILD --merged` · `champion merged SHA` | the build to beat, and its chain back to a merged commit |
+| `champion` · `champion set BUILD --merged` · `champion merged SHA [--main REF]` | the build to beat, and its chain back to a merged commit. `set` is the owner's (the owner flags' gate); `merged` is checked in the app's checkout: SHA must be on main (`origin/main`, else `main`, or `--main REF`) and contain the champion's build commit |
 | `exp new "<hypothesis>" --bench P \| --build-cmd C --bench P \| --knobs k=v` | a candidate; screens it |
 | `exp status [ID]` · `exp screen ID` · `exp full ID` · `exp promote ID` · `exp abandon ID` | the experiment verbs |
 | `explain exp/ID` · `ledger` · `causes RESULT.json` | what happened, in words |
@@ -112,22 +112,29 @@ On this Mac, every windowed verb waits while the screen is locked, before taking
 instead), with or without `--idle`; then, holding the lock, it waits up to `--quiet-timeout` (60 s) for a quiet
 machine: at most `--max-load` (30) % of the cores busy and no compiler, linker or test run going. A rep that started
 busy anyway is recorded as `"quiet": false` on its side of the pair, with the busiest processes, and is untrusted
-(`--require-quiet`: stop instead). A rep that drew no frames has no frame metrics and is untrusted too.
+(`--require-quiet`: stop instead). A rep that drew no frames has no frame metrics and is untrusted too. On other
+runners the quiet gate reads the machine whose load distorts the reps, never this one: an `ssh://` runner's remote Mac
+(`iostat` and `ps` there), a `vm:` runner's host (this Mac: the guest's own load misses the host's contention). Same
+flags, same thresholds.
 
 ### The owner's flags
 
 `--force` (a full over a rejected screen, or `queue run` without the idle gate), `--owner` (decide what waits for the
 owner), `--guard-tolerance` (loosen a guard) and `--allow-dirty` (promote a dirty build) override what judges the
-agent, so they are yours, never your agent's. The CLI honours one only when the shell shows it is yours:
-`PERFLOOP_OWNER=1` in the environment (scripts), or a yes typed at the prompt when stdin and stderr are a terminal.
-Anything else is refused (exit 6) with what the agent should do instead, and the refusal never names a way around it.
+agent, so they are yours, never your agent's. So are two commands: `champion set` (it picks the build every later
+verdict is judged against: you set the first champion, and reset it) and `exp replay --go` (it sets the plan's
+champion). The CLI honours one only when the shell shows it is yours: `PERFLOOP_OWNER=1` in the environment (scripts),
+or a yes typed at the prompt when stdin and stderr are a terminal. That is the whole confirmation: no Touch ID, no
+password. Anything else is refused (exit 6) with what the agent should do instead, and the refusal never names a way
+around it. `champion merged SHA` is not gated: it is checked (SHA on main, containing the champion's build commit).
 
 This is a speed bump and a record, not security. An agent's shell usually has no terminal, so it never sees the
 prompt, but it can set an environment variable like anyone else. What makes a use visible is the record: every
 experiment an owner flag changed gets `forced: true` and `ownerFlags` (which flag, `env` or `tty`, the command, what it
 changed) in its `experiment.json`; its ledger lines carry `ownerFlags`/`ownerVia`; and the verdict, `explain`,
-`exp status` and `ledger` print `FORCED (owner flag)` / `OWNER FLAG --force (PERFLOOP_OWNER=1)`. Look for them in an
-agent's PR. Don't export `PERFLOOP_OWNER` in a shell profile your agents inherit: set it per command.
+`exp status` and `ledger` print `FORCED (owner flag)` / `OWNER FLAG --force (PERFLOOP_OWNER=1)`. A `champion set` is
+recorded the same way on its baseline experiment and ledger line (`OWNER FLAG champion set`), and in `champion.json`
+(`setBy`, which `perfloop champion` prints). Look for them in an agent's PR. Don't export `PERFLOOP_OWNER` in a shell profile your agents inherit: set it per command.
 
 ## Agents over MCP
 
@@ -143,7 +150,7 @@ The tools are the agent's verbs (`status`, `explain`, `suggest`, `new_experiment
 waits for it on the server's side (up to 60 s a call), so the agent never writes a sleep loop, and every job still
 running when the session ends is killed with its windows. Local runs hold the window lock (§ The window lock;
 `mcp --lock DIR` moves it). The owner's flags (`--force`, `--owner`, `--guard-tolerance`, `--allow-dirty`) are no tool's
-arguments, no value may start with `-`, and the CLI children never see `PERFLOOP_OWNER`. Job logs are in the store's `jobs/`. The shell CLI stays the reference;
+arguments, no tool sets, merges or replays the champion (`champion` only reads it), no value may start with `-`, and the CLI children never see `PERFLOOP_OWNER`. Job logs are in the store's `jobs/`. The shell CLI stays the reference;
 the server runs it for every call.
 
 ## The window lock
@@ -199,8 +206,13 @@ organisations) and an image: `tart clone ghcr.io/cirruslabs/macos-tahoe-vanilla:
   Never in a repo; a project-local `.perfloop/` is gitignored.
 - Traces (`.trace`) carry the recorded process's environment, tokens included: never commit or share them; the store
   records their paths only. `perfloop profile` deletes each once exported and checks it is gone (`--keep-trace` keeps
-  it, and says where); `perfloop doctor` fails on one left in the store, and `perfloop store gc` deletes those
-  (`--traces`: the kept ones too).
+  it, and says where); `perfloop doctor` fails on one left in the store (and warns on a kept one), and `perfloop store
+  gc` deletes those (`--traces`: the kept ones too). The recorded process gets a scrubbed environment, so a kept trace
+  carries no tokens: only `HOME`, `USER`, `LOGNAME`, `PATH`, `SHELL`, `TMPDIR`, `LANG`, `LC_*`, `TERM`, `TZ`,
+  `__CF_USER_TEXT_ENCODING`, `DEVELOPER_DIR`, the bench's own `PERFLOOP_` variables (knobs, guards, artifacts, store,
+  window lock, sampler; never `PERFLOOP_OWNER`) and what the adapter's manifest declares in `profileEnv`. A name that
+  looks like a secret (`TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `AUTH`, `SESSION`, `COOKIE`, `CREDENTIAL`, …) never
+  passes, declared or not.
 - Schemas: `ADAPTER.md` §8 lists every document and its version.
 
 ## The package

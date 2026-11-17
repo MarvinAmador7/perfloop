@@ -18,11 +18,12 @@ final class RunnerTests: FakeBenchCase {
     try? FileManager.default.createSymbolicLink(at: bin.appendingPathComponent("open"), withDestinationURL: Self.fixtures.appendingPathComponent("fake-open.sh"))
     try? FileManager.default.createSymbolicLink(at: bin.appendingPathComponent("ioreg"), withDestinationURL: Self.fixtures.appendingPathComponent("fake-ioreg.sh"))
     try? FileManager.default.createSymbolicLink(at: bin.appendingPathComponent("sysctl"), withDestinationURL: Self.fixtures.appendingPathComponent("fake-sysctl.sh"))
+    for t in ["iostat", "ps"] { try? FileManager.default.createSymbolicLink(at: bin.appendingPathComponent(t), withDestinationURL: Self.fixtures.appendingPathComponent("fake-load.sh")) }
     setenv("FAKE_REMOTE_LOCKED", tmp.appendingPathComponent("mini-locked").path, 1)
     setenv("FAKE_REMOTE_HOME", remoteHome.path, 1); setenv("FAKE_BIN", bin.path, 1); setenv("FAKE_SSH_LOG", sshLog.path, 1)
   }
   override func tearDownWithError() throws {
-    for k in ["FAKE_REMOTE_HOME", "FAKE_BIN", "FAKE_SSH_LOG", "FAKE_SSH_FAIL", "FAKE_REMOTE_LOCKED", "FAKE_REMOTE_IDLE", "FAKE_REMOTE_TOUCH"] { unsetenv(k) }
+    for k in ["FAKE_REMOTE_HOME", "FAKE_BIN", "FAKE_SSH_LOG", "FAKE_SSH_FAIL", "FAKE_REMOTE_LOCKED", "FAKE_REMOTE_IDLE", "FAKE_REMOTE_TOUCH", "FAKE_REMOTE_LOAD"] { unsetenv(k) }
     try super.tearDownWithError()
   }
 
@@ -148,6 +149,7 @@ final class RunnerTests: FakeBenchCase {
     let e = try candidate()
     let v = try XCTUnwrap(try Runners.make("vm:tart/pl", store: store) as? VMRunner)
     v.ssh = Self.fixtures.appendingPathComponent("fake-ssh.sh").path; v.rsync = Self.fixtures.appendingPathComponent("fake-rsync.sh").path; v.wake = false; v.settleS = 0; v.bootTimeout = 5
+    v.load = ScriptedLoadSource { LoadReading(busyPct: 5) }               // the host's load, never this Mac's real one
     XCTAssertEqual(v.name, "vm:tart/pl")
     let lines = try v.check()
     XCTAssertTrue(lines[0].hasPrefix("vm:tart/pl: ") && lines[0].contains("FakeMac1,1"), "\(lines)"); XCTAssertTrue(lines.last!.contains("booted by this check"))
@@ -166,6 +168,82 @@ final class RunnerTests: FakeBenchCase {
     // No such VM, or no tart: what to do about it.
     setenv("FAKE_TART_VM", "other", 1)
     XCTAssertThrowsError(try (try Runners.make("vm:tart/pl", store: store) as! VMRunner).connect()) { XCTAssertTrue("\($0)".contains("tart clone"), "\($0)") }
+  }
+
+  /// The quiet gate on an ssh runner reads the remote Mac (iostat and ps there, through ssh), where the reps run, never
+  /// this one: a busy mini makes the reps not quiet, whatever this Mac is doing.
+  func testTheSSHQuietGateReadsTheRemoteMac() throws {
+    try baseline()
+    let e = try candidate()
+    let load = tmp.appendingPathComponent("mini-load")
+    try "load=80 busy=swift-test:95".write(to: load, atomically: true, encoding: .utf8)
+    setenv("FAKE_REMOTE_LOAD", load.path, 1)
+    let r = try sshRunner()
+    XCTAssertEqual(r.quiet, QuietGate(), "on by default, with the default thresholds")
+    r.quiet = QuietGate(timeout: 0.2, retryTimeout: 0.05); r.quietPoll = 0.05
+    var waits: [String] = []
+    r.onWait = { waits.append($0) }
+    let lines = try r.check()
+    XCTAssertTrue(lines.contains { $0.hasPrefix("quiet gate, on fake-mini: not quiet: 80 % of the cores busy (> 30 %); building: swift-test") }, "\(lines)")
+    loop.runner = r
+    let x = try loop.screen(e.id)
+    XCTAssertEqual(x.screen?.verdict, "untrusted", "busy there: decided nothing")
+    for p in x.screen?.pairs ?? [] {
+      XCTAssertEqual(p.a.quiet, false); XCTAssertEqual(p.b.busyPct, 80); XCTAssertEqual(p.b.busy?.first, "swift-test 95 %")
+      XCTAssertFalse(p.b.busy?.contains { $0.hasPrefix("sshd") } ?? true, "the session's own sshd is left out")
+    }
+    XCTAssertTrue(waits.contains { $0.hasPrefix("waiting up to 0 s for a quiet machine on fake-mini: 80 % of the cores busy") }, "\(waits)")
+    XCTAssertTrue(waits.contains { $0.hasPrefix("not quiet on fake-mini after 0 s (80 %") }, "\(waits)")
+    XCTAssertTrue(sshCalls("ssh mar@fake-mini").contains { $0.contains("iostat") }, "read there, through ssh")
+
+    // Quiet there: the reps are quiet, with the remote reading on them.
+    try "load=4".write(to: load, atomically: true, encoding: .utf8)
+    let e2 = try candidate(cpu: "9")
+    let y = try loop.screen(e2.id)
+    XCTAssertEqual(y.state, .promising, "\(y.screen?.reasons ?? [])")
+    XCTAssertTrue(y.screen!.pairs.allSatisfy { $0.a.quiet == true && $0.b.machine?.busyPct == 4 })
+
+    // --require-quiet stops instead, and says where it looked.
+    try "load=90".write(to: load, atomically: true, encoding: .utf8)
+    r.quiet = QuietGate(timeout: 0.1, require: true)
+    XCTAssertThrowsError(try loop.screen(try candidate(cpu: "7").id)) { err in
+      guard case RunnerStop.notQuiet = err else { return XCTFail("\(err)") }
+      XCTAssertTrue("\(err)".contains("on fake-mini"), "\(err)")
+    }
+  }
+
+  func testRemoteLoadParsing() {
+    let r = SSHRunner.remoteLoad("load=37\n 1 0.0 /sbin/launchd\n 220 98.5 /usr/bin/swift-frontend\n 221 40.0 /usr/sbin/sshd-session\n 222 12.0 /bin/sh\n 223 30.0 Comet Helper\n")
+    XCTAssertEqual(r.busyPct, 37)
+    XCTAssertEqual(r.processes.map(\.name), ["swift-frontend", "Comet Helper"])
+    XCTAssertTrue(SSHRunner.remoteLoad("load=\n").unknown, "nothing read: the gate doesn't wait")
+  }
+
+  /// A VM's quiet gate reads the host (this Mac), not the guest: the guest's own load misses the host's contention.
+  func testTheVMQuietGateReadsTheHost() throws {
+    guard FileManager.default.isExecutableFile(atPath: "/usr/bin/ssh-keygen") else { throw XCTSkip("no ssh-keygen here") }
+    let state = tmp.appendingPathComponent("vm-state")
+    setenv("PERFLOOP_TART", Self.fixtures.appendingPathComponent("fake-tart.sh").path, 1); setenv("FAKE_TART_VM", "pl", 1); setenv("FAKE_TART_STATE", state.path, 1)
+    defer { for k in ["PERFLOOP_TART", "FAKE_TART_VM", "FAKE_TART_STATE"] { unsetenv(k) } }
+    try baseline()
+    let e = try candidate()
+    // The guest reads quiet (no FAKE_REMOTE_LOAD); the host is busy with another VM.
+    let host = tmp.appendingPathComponent("host-idle")
+    try "idle=1000 locked=0 load=70 busy=com.apple.Virtualization.VirtualMachine:300".write(to: host, atomically: true, encoding: .utf8)
+    var o = RunnerOptions(); o.idleFrom = host.path
+    let v = try XCTUnwrap(try Runners.make("vm:tart/pl", store: store, options: o) as? VMRunner)
+    v.ssh = Self.fixtures.appendingPathComponent("fake-ssh.sh").path; v.rsync = Self.fixtures.appendingPathComponent("fake-rsync.sh").path; v.wake = false; v.settleS = 0; v.bootTimeout = 5
+    XCTAssertEqual(v.quiet, QuietGate(), "on by default, with the default thresholds")
+    v.quiet = QuietGate(timeout: 0.1, retryTimeout: 0.05)
+    var waits: [String] = []
+    v.onWait = { waits.append($0) }
+    loop.runner = v
+    let x = try loop.screen(e.id)
+    v.close()
+    XCTAssertEqual(x.screen?.verdict, "untrusted")
+    XCTAssertTrue(x.screen!.pairs.allSatisfy { $0.b.quiet == false && $0.b.busyPct == 70 })
+    XCTAssertTrue(waits.contains { $0.contains("for a quiet machine on this Mac (vm:tart/pl's host): 70 % of the cores busy") }, "\(waits)")
+    XCTAssertFalse(sshCalls("ssh ").contains { $0.contains("iostat") }, "the guest's load isn't the gate's")
   }
 
   func testDirectLaunchAndRunVia() throws {
