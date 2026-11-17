@@ -167,7 +167,7 @@ public struct Scaffold {
       3. perfloop doctor --bench \(bench)
       4. \(bench) run select --reps 1                       (opens a window for a few seconds)
       5. export PERFLOOP_APP=\(Self.appName(app)); perfloop store add \(bench)
-         perfloop champion set <hash from store add> --merged
+         perfloop champion set <hash from store add> --merged   (yours, the owner's: it asks you to type yes)
       6. hand PROGRAM.md and PerfLoop's AGENTS.md to your coding agent
     """
   }
@@ -188,8 +188,11 @@ public struct Scaffold {
     swift build -c release --product \(target)
     perfloop doctor --bench \(bench)
     perfloop store add \(bench)
-    perfloop champion set <hash> --merged --scenario select --fixture small
+    perfloop champion set <hash> --merged --scenario select --fixture small   # the owner: it asks for a typed yes
     ```
+
+    You never set the champion: it moves when your experiment wins and is promoted. Once its PR is on main,
+    `perfloop champion merged <merge sha>` (from the app's checkout, after `git fetch`) restarts the chain there.
 
     ## The loop
 

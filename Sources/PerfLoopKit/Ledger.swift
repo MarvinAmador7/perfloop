@@ -105,6 +105,8 @@ public struct Champion: Codable, Sendable, Equatable {
   public var since: String
   /// Knob values this champion was promoted with: knob debt until a follow-up bakes them in (SPEC §7.6).
   public var knobs: [String: String]?
+  /// Set by hand (`champion set`, the owner's): who confirmed it and how. nil for a champion that won its place.
+  public var setBy: OwnerFlagUse?
 
   public init(experiment: String, build: Build, merged: Bool, parents: [String] = [], mergedAncestor: String?, objectives: [String: Double] = [:], since: String = Clock.now()) {
     self.experiment = experiment; self.build = build; self.merged = merged; self.parents = parents; self.mergedAncestor = mergedAncestor
@@ -137,8 +139,8 @@ public struct Champion: Codable, Sendable, Equatable {
   public var chain: String {
     let ids = [experiment] + parents
     var s = ids.joined(separator: " ← ")
-    if merged { s += " (merged \(mergedAncestor ?? build.commit ?? "?"))" }
-    else if let m = mergedAncestor { s += " ← main@\(m)" }
+    if merged { s += " (merged \((mergedAncestor ?? build.commit ?? "?").prefix(12)))" }
+    else if let m = mergedAncestor { s += " ← main@\(m.prefix(12))" }
     else { s += " (no merged ancestor)" }
     return s
   }
