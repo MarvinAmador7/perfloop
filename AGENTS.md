@@ -7,8 +7,8 @@ the owner win.
 
 Verifying a feature rather than making it faster (it works, it's drawn, it answers input, it costs nothing)? Read
 [docs/VERIFICATION.md](docs/VERIFICATION.md) for the verbs and verdicts, which of them exist yet, and what your PR's
-evidence should say. Until a verb exists there, a bench run you must make by hand goes inside
-`perfloop lock -- …`, and your PR says its numbers are outside the ledger and the quiet gate.
+evidence should say. A feature's own scenarios run through `perfloop run` (below), never the bench by hand; anything
+else that opens a window goes inside `perfloop lock -- …`, and your PR says its numbers are outside the ledger.
 
 ## What PerfLoop is, in one paragraph
 

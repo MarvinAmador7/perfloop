@@ -41,8 +41,8 @@ Every answer comes under the loop's trust rules, unchanged:
 | Optimise | `exp new` (screen), `exp full`, `exp promote` | Is the candidate faster, with every guard holding? | screen `promising` · `rejected` · `needsReview`; full `won` · `lost` · `unknown` → `noDecision` · `needsReview`; both `untrusted` · `error` | Promotion of a new champion | a line per state | built |
 | Screen too wide to call | `exp screen ID --more N` | Do more pairs settle a borderline screen? | `inconclusive` (the band is over the gain threshold, or the signs are mixed); `rejected` kept for "slower in every pair" or a failed guard | Lets `exp full` run with no owner flag | `inconclusive` | **in progress** (b3) |
 | No regression | `exp new --expect same` (then `exp screen --more`, `exp full`) | Does a feature branch leave existing scenarios where they were? | `noRegression` (the cost's one-sided 95 % high bound under its margin, on the objective and each frame guard) · `regressed` (a guard failed, or the low bound is over the margin) · `inconclusive` (the interval straddles it); and `untrusted`. The margin is the metric's floor (`Acceptance.floors`: 5 % CPU, 15 % latency, …), not the run's band. A snapshot unlike the champion's is listed as a look for the PR, not a verdict, until v5 | Nothing is promoted: the evidence for a PR. No "drop it", outside the stopping rules | `noRegression` · `regressed` · `inconclusive` | **in progress** (b2) |
-| Measure | `perfloop run champion\|exp/ID\|BUILD\|BENCH --scenario S [--fixture F] [--reps N] [--reference S2]` | What does this build do on S, with what checks? The scenario may be one only this build has | none: numbers, checks and guards as facts, the trust summary, the champion's S2 beside each rep as a yardstick; exit 3 when a check failed, 5 when no rep could be trusted | Nothing | `measure` (stored under `runs/`, `explain run/ID`) | **in progress** (b1) |
-| Baseline | `perfloop baseline S --bench PATH\|--build HASH [--fixture F] [--reps N] [--reference S2]` | First numbers and a reference snapshot for a scenario the champion lacks | none; once a champion has S, `run champion --scenario S` is compared with it. Trusted reps only: nothing is recorded when none could be trusted | Becomes the yardstick for S | `baseline` | **in progress** (b1) |
+| Measure | `perfloop run champion\|exp/ID\|BUILD\|BENCH --scenario S [--fixture F] [--reps N] [--reference S2]` | What does this build do on S, with what checks? The scenario may be one only this build has | none: numbers, checks and guards as facts, the trust summary, the champion's S2 beside each rep as a yardstick; exit 3 when a check failed, 5 when no rep could be trusted | Nothing | `measure` (stored under `runs/`, `explain run/ID`) | built (#9, b1) |
+| Baseline | `perfloop baseline S --bench PATH\|--build HASH [--fixture F] [--reps N] [--reference S2]` | First numbers and a reference snapshot for a scenario the champion lacks | none; once a champion has S, `run champion --scenario S` is compared with it. Trusted reps only: nothing is recorded when none could be trusted | Becomes the yardstick for S | `baseline` | built (#9, b1) |
 | Drawn | guard `ink` (regions by rect or accessibility identifier) | Do the regions have content after settle? | per region `pass` / `fail` with the ink share against a floor, or against the champion's share where it has the region | Vetoes like any guard | in the stage | planned (v3) |
 | Focus | step record `focus {before, after}` + check | Is the first responder (or field editor) where it should be? | `pass` / `fail`, naming the responder's class and identifier | Vetoes as a check | in the stage | planned (v4) |
 | Input fired | `run.press` / `run.type` / `run.click` | Did the event reach its target? | `fired <menu item>` · `fired <other item>` (fails) · `not fired`; a click reports the hit view and what took the mouse-down, or `nobody` | Vetoes as a check | in the stage | planned (v4) |
@@ -50,8 +50,8 @@ Every answer comes under the loop's trust rules, unchanged:
 | Readable | guard `contrast` over named text regions; optional AX audit | Text ≥ 4.5:1 against its local background; controls labelled | `pass` / `fail` with the ratio; audit findings as a list | Decision 4 | in the stage | planned (v8) |
 
 `untrusted` is a verdict in every mode, and `FORCED (owner flag)` is printed on any stage an owner flag changed.
-The in-progress rows follow PR #8 (`--expect same`, `--more`) and the `run-baseline` branch (`run`, `baseline`) as this
-is written; those PRs are the reference where they differ.
+The `run` and `baseline` rows are as merged in #9; the in-progress rows follow PR #8 (`--expect same`, `--more`) as this
+is written, and #8 is the reference where they differ.
 
 ## 3. The evidence bundle
 
@@ -80,7 +80,7 @@ Re-ordered for verification from the study's (b) and (c) rows. Sizes: S ≈ a da
 
 | # | Item | Study | Size | Status | Why here |
 |---|---|---|---|---|---|
-| v1 | `perfloop run` (one build, gated, locked, stored, no verdict), `perfloop baseline`, `--reference` yardstick; per-scenario `fixture` in the manifest, `--fixture` validated, fixture-ran in results (b1, b4) | S5, S8 | M + S | **in progress** (`run-baseline`) | Ends the bypasses: nothing else can be judged until a new scenario can be run inside the gate |
+| v1 | `perfloop run` (one build, gated, locked, stored, no verdict), `perfloop baseline`, `--reference` yardstick; per-scenario `fixture` in the manifest, `--fixture` validated, fixture-ran in results (b1, b4) | S5, S8 | M + S | built (#9) | Ends the bypasses: nothing else can be judged until a new scenario can be run inside the gate |
 | v2 | `exp new --expect same` with `noRegression` / `regressed` / `inconclusive`; `inconclusive` screens and `exp screen --more N` (b2, b3) | S6, S7 | M + S | **in progress** (`expect-same`) | The "costs nothing" answer, without the optimiser's words |
 | v3 | `ink` guard over named regions, run in its own run-loop turn after the step; `explain` warns when a step's worst stretch is bench code (c3, c6) | S14, S18 | M | planned | Caught a real bug in all four features; generic, so it judges new scenarios the agent can't have tuned |
 | v4 | `run.press` / `type` / `key` through `NSApp.postEvent` with layout-correct characters, reporting the menu item fired; `run.click` with hit and consumer; focus before and after each step (c1, c2) | S12, S13 | M + M | planned | The ~65 min the study lost to input; "it answers real input" has no evidence without it |
@@ -117,11 +117,11 @@ agent can add scenarios, never drop one, and anything skipped is printed under "
 
 ## 6. What not to claim
 
-None of v3–v12 is built, and no agent has verified a feature through `perfloop verify` yet; v1 and v2 are being built
-as this is written. `noRegression` means no change beyond the metric's margin on these scenarios, fixtures, appearance and
-machine, not no change. Checks the agent wrote in the same PR show what the agent believes the feature does, not that
-it is what the owner asked for. In-process input goes through the app's event queue, not the HID path, input methods
-or accessibility clients: it proves routing, not that a hand on a keyboard gets the same result. An ink guard proves
-something was drawn, not that it is the right thing; a snapshot proves a picture on this display's scale and colour
-space. Feel, motion and taste stay the owner's call. The study's own numbers were untrusted (a shared, busy and partly
-locked Mac); what it shows is how agents used the tool, not what the app costs.
+None of v3–v12 is built, and no agent has verified a feature through `perfloop verify` yet; v1 is merged (#9) and
+v2 is in review (#8) as this is written. `noRegression` means no change beyond the metric's margin on these scenarios,
+fixtures, appearance and machine, not no change. Checks the agent wrote in the same PR show what the agent believes the
+feature does, not that it is what the owner asked for. In-process input goes through the app's event queue, not the
+HID path, input methods or accessibility clients: it proves routing, not that a hand on a keyboard gets the same
+result. An ink guard proves something was drawn, not that it is the right thing; a snapshot proves a picture on this
+display's scale and colour space. Feel, motion and taste stay the owner's call. The study's own numbers were untrusted
+(a shared, busy and partly locked Mac); what it shows is how agents used the tool, not what the app costs.
