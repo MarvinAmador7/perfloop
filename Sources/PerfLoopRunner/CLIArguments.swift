@@ -11,6 +11,8 @@ public enum CLIArguments {
     public var usage: String
     public var valued: Set<String>
     public var flags: Set<String>
+    /// Flags whose value is optional: a number after them is theirs (`--more`, `--more 5`; main.swift's countValued).
+    public var counted: Set<String> = []
     /// How many positional arguments may follow the command words.
     public var positional: ClosedRange<Int>
     /// Parses its own flags past what is checked here (`lock`'s command after `--`, `sweep --help`).
@@ -24,11 +26,11 @@ public enum CLIArguments {
   static let runnerValued: Set<String> = ["runner", "idle", "idle-from", "busy-apps", "lock", "launch", "remote-env", "max-load", "quiet-timeout"]
   static let runnerFlags: Set<String> = ["no-lock", "no-wait", "require-quiet", "accept-new-host-key"]
 
-  static func spec(_ command: String, _ usage: String, valued: Set<String> = [], flags: Set<String> = [], positional: ClosedRange<Int> = 0...0,
-                   runner: Bool = false, ownHelp: Bool = false) -> Spec {
+  static func spec(_ command: String, _ usage: String, valued: Set<String> = [], flags: Set<String> = [], counted: Set<String> = [],
+                   positional: ClosedRange<Int> = 0...0, runner: Bool = false, ownHelp: Bool = false) -> Spec {
     // `exp … --guard-tolerance` passes here so that the owner's gate, then the exp verbs' own refusal, answer it.
     Spec(command: command, usage: "usage: perfloop " + usage, valued: valued.union(globalValued).union(runner ? runnerValued : []).union(command.hasPrefix("exp ") ? ["guard-tolerance"] : []),
-         flags: flags.union(globalFlags).union(runner ? runnerFlags : []), positional: positional, ownHelp: ownHelp)
+         flags: flags.union(globalFlags).union(runner ? runnerFlags : []), counted: counted, positional: positional, ownHelp: ownHelp)
   }
 
   public static let specs: [Spec] = [
@@ -45,11 +47,11 @@ public enum CLIArguments {
     spec("champion set", "champion set BUILD [--merged] [--scenario S] [--fixture F] [--note \"…\"]", valued: ["scenario", "fixture", "note"], flags: ["merged"], positional: 1...1),
     spec("champion merged", "champion merged SHA", positional: 1...1),
     spec("exp new", "exp new \"<hypothesis>\" [--bench PATH | --build-cmd CMD --bench PATH | --build HASH | --knobs k=v,…] [--scenario S] [--fixture F] "
-         + "[--second-fixture F] [--set k=v] [--via ab|run] [--behaviour-change] [--patch FILE] [--no-screen] [--against ID] [--exe NAME] [runner flags]",
-         valued: ["bench", "exe", "build-cmd", "build", "scenario", "fixture", "second-fixture", "knobs", "set", "via", "patch", "against"],
+         + "[--second-fixture F] [--set k=v] [--via ab|run] [--behaviour-change] [--patch FILE] [--no-screen] [--against ID] [--expect faster|same] [--exe NAME] [runner flags]",
+         valued: ["bench", "exe", "build-cmd", "build", "scenario", "fixture", "second-fixture", "knobs", "set", "via", "patch", "against", "expect"],
          flags: ["behaviour-change", "behavior-change", "no-screen"], positional: 1...1, runner: true),
     spec("exp status", "exp status [ID]", positional: 0...1),
-    spec("exp screen", "exp screen ID [runner flags]", positional: 1...1, runner: true),
+    spec("exp screen", "exp screen ID [--more [N]] [runner flags]", counted: ["more"], positional: 1...1, runner: true),
     spec("exp full", "exp full ID [runner flags]", flags: ["force", "owner"], positional: 1...1, runner: true),
     spec("exp promote", "exp promote ID [--pr URL]", valued: ["pr"], flags: ["owner", "allow-dirty"], positional: 1...1),
     spec("exp abandon", "exp abandon ID [--note \"…\"]", valued: ["note"], positional: 1...1),
@@ -118,6 +120,7 @@ public enum CLIArguments {
           guard i + 1 < argv.count, !argv[i + 1].hasPrefix("--") else { throw PLError.usage("\(a) needs a value (\(name))\n\(s.usage)") }
           i += 2; continue
         }
+        if s.counted.contains(k) { i += i + 1 < argv.count && Int(argv[i + 1]) != nil ? 2 : 1; continue }
         guard s.flags.contains(k) else { throw PLError.usage("unknown argument '\(a)' for \(name)\n\(s.usage)") }
         i += 1; continue
       }
