@@ -185,7 +185,16 @@ verdict is `"untrusted"` when the pairs it needs are (ADAPTER.md §3, Trust).
 so the loop can climb on unmerged champions (owner's decision, SPEC §7) and every champion still traces back to `main`.
 A champion set by hand (`champion set`, the owner's) has `"setBy": { "flag": "champion set", "via": "env|tty", "command":
 "champion set", "effect": "…", "at": "…" }`; one that won its place has none. `champion merged SHA` writes the full
-commit to `mergedAncestor` once it has checked SHA is on main and contains the build's commit.
+commit to `mergedAncestor` once it has checked SHA is on main and contains the build's commit. For a dirty champion
+(its uncommitted changes can't be checked) it is the owner's: `"mergedBy"` records that use as `setBy` does (`"flag":
+"champion merged"`), as do the champion's experiment (`ownerFlags`) and the `merged` ledger line.
+
+`exp status --json` (`perfloop.status/1`, added 2026-11; before, a bare array of the open experiments): `{ "schema":
+"perfloop.status/1", "open": [ …experiments… ], "timeBudget": { "budgetS": 7200, "startedAt": "…", "startedBy": "0003",
+"spentS": 1380, "leftS": 5820, "notCountedS": 720 }, "stop": [ "…" ] }`. `timeBudget` is the stopping rule's clock
+above: `startedAt`/`startedBy` (the first optimisation experiment's first line) are absent until it starts, and
+`notCountedS` is the expect-same stages' time it left out. `stop` holds the stopping rules that hold (the text's `stop:`
+lines).
 
 ## 7. `perfloop.sweep/1`
 

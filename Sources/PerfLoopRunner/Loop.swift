@@ -69,15 +69,35 @@ public final class Loop {
 
   /// `champion merged SHA`: the champion's PR landed; the chain restarts at that commit. Anyone may say so, so it is
   /// checked instead of gated, in the app's checkout (`cwd`): SHA must be a commit on main (`--main REF`, else
-  /// `origin/main`, else `main`) that contains the champion's build commit.
+  /// `origin/main`, else `main`) that contains the champion's build commit. A dirty champion's uncommitted changes
+  /// can't be checked, so for one it is the owner's (the CLI gates it; `owner` set): the use is recorded like an
+  /// owner flag's, on the champion's experiment, its ledger line and `champion.json` (`mergedBy`).
   @discardableResult
   public func markMerged(commit sha: String, main: String? = nil) throws -> (champion: Champion, check: MergeCheck) {
     let (c, _) = try requireChampion()
+    if c.build.dirty && owner == nil {
+      throw PLError.refused(Self.dirtyMerge(c) + ", and nothing shows the owner is running this: nothing changed. Instead: " + OwnerFlags.agentPath("champion merged", command: "champion merged") + ".")
+    }
     let v = try verifyMerged(sha, champion: c, main: main)
-    let m = c.markMerged(at: v.commit)
+    var m = c.markMerged(at: v.commit)
+    var l = LedgerEntry(experiment: c.experiment, state: "merged", build: c.build.hash, by: by, note: "merged at \(v.commit) (\(v.checked))")
+    if c.build.dirty {
+      let use = OwnerFlagUse(flag: "champion merged", via: owner?.via ?? "library", command: owner?.command ?? "library call",
+                             effect: "marked champion \(c.experiment) merged at \(v.commit.prefix(12)) though its build was dirty: its uncommitted changes weren't checked against main", at: ownerAt)
+      m.mergedBy = use
+      if var e = try? store.experiment(c.experiment) { e.used(use); try store.save(e); _ = explain(e) }
+      l.by = "owner"; l.ownerFlags = ["champion merged"]; l.ownerVia = use.via
+      log("exp \(c.experiment): marked merged over a dirty build (\(OwnerAuth.viaText(use.via)))")
+    }
     try store.setChampion(m)
-    try store.ledger.append(LedgerEntry(experiment: c.experiment, state: "merged", build: c.build.hash, by: by, note: "merged at \(v.commit) (\(v.checked))"))
+    try store.ledger.append(l)
     return (m, v)
+  }
+
+  /// Why `champion merged` is the owner's for a dirty champion (OwnerFlags.agentPath says what to do instead).
+  public static func dirtyMerge(_ c: Champion) -> String {
+    "champion \(c.experiment)'s build [\(c.build.line)] has uncommitted changes, and those can't be checked against main (only its commit can): "
+      + "nothing shows main has them, so marking it merged is the owner's say"
   }
 
   /// What `champion merged` checked: the full commit, and the checks it passed, for the ledger.
@@ -85,6 +105,10 @@ public final class Loop {
     public var commit: String
     public var checked: String
   }
+
+  /// The owner's answer for a PR that was squash-merged or rebased: `champion merged` doesn't take it, ever.
+  static let squashed = "If the PR was squash-merged or rebased, the champion's build commit is not on main and never will be, so champion merged keeps refusing it: "
+    + "ask the owner to set the champion from a build of main (perfloop champion set BUILD --merged)"
 
   /// SHA is a commit on main that contains the champion's build commit, in the checkout at `cwd`; else a refusal that
   /// says what was checked and what to do.
@@ -123,16 +147,17 @@ public final class Loop {
     case nil: throw PLError.harness("git merge-base --is-ancestor \(short(full)) \(ref) failed in \(cwd)")
     }
     guard let b = commit(built) else {
-      throw PLError.refused("champion \(c.experiment)'s build commit \(built) isn't in this checkout (\(cwd)), so nothing can show \(short(full)) contains it: git fetch origin (the PR's branch too), then run it again")
+      throw PLError.refused("champion \(c.experiment)'s build commit \(built) isn't in this checkout (\(cwd)), so nothing can show \(short(full)) contains it: nothing changed. "
+                            + "If the PR's branch wasn't fetched, git fetch origin (the PR's branch too) and run it again. " + Self.squashed)
     }
     switch contains(full, b) {
     case true?: break
     case false?:
       throw PLError.refused("\(short(full)) doesn't contain champion \(c.experiment)'s build commit \(short(b)) (checked: git merge-base --is-ancestor \(short(b)) \(short(full))), so it isn't where the champion's PR landed: nothing changed. "
-                            + "Pass the commit on \(ref) that merged it (git log --oneline \(ref)). If the PR was squashed or rebased, its commits aren't in main's history: ask the owner to set the champion from a build of main (perfloop champion set BUILD --merged)")
+                            + "Pass the commit on \(ref) that merged it (git log --oneline \(ref)). " + Self.squashed)
     case nil: throw PLError.harness("git merge-base --is-ancestor \(short(b)) \(short(full)) failed in \(cwd)")
     }
-    return MergeCheck(commit: full, checked: "checked: on \(ref), contains the build commit \(short(b))" + (c.build.dirty ? "; the build was dirty: its uncommitted changes can't be checked" : ""))
+    return MergeCheck(commit: full, checked: "checked: on \(ref), contains the build commit \(short(b))" + (c.build.dirty ? "; the build was dirty: its uncommitted changes weren't checked (the owner's say)" : ""))
   }
 
   // MARK: exp new
@@ -640,8 +665,23 @@ public final class Loop {
     let owned = store.ledger.currentSession().filter { !($0.ownerFlags ?? []).isEmpty }
     for (i, l) in owned.enumerated() where !owned[(i + 1)...].contains(where: { $0.experiment == l.experiment }) { o.append("owner flag: " + l.text) }
     o += baselineLines()
-    for s in Stopping.reasons(StopInput(session: store.ledger.currentSession())) { o.append("stop: " + s) }
+    let now = StopInput(session: store.ledger.currentSession())
+    o.append(Stopping.timeBudget(now).line)
+    for s in Stopping.reasons(now) { o.append("stop: " + s) }
     return o.joined(separator: "\n")
+  }
+
+  /// `exp status --json` (`perfloop.status/1`): the open experiments, the time budget, the stopping rules that hold.
+  public struct StatusDoc: Codable, Equatable {
+    public var schema = "perfloop.status/1"
+    public var open: [Experiment]
+    public var timeBudget: TimeBudget
+    public var stop: [String]
+  }
+
+  public func statusDoc() -> StatusDoc {
+    let now = StopInput(session: store.ledger.currentSession())
+    return StatusDoc(open: store.experiments().filter { !$0.state.terminal }, timeBudget: Stopping.timeBudget(now), stop: Stopping.reasons(now))
   }
 
   // MARK: diff

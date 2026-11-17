@@ -41,7 +41,8 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             stopping rules. F (every verb): a listed fixture, NAME@k=v, or the
                                             adapter's file:PATH, refused up front when the file isn't on the Mac the
                                             reps run on
-  exp status [ID]                           open experiments and what each needs next (with ID: its explain)
+  exp status [ID] [--json]                  open experiments and what each needs next, the 2 h time budget spent and
+                                            left, and stop: lines (with ID: its explain)
   exp screen ID [--more [N]]                3 interleaved pairs: promising | inconclusive | rejected (| untrusted:
                                             decided nothing); --more N (3) adds pairs to a screen that couldn't tell
   exp full ID [--force]                     5 + 5 (→ 8 + 8 → 10 + 10 while unknown): won | lost | needsReview (| untrusted),
@@ -107,7 +108,8 @@ owner flags: --force, --owner, --guard-tolerance, --allow-dirty are the owner's,
 
 runners and the queue (C10): where windowed reps run; results never mix runners
   exp screen|full ID --runner R [--idle S]  R: local (default; idle-gated only with --idle S), ssh://[user@]host[/dir],
-                                            vm:tart/NAME (a macOS VM on this Mac; screens only)
+                                            vm:tart/NAME (a macOS VM on this Mac; screens only; idle-gated on this Mac
+                                            as local is)
   queue add ID [--stage auto|screen|full] [--runner R] [--force]
                                             auto: the screen, then the full when promising or inconclusive (--force,
                                             the owner's: the full anyway)
@@ -115,12 +117,13 @@ runners and the queue (C10): where windowed reps run; results never mix runners
   queue run --runner R [--until HH:MM] [--idle S] [--force]
                                             runs queued stages on R while it is free: local waits until nobody has
                                             touched this Mac for S s (120; --force, the owner's: no wait) and aborts a
-                                            rep on input (redone); no rep
+                                            rep on input (redone), and so does vm:tart/NAME (its host is this Mac;
+                                            this Mac's screen lock doesn't stop it, the guest's does); no rep
                                             starts after --until; ssh:// copies the build there and opens the window
                                             in the logged-in user's session (--launch direct: plain ssh)
   runner check R | runner clean R           the runner's machine, session and store there; clean removes that store
   ssh runner flags: --accept-new-host-key, --remote-env K=V, --launch gui|direct
-  local runner flags: --busy-apps A,B, --idle-from FILE (testing)
+  local runner flags: --busy-apps A,B, --idle-from FILE (testing; vm:tart/NAME takes both)
                                             no rep starts while the screen is locked: the runner waits for the unlock
                                             before it takes the window lock (--no-wait: stops instead); a rep the
                                             screen lock interrupts is redone
@@ -273,6 +276,8 @@ func run(_ args: Args) throws -> Int32 {
   case ("champion", "merged"):
     guard let sha = args[2] else { throw PLError.usage("usage: perfloop champion merged SHA [--main REF]") }
     let l = try loop()
+    // A dirty champion's uncommitted changes can't be checked against main: only the owner says they are there.
+    if let c = l.store.champion(), c.build.dirty { l.owner = try OwnerGate().check(command: "champion merged", because: Loop.dirtyMerge(c)) }
     let (c, v) = try l.markMerged(commit: sha, main: args.one("main"))
     out(json ? PLJSON.encode(c) : "champion \(c.experiment) merged at \(v.commit) (\(v.checked))"); return 0
   case ("champion", _):
@@ -299,7 +304,7 @@ func run(_ args: Args) throws -> Int32 {
     show(try l.new(o), l); return 0
   case ("exp", "status"):
     let l = try loop()
-    if let id = args[2] { show(try l.store.experiment(id), l) } else { out(json ? PLJSON.encode(l.store.experiments().filter { !$0.state.terminal }) : l.status()) }
+    if let id = args[2] { show(try l.store.experiment(id), l) } else { out(json ? PLJSON.encode(l.statusDoc()) : l.status()) }
     return 0
   case ("exp", "screen"):
     guard let id = args[2] else { throw PLError.usage("usage: perfloop exp screen ID [--more [N]]") }

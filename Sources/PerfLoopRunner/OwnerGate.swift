@@ -45,6 +45,11 @@ public struct OwnerGate {
                 instead: Self.agentPaths([command], command: command))
   }
 
+  /// A command that is the owner's only in one case (`champion merged` on a dirty champion): `why` says which.
+  public func check(command: String, because why: String) throws -> OwnerAuth {
+    try confirm([command], what: why, dont: "don't run it again", command: command, instead: Self.agentPaths([command], command: command))
+  }
+
   func confirm(_ named: [String], what: String, dont: String, command: String, instead: String) throws -> OwnerAuth {
     if env["PERFLOOP_OWNER"] == "1" { return OwnerAuth(flags: named, via: "env", command: command) }
     if terminal {

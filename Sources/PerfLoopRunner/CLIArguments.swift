@@ -50,7 +50,7 @@ public enum CLIArguments {
          + "[--second-fixture F] [--set k=v] [--via ab|run] [--behaviour-change] [--patch FILE] [--no-screen] [--against ID] [--expect faster|same] [--exe NAME] [runner flags]",
          valued: ["bench", "exe", "build-cmd", "build", "scenario", "fixture", "second-fixture", "knobs", "set", "via", "patch", "against", "expect"],
          flags: ["behaviour-change", "behavior-change", "no-screen"], positional: 1...1, runner: true),
-    spec("exp status", "exp status [ID]", positional: 0...1),
+    spec("exp status", "exp status [ID] [--json]", positional: 0...1),
     spec("exp screen", "exp screen ID [--more [N]] [runner flags]", counted: ["more"], positional: 1...1, runner: true),
     spec("exp full", "exp full ID [runner flags]", flags: ["force", "owner"], positional: 1...1, runner: true),
     spec("exp promote", "exp promote ID [--pr URL]", valued: ["pr"], flags: ["owner", "allow-dirty"], positional: 1...1),

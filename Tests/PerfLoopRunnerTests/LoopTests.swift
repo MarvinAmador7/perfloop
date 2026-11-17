@@ -49,6 +49,21 @@ final class LoopTests: FakeBenchCase {
     XCTAssertThrowsError(try loop.promote("0002"))                      // not won (not even screened)
   }
 
+  /// `exp status` (text and --json) says how much of the session's time budget is spent and left.
+  func testStatusShowsTheTimeBudget() throws {
+    try store.ledger.append(LedgerEntry(experiment: "-", state: "session", by: "agent"))
+    try baseline()
+    XCTAssertTrue(loop.status().contains("\ntime budget: 120 min, not started"), loop.status())
+    XCTAssertNil(loop.statusDoc().timeBudget.startedAt)
+    var o = Loop.NewOptions(hypothesis: "faster"); o.bench = try bench("cand", ["CPU": "8"]); o.screen = false
+    let e = try loop.new(o)
+    XCTAssertTrue(loop.status().contains("\ntime budget: 0 of 120 min spent, 120 min left (since exp \(e.id), the first optimisation experiment, at "), loop.status())
+    let doc = loop.statusDoc()
+    XCTAssertEqual(doc.open.map(\.id), [e.id]); XCTAssertEqual(doc.timeBudget.startedBy, e.id); XCTAssertEqual(doc.timeBudget.budgetS, 7200); XCTAssertEqual(doc.stop, [])
+    let j = try PLJSON.decode(JSONValue.self, from: Data(PLJSON.encode(doc).utf8))
+    XCTAssertEqual(j["schema"]?.string, "perfloop.status/1"); XCTAssertEqual(j["open"]?.array?.count, 1); XCTAssertGreaterThan(j["timeBudget"]?["leftS"]?.double ?? 0, 7100)
+  }
+
   func testScreenResumesAtTheFirstMissingPair() throws {
     try baseline()
     var o = Loop.NewOptions(hypothesis: "h"); o.bench = try bench("cand", ["CPU": "8"]); o.screen = false

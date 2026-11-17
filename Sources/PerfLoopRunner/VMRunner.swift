@@ -15,7 +15,11 @@ import PerfLoopKit
 /// never decides a full (`exp full` refuses it).
 ///
 /// The quiet gate reads this Mac, the VM's host: the guest's own load misses the host's contention (another VM, a
-/// build), which is what costs a guest its frames.
+/// build), which is what costs a guest its frames. So does the idle gate, as the local runner's (on for `queue run`,
+/// threshold 120 s, unless `--force`; for `exp screen` only with `--idle S`): someone working on this Mac contends
+/// with the guest, and the guest with them. A rep waits until nobody has touched this Mac for the threshold, and is
+/// killed and redone when input arrives. This Mac's screen lock doesn't hold it back (the guest has its own display);
+/// the guest's own lock does, as on any ssh runner.
 public final class VMRunner: Runner {
   public let tool: String
   public let vm: String
@@ -38,6 +42,12 @@ public final class VMRunner: Runner {
   /// The quiet gate (on by default from the CLI) and where it reads: the host.
   public var quiet: QuietGate? { didSet { inner?.quiet = quiet } }
   public var load: LoadSource = HostLoadSource() { didSet { inner?.load = load } }
+  /// The idle gate (the CLI's, as the local runner's) and where it reads: the host.
+  public var gate: IdleGate? { didSet { inner?.gate = gate } }
+  public var idle: IdleSource = HIDIdleSource() { didSet { inner?.idle = idle } }
+  /// Seconds between idle readings during a rep, and while waiting for the host to be idle or the guest unlocked.
+  public var poll = 2.0 { didSet { inner?.poll = poll } }
+  public var waitPoll = 15.0 { didSet { inner?.waitPoll = waitPoll } }
   var inner: SSHRunner?
   var booted: Child?
 
@@ -89,6 +99,7 @@ public final class VMRunner: Runner {
     r.nameOverride = name; r.identityFile = key; r.knownHostsFile = known; r.acceptNewHostKey = true
     r.log = log; r.onWait = onWait; r.deadline = deadline; r.wake = wake
     r.quiet = quiet; r.load = load; r.quietPlace = "this Mac (\(name)'s host)"
+    r.gate = gate; r.idle = idle; r.poll = poll; r.waitPoll = waitPoll
     if let s = ssh { r.ssh = s }
     if let s = rsync { r.rsync = s }
     // sshd comes up a little after the address; the key goes in once, with the image's password.
@@ -144,7 +155,12 @@ public final class VMRunner: Runner {
   /// Asked of the guest once it is up; before that nil (a VM isn't booted to check a file): a stage connects first.
   public func missingFile(_ path: String) throws -> String? { try inner?.missingFile(path) }
   public func check() throws -> [String] {
-    var o = try connect().check()
+    let r = try connect()
+    var o = try r.check()
+    if let gate {
+      let i = try r.gateIdle()
+      o.append("idle gate, on \(r.idlePlace): " + (gate.wait(i).map { "a rep would wait: \($0.text(threshold: gate.threshold))" } ?? "idle \(Int(i.idle ?? 0)) s (≥ \(Int(gate.threshold)) s)"))
+    } else { o.append("idle gate: off (reps don't wait for nobody to be using this Mac)") }
     o.append("vm: \(vm) via \(tart)\(booted != nil ? " (booted by this check; stopped when it ends)" : " (was already running)"); its numbers screen and never decide a full")
     return o
   }

@@ -7,7 +7,8 @@ import Foundation
 /// security: an agent's shell can set the variable too, and the record is what makes it visible in a PR.
 ///
 /// The owner's commands (`champion set`, `exp replay --go`) pass the same gate: they pick the champion, the build every
-/// later verdict is judged against, so an agent never runs them either.
+/// later verdict is judged against, so an agent never runs them either. `champion merged` passes it only for a dirty
+/// champion: its uncommitted changes can't be checked against main.
 public enum OwnerFlags {
   public static let all = ["force", "owner", "guard-tolerance", "allow-dirty"]
   /// Commands that are the owner's whatever their flags (OwnerGate.check(command:)).
@@ -25,6 +26,7 @@ public enum OwnerFlags {
     case "allow-dirty": return "it promotes a build with uncommitted changes"
     case "champion set": return "it picks the champion, the build every later verdict is judged against"
     case "exp replay": return "it sets the plan's champion, the build every later verdict is judged against, and promotes the plan's builds, dirty ones too"
+    case "champion merged": return "it marks a dirty champion merged: the build's uncommitted changes can't be checked against main, so only the owner can say main has them"
     default: return "it overrides what judges the agent"
     }
   }
@@ -53,6 +55,8 @@ public enum OwnerFlags {
       return "the champion moves only when one of your experiments wins and is promoted (perfloop exp promote ID); if there is no champion yet, or it looks wrong, ask the owner to set it"
     case "exp replay":
       return "print the plan (perfloop exp replay PLAN.json --dry-run) and ask the owner to run it"
+    case "champion merged":
+      return "ask the owner to set a clean build of main as the champion (build main with nothing uncommitted, then perfloop champion set BUILD --merged); the champion stays unmerged until then, and your experiments go on against it"
     default: return "stop and ask the owner"
     }
   }

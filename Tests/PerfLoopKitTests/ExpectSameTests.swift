@@ -181,4 +181,29 @@ final class ExpectSameTests: XCTestCase {
     let later = [line("-", "session", 0), line("0001", "built", 10, same: true), line("0002", "built", 20), line("0002", "rejected", 21), line("0001", "inconclusive", 30, same: true)]
     XCTAssertEqual(Stopping.budgetClock(later, now: t0.addingTimeInterval(40 * 60))?.featureS, 0)
   }
+
+  /// `exp status`'s time budget: the same clock as the stopping rule, spent and left.
+  func testTheTimeBudgetSpentAndLeft() throws {
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    func at(_ m: Double) -> String { Clock.iso(t0.addingTimeInterval(m * 60)) }
+    func line(_ id: String, _ state: String, _ m: Double, same: Bool = false) -> LedgerEntry { var e = LedgerEntry(experiment: id, state: state, at: at(m)); if same { e.expect = "same" }; return e }
+    func budget(_ l: [LedgerEntry], _ m: Double) -> TimeBudget { Stopping.timeBudget(StopInput(session: l, now: t0.addingTimeInterval(m * 60))) }
+    // Feature checks alone: not started, all of it left.
+    var l = [line("-", "session", 0), line("0000", "promoted", 1), line("0001", "built", 10, same: true), line("0001", "noRegression", 20, same: true)]
+    var b = budget(l, 30)
+    XCTAssertNil(b.startedAt); XCTAssertEqual(b.spentS, 0); XCTAssertEqual(b.leftS, 7200)
+    XCTAssertEqual(b.line, "time budget: 120 min, not started: the clock starts at this session's first optimisation experiment (expect-same checks don't count)")
+    // The first optimisation starts it; a later feature check's stage isn't counted.
+    l += [line("0002", "built", 40), line("0002", "rejected", 45), line("0003", "built", 50, same: true), line("0003", "noRegression", 62, same: true)]
+    b = budget(l, 75)
+    XCTAssertEqual(b.startedAt, at(40)); XCTAssertEqual(b.startedBy, "0002")
+    XCTAssertEqual(b.spentS, 23 * 60); XCTAssertEqual(b.notCountedS, 12 * 60); XCTAssertEqual(b.leftS, 97 * 60)
+    XCTAssertEqual(b.line, "time budget: 23 of 120 min spent, 97 min left (since exp 0002, the first optimisation experiment, at \(at(40)); 12 min of expect-same stages not counted)")
+    // Spent: nothing left, and the stopping rule says so too.
+    b = budget(l, 200)
+    XCTAssertEqual(b.leftS, 0); XCTAssertTrue(b.line.hasPrefix("time budget: 148 of 120 min spent, 0 min left"), b.line)
+    // In JSON, seconds.
+    let j = try PLJSON.decode(JSONValue.self, from: Data(PLJSON.encode(budget(l, 75)).utf8))
+    XCTAssertEqual(j["spentS"]?.double, 1380); XCTAssertEqual(j["leftS"]?.double, 5820); XCTAssertEqual(j["budgetS"]?.double, 7200); XCTAssertEqual(j["startedBy"]?.string, "0002")
+  }
 }

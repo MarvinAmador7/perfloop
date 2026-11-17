@@ -51,7 +51,8 @@ perfloop ledger                              # what was tried, by whom, with wha
 5. **Stop** when `exp status` prints `stop:` (the budget is met, no cost ≥ 5 % of the objective is left that you can
    attribute, 5 non-promising candidates in a row, or 2 h / 20 candidates spent), and report from the ledger: what you
    tried, what won, what's left. The 2 h run from your first optimisation experiment, not `session start`, and stop
-   while an expect-same stage runs.
+   while an expect-same stage runs; `exp status` says how much is spent and left (`time budget: 34 of 120 min spent,
+   86 min left (…)`, `timeBudget` in its `--json`).
 
 ## A feature PR: show it costs nothing (`--expect same`)
 
@@ -108,7 +109,9 @@ perfloop baseline S --bench PATH [--reference S2]   # first numbers + a referenc
 - **`file:` fixtures** (`--fixture file:PATH`, when your adapter takes them): the file must be on the Mac the reps run
   on. perfloop asks that Mac (an `ssh://` runner too: it copies builds there, never fixture files) and refuses the
   fixture before anything is built or run; each stage asks again on its own runner. Locally a relative path is read
-  from the directory perfloop runs in; on a remote runner give an absolute path.
+  from the directory perfloop runs in; on a remote runner give an absolute path. perfloop never copies the file to an
+  `ssh://` runner: when it is refused there, copy it there yourself (e.g. rsync) and run the same command again.
+  `sweep` takes no `file:` fixture at all, only the manifest's, so a sweep can be run again from the bench alone.
 - A `run` or a baseline is information, not a verdict: different minutes, no interleaving with the champion. "No
   regression" claims need an `exp` (`exp new … --expect same`, above).
 
@@ -141,7 +144,8 @@ perfloop baseline S --bench PATH [--reference S2]   # first numbers + a referenc
 `exp new` (it screens), `exp screen`, `exp full`, `run`, `baseline`, `guards`, `profile`, `sweep` and a bench's `run`/`ab` open a window
 and take focus for seconds to minutes. Run them only when the owner says the Mac is free, or queue them: `perfloop queue
 add <id>` and let `perfloop queue run --runner local --idle 120` (only while nobody touches the Mac) or
-`--runner ssh://user@spare-mac` (a Mac nobody uses) take them.
+`--runner ssh://user@spare-mac` (a Mac nobody uses) take them. `--runner vm:tart/NAME` (a macOS VM on this Mac, screens
+only) waits on the same idle gate, read on this Mac, with the same flags.
 
 **The window lock** makes window runs on one Mac take turns, and it is on by default: every perfloop verb above holds it
 around each rep, as do the MCP server's jobs and a PerfLoopHost bench's `run`/`profile`. Anything else that opens a
@@ -194,3 +198,7 @@ one is in the store; `perfloop store gc` deletes those.
   experiment's folder), or no decision at 10+10 pairs.
 - A guard, scenario or fixture you think is wrong or missing.
 - Promoting a knob: the winning value becomes the default and the knob is deleted, in a follow-up change.
+- A champion `champion merged` refuses for good: a PR that was squash-merged or rebased (its build commit is never on
+  main), or a champion built with uncommitted changes (they can't be checked against main; only the owner may mark it
+  merged). Either way the owner sets a clean build of main as the champion (`champion set BUILD --merged`); until then
+  your experiments go on against the unmerged champion.
