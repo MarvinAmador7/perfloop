@@ -33,6 +33,14 @@ final class DoctorTests: FakeBenchCase {
     XCTAssertTrue(line(r, "build stamp")?.detail.contains("hashes to") == true)
   }
 
+  func testAScenarioWhoseFixtureIsntListedIsAFail() throws {
+    let r = try doctor(["STEP_FIXTURE": "crew71"])
+    XCTAssertFalse(r.ok)
+    let l = try XCTUnwrap(r.lines.first { $0.check == "scenario step" && $0.status == .fail })
+    XCTAssertEqual(l.detail, "its fixture: unknown fixture 'crew71'; the manifest has crew17, swarm64")
+    XCTAssertTrue(try doctor(["STEP_FIXTURE": "swarm64"]).ok)
+  }
+
   func testDirtyIsAWarningNotAFail() throws {
     let r = try doctor(["DIRTY": "true"])
     XCTAssertTrue(r.ok)

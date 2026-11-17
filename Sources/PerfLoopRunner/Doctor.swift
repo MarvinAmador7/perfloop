@@ -84,6 +84,9 @@ public struct Doctor {
       else if s.kind == "latency" && obj != "latencyMs" { add("scenario \(s.name)", .warn, "a latency scenario climbing on \(obj)") }
       else { add("scenario \(s.name)", .ok, "\(s.kind), climbs on \(obj), guarded by \(GuardNames.correctness(s).joined(separator: ", "))") }
       if let sf = s.secondFixture, !m.fixtureNames.contains(sf) { add("scenario \(s.name)", .fail, "second fixture \(sf) is not in the manifest's fixtures") }
+      if let f = s.fixture, let why = m.unknownFixture(f) {
+        add("scenario \(s.name)", .fail, "its fixture: \(why)", fix: "list \(Manifest.fixtureBase(f)) in fixtures, or name one that is in the scenario's `fixture`")
+      }
     }
     for i in m.isolationGuards ?? [] where m.scenario(i) == nil { add("isolation", .fail, "isolation scenario \(i) is not a scenario") }
     if m.fixtures.isEmpty { add("fixtures", .warn, "none listed: experiments must pass --fixture") }

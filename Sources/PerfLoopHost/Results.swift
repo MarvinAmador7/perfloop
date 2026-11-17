@@ -213,7 +213,11 @@ public struct HostResult: Codable, Sendable, Equatable {
   public var app: String
   public var adapter: String
   public var scenario: String
+  /// The fixture that ran (by name: a parametric one's parameters are in `params`).
   public var fixture: String
+  /// The scenario's own fixture (`fixture:` at registration, the manifest's `scenarios[].fixture`), when it names one:
+  /// `fixture` differs from it only when `--fixture` chose another.
+  public var expectedFixture: String?
   /// The scenario's parameters as run, and `knobs`: the full knob vector, defaults included.
   public var params: [String: JSONValue]
   public var profiled = false

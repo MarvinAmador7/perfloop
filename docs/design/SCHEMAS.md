@@ -40,7 +40,8 @@ machine; rerun).
       "guards": [ "landed", "built-within", "snapshot-diff" ],
       "guardParams": { "built-within.ms": 300, "snapshot-diff.tolerance": 0.005 },
       "frameGuards": [ "hitchTimeRatioMsPerS", "longestStretchMs" ],   // judged by their bands (Acceptance)
-      "secondFixture": "swarm64"                 // promotion needs not-worse here
+      "secondFixture": "swarm64",                // promotion needs not-worse here
+      "fixture": "search"                        // optional (2026-11): the scenario's own fixture, before defaultFixture
   } ],
   "isolationGuards": [ "burst", "typing" ],      // their checks run on every promotion, whatever the experiment climbs
   "fixtures": [ { …FixtureSpec as today…, "parametric": { "agents": [1, 64], "items": [50, 600] } } ],

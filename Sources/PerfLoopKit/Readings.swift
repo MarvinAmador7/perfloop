@@ -78,6 +78,7 @@ public enum Readings {
       if out[i].trustworthy == nil { out[i].trustworthy = top.trustworthy; out[i].windowFailed = top.windowFailed }
       if out[i].quiet == nil { out[i].quiet = top.quiet; out[i].busyPct = out[i].busyPct ?? top.busyPct; out[i].busy = out[i].busy ?? top.busy }
       out[i].exit = out[i].exit ?? v["exitCode"]?.double.map { Int($0) }
+      out[i].fixture = out[i].fixture ?? v["fixture"]?.string
     }
     return out
   }
@@ -85,6 +86,13 @@ public enum Readings {
   /// `ab --json`: the sides for one label ("A" or "B"). Per-rep records when the adapter includes them (`repsA`,
   /// `reps[]` with `variant`), else the label's summary.
   public static func sides(ab v: JSONValue, label: String, metric: String) -> [Side] {
+    // One `ab` runs both sides on its one `fixture`.
+    var out = abSides(v, label: label, metric: metric)
+    for i in out.indices { out[i].fixture = out[i].fixture ?? v["fixture"]?.string }
+    return out
+  }
+
+  static func abSides(_ v: JSONValue, label: String, metric: String) -> [Side] {
     let ran = runs(ab: v, label: label)
     // Per-rep records, each with its own run's exit and quiet when `runs[]` lines up with them.
     func withRuns(_ rs: [JSONValue]) -> [Side] {

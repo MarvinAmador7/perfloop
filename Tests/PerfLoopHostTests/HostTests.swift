@@ -119,7 +119,7 @@ import PerfLoopProbe
     b.knobs { [Self.pick] }
     b.scenario("select", summary: "select rows", guards: ["checks", "snapshot-diff"], guardParams: ["snapshot-diff.tolerance": 0.01], params: ["steps": "8"],
                secondFixture: "rows50") { _ in }
-    b.scenario("open", summary: "open the list", kind: .latency, latencyBudgetMs: 100) { _ in }
+    b.scenario("open", summary: "open the list", kind: .latency, latencyBudgetMs: 100, fixture: "rows50") { _ in }
     return b
   }
 
@@ -149,6 +149,8 @@ import PerfLoopProbe
     XCTAssertEqual(m.scenario("select")?.guardParams?["snapshot-diff.tolerance"]?.double, 0.01)
     XCTAssertEqual(m.scenario("select")?.secondFixture, "rows50")
     XCTAssertEqual(m.scenario("open")?.objective, "latencyMs")
+    XCTAssertEqual(m.scenario("open")?.fixture, "rows50"); XCTAssertNil(m.scenario("select")?.fixture)
+    XCTAssertEqual(m.fixture(for: "open"), "rows50"); XCTAssertEqual(m.fixture(for: "select"), "rows500")
     XCTAssertEqual(m.fixtureNames, ["rows500", "rows50"])
     XCTAssertEqual(m.knobs.first?.name, "test.rank"); XCTAssertEqual(m.knobs.first?.choices, ["sort", "index"])
     XCTAssertEqual(m.defaultFixture, "rows500")
@@ -199,6 +201,9 @@ import PerfLoopProbe
     XCTAssertEqual(try b.resolveFixture("rows500@rows=2000").params["rows"], "2000")
     XCTAssertEqual(try b.resolveFixture("rows500@rows=2000").name, "rows500@rows=2000")
     XCTAssertEqual(try b.resolveFixture(nil).name, "rows500")
+    XCTAssertEqual(try b.resolveFixture(nil, scenario: "open").name, "rows50", "the scenario's own fixture")
+    XCTAssertEqual(try b.resolveFixture(nil, scenario: "select").name, "rows500")
+    XCTAssertEqual(try b.resolveFixture("rows500", scenario: "open").name, "rows500", "--fixture wins")
     XCTAssertThrowsError(try b.resolveFixture("rows500@rows=9000"))
     XCTAssertThrowsError(try b.resolveFixture("rows500@cols=3"))
     XCTAssertThrowsError(try b.resolveFixture("nope"))
