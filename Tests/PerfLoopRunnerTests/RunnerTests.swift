@@ -91,6 +91,33 @@ final class RunnerTests: FakeBenchCase {
     XCTAssertEqual(try loop.queueRun(on: try sshRunner(), until: nil).lines, ["nothing queued for ssh://fake-mini"])
   }
 
+  func testAFileFixtureIsAskedOfTheRemoteMac() throws {
+    try baseline()
+    let r = try sshRunner()
+    loop.runner = r
+    // A path under this Mac's store is the remote store's for the reps (perfloop copies builds there, not fixtures).
+    let local = store.root.appendingPathComponent("fixtures/big.json").path
+    let remote = remoteHome.appendingPathComponent(".perfloop/fake-app/fixtures/big.json").path
+    var n = Loop.NewOptions(hypothesis: "h"); n.bench = try bench("cand", ["CPU": "8"]); n.fixture = "file:" + local; n.screen = false
+    XCTAssertThrowsError(try loop.new(n)) { e in
+      XCTAssertEqual((e as? PLError)?.code, 1)
+      XCTAssertTrue("\(e)".hasPrefix("fixture file:\(local): no readable file at \(remote) on fake-mini (ssh://fake-mini): every rep there would fail on it. perfloop copies builds to fake-mini, not fixture files"), "\(e)")
+    }
+    XCTAssertTrue(sshCalls("ssh mar@fake-mini").contains { $0.contains("test -r") && $0.contains(remote) }, "asked there")
+    try FileManager.default.createDirectory(atPath: (remote as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    try "{}".write(toFile: remote, atomically: true, encoding: .utf8)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: local), "only the remote Mac has it")
+    let e = try loop.screen(try loop.new(n).id)
+    XCTAssertEqual(e.screen?.runner?.runner, "ssh://fake-mini")
+    XCTAssertTrue(adapterCalls("ab").allSatisfy { $0.contains(" file:\(remote) ") }, "\(adapterCalls("ab"))")
+    XCTAssertEqual(e.screen?.pairs.filter { $0.failure != nil }.count, 0, "\(e.screen?.pairs.map(\.failure) ?? [])")
+    // A relative path would be read from the rep's folder in the store there: refused without asking.
+    let asked = sshCalls("ssh mar@fake-mini").count
+    n.fixture = "file:big.json"
+    XCTAssertThrowsError(try loop.new(n)) { XCTAssertTrue("\($0)".contains("big.json is relative: on ssh://fake-mini the adapter reads it from the rep's folder in the store there"), "\($0)") }
+    XCTAssertEqual(sshCalls("ssh mar@fake-mini").count, asked)
+  }
+
   func testALockedRemoteScreenWaitsUntilUnlocked() throws {
     #if !canImport(Darwin)
     // The runner reads the remote lock with ioreg | plutil, run here as "the remote Mac": plutil is macOS-only.

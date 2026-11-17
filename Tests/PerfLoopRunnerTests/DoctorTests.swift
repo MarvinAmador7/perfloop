@@ -41,6 +41,17 @@ final class DoctorTests: FakeBenchCase {
     XCTAssertTrue(try doctor(["STEP_FIXTURE": "swarm64"]).ok)
   }
 
+  func testAFileFixtureIsOffTheListAndWarnedWhenItIsntHere() throws {
+    let r = try doctor(["STEP_FIXTURE": "file:/nonexistent/perfloop-fixture.json"])
+    XCTAssertTrue(r.ok, r.text)
+    let l = try XCTUnwrap(r.lines.first { $0.check == "scenario step" && $0.status == .warn }, r.text)
+    XCTAssertTrue(l.detail.hasPrefix("fixture file:/nonexistent/perfloop-fixture.json: no readable file at /nonexistent/perfloop-fixture.json on this Mac"), l.detail)
+    let s = try doctor(["STEP_FIXTURE": "s3:bucket/x", "SCHEMES": "file"])
+    XCTAssertFalse(s.ok)
+    XCTAssertEqual(s.lines.first { $0.check == "scenario step" && $0.status == .fail }?.detail,
+                   "its fixture: fixture 's3:bucket/x': the adapter takes no s3: fixtures (the manifest has fixtureSchemes file:); its fixtures are crew17, swarm64")
+  }
+
   func testDirtyIsAWarningNotAFail() throws {
     let r = try doctor(["DIRTY": "true"])
     XCTAssertTrue(r.ok)

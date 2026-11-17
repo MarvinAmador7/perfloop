@@ -172,6 +172,19 @@ public final class SSHRunner: Runner {
 
   // MARK: Runner
 
+  /// Asked of the remote Mac (`test -r`, one ssh call): perfloop copies builds there, never fixture files. A path under
+  /// this Mac's store is the remote store's (as the reps' arguments are rewritten); a relative one would be read from
+  /// the rep's folder in the store there, which never holds it.
+  public func missingFile(_ path: String) throws -> String? {
+    guard path.hasPrefix("/") else {
+      return "\(path) is relative: on \(name) the adapter reads it from the rep's folder in the store there, which has no such file. Give an absolute path that exists on \(host)"
+    }
+    try connect()
+    let p = map(path)
+    if try remote("test -r \(Self.q(p))", check: false).status == 0 { return nil }
+    return "no readable file at \(p) on \(host) (\(name)): every rep there would fail on it. perfloop copies builds to \(host), not fixture files: copy it there (e.g. rsync), or give a path that exists there"
+  }
+
   public func identity() throws -> RunnerIdentity {
     let i = try connect()
     return RunnerIdentity(runner: name, model: i.model, host: i.host, os: i.os)

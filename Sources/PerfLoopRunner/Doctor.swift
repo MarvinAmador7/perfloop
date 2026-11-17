@@ -28,6 +28,13 @@ public struct Doctor {
 
   mutating func add(_ check: String, _ s: Status, _ detail: String, fix: String? = nil) { lines.append(Line(check: check, status: s, detail: detail, fix: fix)) }
 
+  /// A `file:` fixture the manifest names, checked on this Mac: a warning, since the reps may run on another Mac that
+  /// has it (`exp new`, `run` and each stage ask the runner and refuse it there).
+  mutating func checkFixtureFile(_ f: String, _ check: String) {
+    guard let p = Manifest.fixtureFile(f), let why = LocalRunner.missingHere(p) else { return }
+    add(check, .warn, "fixture \(f): \(why)", fix: "reps on a runner without that file are refused before they start; create it, or name a listed fixture")
+  }
+
   /// The objectives the runner knows how to read (Readings, Acceptance).
   public static let objectives: Set<String> = ["mainThreadCpuMsPerStep", "instructionsPerStep", "latencyMs", "hitchTimeRatioMsPerS"]
 
@@ -83,14 +90,19 @@ public struct Doctor {
       if !Self.objectives.contains(obj) { add("scenario \(s.name)", .fail, "objective \(obj) is not one the runner reads", fix: "one of " + Self.objectives.sorted().joined(separator: ", ")) }
       else if s.kind == "latency" && obj != "latencyMs" { add("scenario \(s.name)", .warn, "a latency scenario climbing on \(obj)") }
       else { add("scenario \(s.name)", .ok, "\(s.kind), climbs on \(obj), guarded by \(GuardNames.correctness(s).joined(separator: ", "))") }
-      if let sf = s.secondFixture, !m.fixtureNames.contains(sf) { add("scenario \(s.name)", .fail, "second fixture \(sf) is not in the manifest's fixtures") }
+      if let sf = s.secondFixture, Manifest.fixtureScheme(sf) == nil, !m.fixtureNames.contains(sf) { add("scenario \(s.name)", .fail, "second fixture \(sf) is not in the manifest's fixtures") }
       if let f = s.fixture, let why = m.unknownFixture(f) {
-        add("scenario \(s.name)", .fail, "its fixture: \(why)", fix: "list \(Manifest.fixtureBase(f)) in fixtures, or name one that is in the scenario's `fixture`")
+        add("scenario \(s.name)", .fail, "its fixture: \(why)", fix: Manifest.fixtureScheme(f) == nil ? "list \(Manifest.fixtureBase(f)) in fixtures, or name one that is in the scenario's `fixture`" : "add the scheme to fixtureSchemes, or name a listed fixture")
       }
+      for f in [s.fixture, s.secondFixture].compactMap({ $0 }) { checkFixtureFile(f, "scenario \(s.name)") }
     }
     for i in m.isolationGuards ?? [] where m.scenario(i) == nil { add("isolation", .fail, "isolation scenario \(i) is not a scenario") }
     if m.fixtures.isEmpty { add("fixtures", .warn, "none listed: experiments must pass --fixture") }
-    if let d = m.defaultFixture, !m.fixtureNames.contains(d) { add("fixtures", .fail, "default fixture \(d) is not listed") }
+    if let d = m.defaultFixture {
+      if Manifest.fixtureScheme(d) == nil, !m.fixtureNames.contains(d) { add("fixtures", .fail, "default fixture \(d) is not listed") }
+      else if let why = m.unknownFixture(d) { add("fixtures", .fail, "default fixture: \(why)") }
+      checkFixtureFile(d, "fixtures")
+    }
 
     // knobs
     for k in m.knobs {

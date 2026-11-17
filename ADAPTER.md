@@ -45,6 +45,7 @@ candidate's, so an experiment can't change how it is judged. Without `describe`,
   "defaultFixture": "rows2000", "isolationGuards": [],
   "verbs": ["help", "list", "describe", "knobs", "run", "snapdiff", "profile", "diff"],   // optional; absent = deskbench's (with ab)
   "privatePaths": [".secrets/"],                                       // optional; never recorded in a patch
+  "fixtureSchemes": ["file"],                                         // optional; the scheme: forms --fixture takes
   "profileEnv": ["MYAPP_DATA_DIR"] }                                   // optional; what `profile` needs beyond the allowlist (§6)
 ```
 
@@ -59,6 +60,14 @@ verb uses it (`exp new` on a scenario other than the champion's, `run`, `baselin
 scenarios); a `--fixture` the manifest doesn't list is refused with the list (`name@k=v` of a listed one and a
 `scheme:…` form such as `file:PATH` pass), and `doctor --bench` fails a scenario whose `fixture` isn't listed. It is
 part of the contract: a candidate that changes it needs the owner to be promoted.
+
+`fixtureSchemes` (optional, added 2026-11): the `scheme:` forms your `--fixture` takes besides the listed names, e.g.
+`["file"]`. Without it any scheme reaches you as before; with it, another scheme is refused before a rep runs (`[]`:
+none; a PerfLoopHost bench with fixtures says `[]`, since it takes listed names only). A `file:PATH` fixture (`file:///abs`
+too) is checked on the Mac the reps run on before any of them start, whatever this says: perfloop refuses it when the
+file isn't readable there (this Mac: from perfloop's working directory when relative; an `ssh://` runner: asked over
+ssh, absolute paths only, as perfloop copies builds there but never fixture files; a VM: once it is up, at the stage's
+start). `doctor --bench` warns when a `file:` fixture the manifest names isn't on this Mac.
 
 ## 3. `run SCENARIO --fixture F --reps 1 --json [--set k=v …] [--quiet-check 0]`
 
@@ -230,7 +239,7 @@ adapter that can't can be wrapped instead: `perfloop lock -- BENCH ab …`.
 
 | Document | Version | Written by | Stability |
 |---|---|---|---|
-| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `profileEnv` added 2026-11 |
+| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `fixtureSchemes`, `profileEnv` added 2026-11 |
 | `perfloop.build` | 1 | adapter (`tool.build`), store (`build.json`) | stable |
 | `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11) |
 | `perfloop.measure`, `perfloop.baseline` | 1 | runner (`runs/<id>/run.json`, `baselines/<scenario>/baseline.json`) | new (2026-11); a pair's `Side` gained `fixture` (what the rep ran) |

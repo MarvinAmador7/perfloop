@@ -81,4 +81,26 @@ final class MeasureTests: XCTestCase {
     let derived = try XCTUnwrap(Manifest.derived(fromList: .object(["scenarios": .array([.object(["name": .string("x"), "fixture": .string("search")])])])))
     XCTAssertEqual(derived.scenario("x")?.fixture, "search")
   }
+
+  func testSchemeFixturesPassUnlessTheAdapterSaysWhichItTakes() throws {
+    XCTAssertEqual(Manifest.fixtureScheme("file:/tmp/x.json"), "file"); XCTAssertEqual(Manifest.fixtureScheme("S3+x:bucket/k"), "s3+x")
+    for name in ["crew17", "crew17@agents=3", "crew@time=12:30", "my fixture:x", ":x", "1x:y"] { XCTAssertNil(Manifest.fixtureScheme(name), name) }
+    XCTAssertEqual(Manifest.fixtureFile("file:/tmp/x.json"), "/tmp/x.json"); XCTAssertEqual(Manifest.fixtureFile("file:///tmp/x.json"), "/tmp/x.json")
+    XCTAssertEqual(Manifest.fixtureFile("file:rel/x.json"), "rel/x.json"); XCTAssertNil(Manifest.fixtureFile("http:/x")); XCTAssertNil(Manifest.fixtureFile("crew17"))
+
+    var m = Manifest(app: "a", adapter: "b", build: nil, scenarios: [], fixtures: [.object(["name": .string("crew17")])])
+    XCTAssertNil(m.unknownFixture("file:/x")); XCTAssertNil(m.unknownFixture("s3:bucket/k"), "an adapter that doesn't say: any scheme, as before")
+    m.fixtureSchemes = ["file:"]
+    XCTAssertNil(m.unknownFixture("FILE:/x"))
+    XCTAssertEqual(m.unknownFixture("s3:bucket/k", whose: "the champion's manifest"),
+                   "fixture 's3:bucket/k': the adapter takes no s3: fixtures (the champion's manifest has fixtureSchemes file:); its fixtures are crew17")
+    m.fixtureSchemes = []
+    XCTAssertTrue(m.unknownFixture("file:/x")?.contains("takes no file: fixtures (the manifest has fixtureSchemes none)") == true)
+    XCTAssertNil(m.unknownFixture("crew17@agents=2"), "names are unaffected")
+    // Read from describe, written back, and not part of the contract (it says what the adapter can do, not how builds are judged).
+    let d = try PLJSON.decode(Manifest.self, from: Data(#"{ "app": "a", "fixtureSchemes": ["file"] }"#.utf8))
+    XCTAssertEqual(d.fixtureSchemes, ["file"]); XCTAssertTrue(PLJSON.encode(d).contains("fixtureSchemes"))
+    var e = d; e.fixtureSchemes = nil
+    XCTAssertEqual(d.contract, e.contract)
+  }
 }

@@ -16,7 +16,7 @@ extension Store {
     var t = id.hasPrefix("run/") ? String(id.dropFirst(4)) : id
     if let n = Int(t.hasPrefix("m") ? String(t.dropFirst()) : t) { t = String(format: "m%04d", n) }
     let p = measureDir(t).appendingPathComponent("run.json").path
-    guard FileManager.default.fileExists(atPath: p) else { throw PLError.usage("no measurement \(t) in \(root.path) (perfloop ledger lists them: state measure)") }
+    guard FileManager.default.fileExists(atPath: p) else { throw PLError.usage("no measurement \(t) in \(root.path) (perfloop ledger lists them: states measure and baseline)") }
     return try PLJSON.read(ScenarioRun.self, path: p)
   }
 
@@ -86,7 +86,7 @@ extension Loop {
 
   /// `perfloop run` (and the measuring half of `perfloop baseline`): `reps` reps of the scenario on the target's build,
   /// each through the runner and judged for trust, interleaved with the champion's `reference` scenario when asked;
-  /// stored under `runs/<id>/`, one ledger line (`measure`), and no verdict.
+  /// stored under `runs/<id>/`, one ledger line (`measure`; `baseline` for a baseline), and no verdict.
   public func runScenario(_ o: MeasureOptions) throws -> ScenarioRun {
     guard o.reps >= 1 else { throw PLError.usage("--reps takes a count ≥ 1") }
     let t = try measureTarget(o.target, exe: o.exe)
@@ -116,6 +116,8 @@ extension Loop {
       guard let rf = (base?.scenario == r ? base?.fixture : nil) ?? ce.manifest?.fixture(for: r) else { throw PLError.usage("the champion's manifest names no fixture for \(r)") }
       ref = (r, rf, ce, c)
     }
+    let here = try runner.identity()
+    for f in [fx, ref?.fixture].compactMap({ $0 }) { try checkFixtureFile(f) }
     let metric = m?.scenario(sc)?.objective ?? "mainThreadCpuMsPerStep"
     let id = store.nextMeasureID(), dir = store.measureDir(id)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -124,7 +126,7 @@ extension Loop {
     let knobs = t.knobs.merging(o.knobs) { $1 }
     x.knobs = knobs.isEmpty ? nil : knobs
     x.params = o.params.isEmpty ? nil : o.params
-    x.runner = try runner.identity()
+    x.runner = here
     try runner.prepare(t.entry)
     if let r = ref { try runner.prepare(r.entry) }
     log("\(o.kind) \(id): \(sc) on \(fx), \(o.reps) rep(s) of \(t.label)" + (ref.map { ", each beside one of \($0.scenario) on the champion" } ?? ""))
@@ -182,7 +184,7 @@ extension Loop {
     var note = "\(o.kind) \(sc) on \(fx): " + (x.summary.median.map { "\(metric) \(Measure.number($0)) median, \(x.summary.trusted)/\(x.summary.ran) reps trusted" }
       ?? "UNTRUSTED (\(x.summary.untrusted ?? "\(x.summary.failed) rep(s) failed"))")
     if o.kind == "baseline" { note += record == nil ? "; no baseline recorded" : "; recorded as the baseline of \(sc)" }
-    try store.ledger.append(LedgerEntry(experiment: id, state: "measure", objective: x.summary.median.map { .init(before: nil, after: $0) }, build: t.entry.build.hash, by: by,
+    try store.ledger.append(LedgerEntry(experiment: id, state: o.kind == "baseline" ? "baseline" : "measure", objective: x.summary.median.map { .init(before: nil, after: $0) }, build: t.entry.build.hash, by: by,
                                         note: note, runner: x.runner))
     return x
   }

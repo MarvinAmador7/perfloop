@@ -72,7 +72,7 @@ public final class MCPServer {
     Tool(name: "suggest", description: "Ranked hypotheses for the next experiment from what the loop recorded (cause records, stacks, profiles, sweeps), each with its evidence and the share of the objective it could remove. Leads to check, not conclusions.",
          properties: ["target": Self.prop("string", "champion (default) or exp/ID")], required: [], kind: .now) { a in
       try ["suggest"] + Self.opt(a, "target", Self.target) },
-    Tool(name: "ledger", description: "Every state change of every experiment, oldest first: what was tried, by whom, where, with what result.", properties: [:], required: [], kind: .now) { _ in ["ledger"] },
+    Tool(name: "ledger", description: "Every state change of every experiment, oldest first: what was tried, by whom, where, with what result. Also `measure` (a run) and `baseline` lines, whose id is the measurement's (m0003).", properties: [:], required: [], kind: .now) { _ in ["ledger"] },
     Tool(name: "champion", description: "The build to beat and its chain back to a merged commit.", properties: [:], required: [], kind: .now) { _ in ["champion"] },
     Tool(name: "doctor", description: "What would make this Mac's numbers untrustworthy now (screen lock, someone using it, load, disk, xctrace), and with a bench, the adapter's contract.",
          properties: ["bench": Self.prop("string", "Path to a bench executable to check too")], required: [], kind: .now) { a in try ["doctor"] + Self.opt(a, "bench", Self.path, flag: "--bench") },
@@ -84,7 +84,7 @@ public final class MCPServer {
                       "bench": Self.prop("string", "The candidate's bench executable (built), or what build_cmd produces"),
                       "build_cmd": Self.prop("string", "A command that builds the candidate's bench (run in the current directory)"),
                       "knobs": Self.prop("string", "k=v,k=v: an idea the app already has as a knob (no rebuild)"),
-                      "scenario": Self.prop("string", "Default: the champion's"), "fixture": Self.prop("string", "Default: the champion's"),
+                      "scenario": Self.prop("string", "Default: the champion's"), "fixture": Self.prop("string", "Default: the champion's. A listed name, name@k=v, or the adapter's file:PATH (refused when the file isn't on the Mac the reps run on)"),
                       "behaviour_change": Self.prop("boolean", "The change alters what the user sees or can do: promotion then needs the owner"),
                       "screen": Self.prop("boolean", "Screen it now (default true)"), "runner": Self.runnerProp,
                       "expect": Self.prop("string", "faster (default: an optimisation, promoted when it wins) or same (a feature or guard check: does it cost anything?)",
@@ -92,7 +92,7 @@ public final class MCPServer {
          required: ["hypothesis"], kind: .job) { [unowned self] a in
       var x = try ["exp", "new", Self.text(Self.req(a, "hypothesis"))]
       x += try Self.opt(a, "bench", Self.path, flag: "--bench") + Self.opt(a, "build_cmd", { $0 }, flag: "--build-cmd") + Self.opt(a, "knobs", Self.knobs, flag: "--knobs")
-      x += try Self.opt(a, "scenario", Self.name, flag: "--scenario") + Self.opt(a, "fixture", Self.name, flag: "--fixture")
+      x += try Self.opt(a, "scenario", Self.name, flag: "--scenario") + Self.opt(a, "fixture", Self.fixture, flag: "--fixture")
       if a["behaviour_change"]?.bool == true { x.append("--behaviour-change") }
       if let v = a["expect"]?.string, !v.isEmpty {
         guard ["faster", "same"].contains(v) else { throw Refused(description: "expect is faster or same, not '\(v)'") }
@@ -137,22 +137,22 @@ public final class MCPServer {
       x += try Self.opt(a, "bench", Self.path, flag: "--bench")
       if let r = a["reps"]?.double { x += ["--reps", String(Int(r))] }
       return x + ["--lock", self.lock] },
-    Tool(name: "run", description: "One build's scenario measured on its own, no verdict: trusted numbers (untrusted reps are named, never quoted), its checks, where the time went. The scenario may be one only that build has (a feature's own, which exp can't judge until the champion has it). Opens windows. Returns a job.",
+    Tool(name: "run", description: "One build's scenario measured on its own, no verdict: trusted numbers (untrusted reps are named, never quoted), its checks, where the time went. The scenario may be one only that build has (a feature's own, which exp can't judge until the champion has it); its ledger line is `measure`. Opens windows. Returns a job.",
          properties: ["target": Self.prop("string", "champion, exp/ID, a build hash in the store, or a stamped bench's path"), "scenario": Self.prop("string", "Default: the target's"),
-                      "fixture": Self.prop("string", "Default: the scenario's own, else the manifest's"), "reps": Self.prop("integer", "Reps (default 3)"),
+                      "fixture": Self.prop("string", "Default: the scenario's own, else the manifest's. A listed name, name@k=v, or the adapter's file:PATH"), "reps": Self.prop("integer", "Reps (default 3)"),
                       "reference": Self.prop("string", "A champion scenario run beside each rep, the same minutes: a yardstick for how fast the Mac ran"),
                       "knobs": Self.prop("string", "k=v,k=v"), "runner": Self.runnerProp], required: ["target"], kind: .job) { [unowned self] a in
-      var x = try ["run", Self.targetOrPath(Self.req(a, "target"))] + Self.opt(a, "scenario", Self.name, flag: "--scenario") + Self.opt(a, "fixture", Self.name, flag: "--fixture")
+      var x = try ["run", Self.targetOrPath(Self.req(a, "target"))] + Self.opt(a, "scenario", Self.name, flag: "--scenario") + Self.opt(a, "fixture", Self.fixture, flag: "--fixture")
       x += try Self.opt(a, "reference", Self.name, flag: "--reference") + Self.opt(a, "knobs", Self.knobs, flag: "--knobs")
       if let r = a["reps"]?.double { x += ["--reps", String(max(1, Int(r)))] }
       return try x + self.runner(a) },
-    Tool(name: "baseline", description: "First numbers (trusted reps only) and a reference snapshot for a scenario the champion doesn't have yet (a feature's own); once a champion has it, `run` on the champion is compared with it. Records nothing when no rep could be trusted. Opens windows. Returns a job.",
+    Tool(name: "baseline", description: "First numbers (trusted reps only) and a reference snapshot for a scenario the champion doesn't have yet (a feature's own); once a champion has it, `run` on the champion is compared with it. Records nothing when no rep could be trusted; its ledger line is `baseline` either way. Opens windows. Returns a job.",
          properties: ["scenario": Self.prop("string", "The new scenario"), "bench": Self.prop("string", "The bench that has it (stamped)"), "build": Self.prop("string", "Or a build in the store (hash) or exp/ID"),
-                      "fixture": Self.prop("string", "Default: the scenario's own, else the manifest's"), "reps": Self.prop("integer", "Reps (default 5)"),
+                      "fixture": Self.prop("string", "Default: the scenario's own, else the manifest's. A listed name, name@k=v, or the adapter's file:PATH"), "reps": Self.prop("integer", "Reps (default 5)"),
                       "reference": Self.prop("string", "A champion scenario run beside each rep, the same minutes"), "runner": Self.runnerProp], required: ["scenario"], kind: .job) { [unowned self] a in
       var x = try ["baseline", Self.name(Self.req(a, "scenario"))] + Self.opt(a, "bench", Self.path, flag: "--bench") + Self.opt(a, "build", Self.targetOrPath, flag: "--build")
       guard x.contains("--bench") || x.contains("--build") else { throw Refused(description: "give the bench that has the scenario (bench) or a build in the store (build)") }
-      x += try Self.opt(a, "fixture", Self.name, flag: "--fixture") + Self.opt(a, "reference", Self.name, flag: "--reference")
+      x += try Self.opt(a, "fixture", Self.fixture, flag: "--fixture") + Self.opt(a, "reference", Self.name, flag: "--reference")
       if let r = a["reps"]?.double { x += ["--reps", String(max(1, Int(r)))] }
       return try x + self.runner(a) },
     Tool(name: "queue_add", description: "Queues an experiment's stages for a runner (the owner's `queue run` takes them, e.g. overnight on a spare Mac).",
@@ -197,6 +197,8 @@ public final class MCPServer {
     guard !s.hasPrefix("-"), s.allSatisfy({ $0.isLetter || $0.isNumber || "._-@=,:".contains($0) }) else { throw Refused(description: "'\(s)' isn't a name") }
     return s
   }
+  /// A fixture: a name (`crew`, `crew@agents=24`), or an adapter's `scheme:` form, whose rest may be a path.
+  static func fixture(_ s: String) throws -> String { Manifest.fixtureScheme(s) != nil ? try text(s) : try name(s) }
   static func knobs(_ s: String) throws -> String {
     let parts = s.split(separator: ",")
     guard !s.hasPrefix("-"), !parts.isEmpty, parts.allSatisfy({ $0.split(separator: "=", maxSplits: 1).count == 2 }) else { throw Refused(description: "knobs are k=v,k=v, not '\(s)'") }

@@ -181,6 +181,8 @@ public final class Bench: @unchecked Sendable {
     m.verbs = Self.verbs; m.privatePaths = privatePaths.isEmpty ? nil : privatePaths
     m.profileEnv = profileEnv.isEmpty ? nil : profileEnv
     m.gestures = gestures.isEmpty ? nil : gestures
+    // `resolveFixture` takes only registered names when there are some (any name when none): no `scheme:` form.
+    m.fixtureSchemes = fixtures.isEmpty ? nil : []
     return m
   }
 

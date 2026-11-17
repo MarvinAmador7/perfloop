@@ -362,6 +362,7 @@ public struct StopInput: Sendable {
   public var budgetPassed: Bool?
   /// The largest attributable subtree as a share of the objective, when a profile says.
   public var largestAttributablePct: Double?
+  /// From the first optimisation experiment, expect-same stages not counted (`Stopping.budgetClock`).
   public var timeBudgetS: Double = 7200
   public var maxCandidates = 20
   public var maxNonPromisingStreak = 5
@@ -374,7 +375,8 @@ public struct StopInput: Sendable {
 public enum Stopping {
   /// Every rule that holds; empty means keep going. They are the optimisation loop's: an expect-same experiment's lines
   /// (a feature or guard check) count toward none of them, and an inconclusive screen neither extends nor breaks the
-  /// streak (it decided nothing). The time budget runs from the session's start once it has an optimisation candidate.
+  /// streak (it decided nothing). The time budget's clock starts at the session's first optimisation experiment and
+  /// stops while expect-same stages run (`budgetClock`).
   public static func reasons(_ i: StopInput) -> [String] {
     var r: [String] = []
     if i.budgetPassed == true { r.append("the champion meets its SPEC §1 budget") }
@@ -385,10 +387,30 @@ public enum Stopping {
     if streak >= i.maxNonPromisingStreak { r.append("\(streak) non-promising candidates in a row") }
     let candidates = Set(session.filter { $0.state == ExpState.built.rawValue }.map(\.experiment)).count
     if candidates >= i.maxCandidates { r.append("\(candidates) candidates this session (budget \(i.maxCandidates))") }
-    // An owner's champion lines (set, merged) and `perfloop run`'s measurements aren't a candidate: the clock waits for one.
-    if session.contains(where: { !["session", ExpState.promoted.rawValue, "merged", "measure"].contains($0.state) }), let first = session.first.flatMap({ Clock.date($0.at) }), i.now.timeIntervalSince(first) >= i.timeBudgetS {
-      r.append("the session's time budget (\(Int(i.timeBudgetS / 60)) min) is spent")
+    if let c = budgetClock(i.session, now: i.now), c.spentS >= i.timeBudgetS {
+      let feature = c.featureS >= 60 ? ", not counting \(Int(c.featureS / 60)) min of expect-same stages" : ""
+      r.append("the session's time budget (\(Int(i.timeBudgetS / 60)) min) is spent: \(Int(c.spentS / 60)) min since its first optimisation experiment\(feature)")
     }
     return r
+  }
+
+  /// Lines that aren't an optimisation candidate's: the session's start, an owner's champion lines (set, merged),
+  /// `perfloop run`'s and `perfloop baseline`'s measurements.
+  static let notCandidates: Set<String> = ["session", ExpState.promoted.rawValue, "merged", "measure", "baseline"]
+
+  /// The session's time budget so far: seconds from its first optimisation line (an experiment that isn't expect-same:
+  /// its `built` line) to `now`, less the time expect-same stages ran after it (`featureS`). nil before that line: a
+  /// session of feature checks alone never spends it. There is no per-stage timing; a stage's run is read from the
+  /// ledger: an expect-same line (a screen's or full's verdict, a guards run) right after another line of the same
+  /// experiment ran from that line to it. A `full` line marks a full's start, so the gap before it counts; and a line
+  /// with another experiment's in between counts, so a stage's time is never subtracted from anything else's.
+  public static func budgetClock(_ session: [LedgerEntry], now: Date) -> (spentS: Double, featureS: Double)? {
+    guard let first = session.first(where: { $0.expect != "same" && !notCandidates.contains($0.state) }), let start = Clock.date(first.at) else { return nil }
+    var feature = 0.0
+    for (prev, cur) in zip(session, session.dropFirst()) where cur.expect == "same" && prev.experiment == cur.experiment && cur.state != ExpState.full.rawValue {
+      guard let a = Clock.date(prev.at), let b = Clock.date(cur.at) else { continue }
+      feature += max(0, b.timeIntervalSince(max(a, start)))
+    }
+    return (max(0, now.timeIntervalSince(start) - feature), feature)
   }
 }

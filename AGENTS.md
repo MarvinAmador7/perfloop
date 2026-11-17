@@ -50,7 +50,8 @@ perfloop ledger                              # what was tried, by whom, with wha
    a PR. `lost`: drop it. `needsReview`: stop and ask the owner.
 5. **Stop** when `exp status` prints `stop:` (the budget is met, no cost ≥ 5 % of the objective is left that you can
    attribute, 5 non-promising candidates in a row, or 2 h / 20 candidates spent), and report from the ledger: what you
-   tried, what won, what's left.
+   tried, what won, what's left. The 2 h run from your first optimisation experiment, not `session start`, and stop
+   while an expect-same stage runs.
 
 ## A feature PR: show it costs nothing (`--expect same`)
 
@@ -77,7 +78,8 @@ The margin is the smallest change worth calling for the metric (5 % of CPU per s
 a frame metric), never the run's noise, so a noisy Mac makes it say "can't tell", not "costs nothing". It runs on the
 scenarios the champion's manifest has; a snapshot that differs from the champion's is listed as a `look:` for the PR,
 not a verdict (a feature changes what it shows). These checks get no "drop it", and count toward none of the stopping
-rules (the streak, the 2 h, the 20 candidates).
+rules (the streak, the 2 h, the 20 candidates): the 2 h clock starts at the first optimisation experiment and doesn't
+run while an expect-same screen or full does.
 
 ## Measuring without a verdict: `run` and `baseline`
 
@@ -94,7 +96,7 @@ perfloop baseline S --bench PATH [--reference S2]   # first numbers + a referenc
 - **Use `run`** to measure one build: your feature's own new scenario (one only your branch's bench has, which `exp new`
   refuses), a fixture you're checking, how a build behaves before you form a hypothesis. It runs the build's own
   scenario and checks through the same runner as a stage (screen-lock wait, quiet gate, window lock), one child per rep,
-  stores `runs/<id>/` and a ledger line `measure`, and prints the trusted reps' numbers, the checks and where the time
+  stores `runs/<id>/` and a ledger line `measure` (`baseline` writes `baseline`), and prints the trusted reps' numbers, the checks and where the time
   went. Exit 3: the scenario's own checks failed (fix the feature first); exit 5: no rep could be trusted.
 - **Use `baseline`** once, in the feature's PR, for each new scenario: it records first numbers (trusted reps only) and
   the window's picture. After the merge, when the champion has the scenario, `exp status` says so and `perfloop run
@@ -103,6 +105,10 @@ perfloop baseline S --bench PATH [--reference S2]   # first numbers + a referenc
   feature from a slow Mac ("this Mac runs 12 % slower than at the champion's full"). Use one whenever the Mac is shared.
 - **Untrusted reps are named, never quoted.** A `run` whose reps were all untrusted prints `UNTRUSTED` and no number;
   rerun it when the Mac is quiet, and never copy an untrusted rep's value into a PR. `baseline` records nothing then.
+- **`file:` fixtures** (`--fixture file:PATH`, when your adapter takes them): the file must be on the Mac the reps run
+  on. perfloop asks that Mac (an `ssh://` runner too: it copies builds there, never fixture files) and refuses the
+  fixture before anything is built or run; each stage asks again on its own runner. Locally a relative path is read
+  from the directory perfloop runs in; on a remote runner give an absolute path.
 - A `run` or a baseline is information, not a verdict: different minutes, no interleaving with the champion. "No
   regression" claims need an `exp` (`exp new … --expect same`, above).
 

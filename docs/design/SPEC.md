@@ -271,7 +271,9 @@ and summaries only; `perfloop` warns when a trace path is inside a git checkout.
 
 Stop the loop for a scenario when any holds: the SPEC §1 budget verdict passes on the champion with 5 + 5 reps on
 hardware; no attributable subtree ≥ 5 % of the objective remains; 5 consecutive non-promising candidates; the time
-budget (default 2 h or 20 candidates per session) is spent.
+budget (default 2 h or 20 candidates per session) is spent. The 2 h run from the session's first optimisation
+experiment, not its start, and leave out the time its expect-same stages (feature checks) ran: a feature PR's checks
+never use up the optimisation session's clock.
 
 Cost model (release, this Mac): incremental build 1–3 min; screen 40 s; full 3 min; confirmation 1 min; export of a
 10 k-sample time profile 3 s (verified). A rejected idea costs ≈ 2–4 min, a promoted one ≈ 8 min. The hour the

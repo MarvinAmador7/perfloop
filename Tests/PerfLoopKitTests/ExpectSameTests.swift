@@ -148,6 +148,37 @@ final class ExpectSameTests: XCTestCase {
     l.append(LedgerEntry(experiment: "0018", state: "rejected", at: at(18)))
     let r = Stopping.reasons(StopInput(session: l, now: t0.addingTimeInterval(1800)))
     XCTAssertEqual(r, ["5 non-promising candidates in a row"])
-    XCTAssertTrue(Stopping.reasons(StopInput(session: l, now: t0.addingTimeInterval(7300))).contains { $0.contains("time budget") })
+    // The clock started at the first optimisation experiment (13 min), not the session (0).
+    XCTAssertFalse(Stopping.reasons(StopInput(session: l, now: t0.addingTimeInterval(7300))).contains { $0.contains("time budget") })
+    XCTAssertTrue(Stopping.reasons(StopInput(session: l, now: t0.addingTimeInterval(13 * 60 + 7200))).contains { $0.contains("time budget") })
+  }
+
+  func testTheTimeBudgetRunsFromTheFirstOptimisationAndNotWhileFeatureChecksRun() {
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    func at(_ m: Double) -> String { Clock.iso(t0.addingTimeInterval(m * 60)) }
+    func line(_ id: String, _ state: String, _ m: Double, same: Bool = false) -> LedgerEntry { var e = LedgerEntry(experiment: id, state: state, at: at(m)); if same { e.expect = "same" }; return e }
+    func budget(_ l: [LedgerEntry], _ m: Double) -> String? { Stopping.reasons(StopInput(session: l, now: t0.addingTimeInterval(m * 60))).first { $0.contains("time budget") } }
+    // An owner's champion, a run and a baseline, then a feature check: no optimisation yet, no clock.
+    var l = [line("-", "session", 0), line("0000", "promoted", 1), line("m0001", "measure", 2), line("m0002", "baseline", 3),
+             line("0001", "built", 30, same: true), line("0001", "noRegression", 40, same: true)]
+    XCTAssertNil(Stopping.budgetClock(l, now: t0.addingTimeInterval(600 * 60)))
+    XCTAssertNil(budget(l, 600))
+    // The first optimisation experiment starts it: its feature check before it costs nothing.
+    l.append(line("0002", "built", 60)); l.append(line("0002", "rejected", 62))
+    XCTAssertEqual(Stopping.budgetClock(l, now: t0.addingTimeInterval(70 * 60))?.spentS, 600)
+    XCTAssertNil(budget(l, 179)); XCTAssertNotNil(budget(l, 180))
+    // A feature check's screen (built → verdict) and full (full → verdict) after it aren't counted; the gap before the
+    // full (its `full` line) and a check's verdict after another experiment's line are.
+    l += [line("0003", "built", 70, same: true), line("0003", "inconclusive", 75, same: true),
+          line("0003", "full", 80, same: true), line("0003", "noRegression", 100, same: true),
+          line("0004", "built", 110, same: true), line("0005", "built", 112), line("0004", "regressed", 118, same: true)]
+    let c = Stopping.budgetClock(l, now: t0.addingTimeInterval(200 * 60))
+    XCTAssertEqual(c?.featureS, 25 * 60, "5 min of screen + 20 min of full")
+    XCTAssertEqual(c?.spentS, (140 - 25) * 60)
+    XCTAssertNil(budget(l, 204)); XCTAssertEqual(budget(l, 205), "the session's time budget (120 min) is spent: 120 min since its first optimisation experiment, not counting 25 min of expect-same stages")
+    // A check screened later (`--no-screen`, then `exp screen`) with other lines between: its stage can't be told from
+    // the gap, so it counts.
+    let later = [line("-", "session", 0), line("0001", "built", 10, same: true), line("0002", "built", 20), line("0002", "rejected", 21), line("0001", "inconclusive", 30, same: true)]
+    XCTAssertEqual(Stopping.budgetClock(later, now: t0.addingTimeInterval(40 * 60))?.featureS, 0)
   }
 }

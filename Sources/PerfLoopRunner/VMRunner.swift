@@ -141,6 +141,8 @@ public final class VMRunner: Runner {
   @discardableResult public func prepare(_ build: Store.Entry) throws -> String { try connect().prepare(build) }
   public func run(_ exe: String, _ args: [String], env: [String: String], workDir: URL) throws -> Adapter.Output { try connect().run(exe, args, env: env, workDir: workDir) }
   public func fetch(_ workDir: URL) throws { try connect().fetch(workDir) }
+  /// Asked of the guest once it is up; before that nil (a VM isn't booted to check a file): a stage connects first.
+  public func missingFile(_ path: String) throws -> String? { try inner?.missingFile(path) }
   public func check() throws -> [String] {
     var o = try connect().check()
     o.append("vm: \(vm) via \(tart)\(booted != nil ? " (booted by this check; stopped when it ends)" : " (was already running)"); its numbers screen and never decide a full")
