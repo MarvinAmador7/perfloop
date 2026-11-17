@@ -91,6 +91,24 @@ final class MCPTests: XCTestCase {
     XCTAssertTrue(calls().isEmpty, "nothing ran")
   }
 
+  func testExpectSameAndMorePairsReachTheCLI() throws {
+    server.env["FAKE_CLI_SLEEP"] = "0"
+    let tools = try XCTUnwrap(try rpc("tools/list")["result"]?["tools"]?.array)
+    XCTAssertEqual(tools.first { $0["name"]?.string == "new_experiment" }?["inputSchema"]?["properties"]?["expect"]?["enum"]?.array?.compactMap(\.string), ["faster", "same"])
+    XCTAssertNotNil(tools.first { $0["name"]?.string == "screen" }?["inputSchema"]?["properties"]?["more"])
+    XCTAssertFalse(try call("new_experiment", ["hypothesis": .string("the sidebar toggle"), "bench": .string("/b/Bench"), "expect": .string("same")]).isError)
+    XCTAssertTrue(called("exp new the sidebar toggle --bench /b/Bench --expect same --runner local"), "\(calls())")
+    XCTAssertFalse(try call("screen", ["id": .string("0003"), "more": .number(3)]).isError)
+    XCTAssertTrue(called("exp screen 0003 --more 3 --runner local"), "\(calls())")
+    let before = calls().count
+    for (tool, args) in [("new_experiment", ["hypothesis": JSONValue.string("h"), "expect": .string("slower")]), ("screen", ["id": .string("1"), "more": .number(0)]),
+                         ("screen", ["id": .string("1"), "more": .number(11)]), ("screen", ["id": .string("1"), "more": .number(2.5)])] {
+      let r = try call(tool, args)
+      XCTAssertTrue(r.isError, "\(tool) \(args)"); XCTAssertTrue(r.text.contains("refused"), r.text)
+    }
+    XCTAssertEqual(calls().count, before, "nothing ran")
+  }
+
   func testStagesAreJobsTheAgentPollsAndNothingOutlivesTheSession() throws {
     let start = try call("screen", ["id": .string("0001")])
     XCTAssertFalse(start.isError, start.text); XCTAssertTrue(start.text.hasPrefix("started job j1 (screen)"), start.text)

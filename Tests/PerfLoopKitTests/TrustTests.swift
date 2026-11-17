@@ -96,15 +96,15 @@ final class TrustTests: XCTestCase {
   }
 
   func testTrustedPairsThatRejectStillReject() {
-    // Pair 1 untrusted; pair 2, trusted, the candidate lost: the screen is rejected whatever pair 1 would say.
+    // Pair 1 untrusted; pair 2, trusted, the candidate lost. A lost pair no longer rejects (b3: mixed signs can't tell),
+    // and whether every pair was slower depends on pair 1: the screen waits for it.
     var p = pairs(3, a: 40, b: 30, seed: 3)
     p[0].b.quiet = false
     p[1].b.objective = 50
     let s = Acceptance.screen(p, metric: cpu, guards: [])
-    XCTAssertEqual(s.verdict, "rejected", "\(s.reasons)")
+    XCTAssertEqual(s.verdict, "untrusted", "\(s.reasons)")
     XCTAssertEqual(s.untrusted, "1/6 reps untrusted: not quiet ×1")
-    XCTAssertTrue(s.reasons.contains { $0.contains("1 pair(s) unusable: untrusted on the candidate: not quiet") }, "\(s.reasons)")
-    // A guard it failed on a trusted pair rejects it too; one on an untrusted pair alone doesn't.
+    // A guard it failed on a trusted pair rejects it whatever the untrusted pair says; one on an untrusted pair alone doesn't.
     var g = pairs(3, a: 62, b: 12.4, seed: 7, checksB: ["landed"]); g[0].a.quiet = false
     XCTAssertEqual(Acceptance.screen(g, metric: cpu, guards: ["checks"]).verdict, "rejected")
     var h = pairs(3, a: 62, b: 12.4, seed: 7); h[0].a.quiet = false; h[0].b.checksFailed = ["landed"]

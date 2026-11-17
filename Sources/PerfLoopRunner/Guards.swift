@@ -78,7 +78,8 @@ extension Loop {
   }
 
   /// `perfloop guards --exp ID`: the guards alone, re-run on a fresh pair of the experiment's scenario and the isolation
-  /// scenarios; recorded in `guardRuns`. A failure demotes a promising or won experiment (rejected/lost), a snapshot
+  /// scenarios; recorded in `guardRuns`. A failure demotes a promising, inconclusive or won experiment (rejected/lost;
+  /// an expect-same one that had no regression or couldn't tell: regressed), a snapshot
   /// over tolerance sends it to the owner; only the owner (`--owner`, with or without `--guard-tolerance`) clears a
   /// review, back to what the objective said.
   public func guards(_ id: String, tolerance: Double? = nil) throws -> (Experiment, GuardRun) {
@@ -100,7 +101,9 @@ extension Loop {
                        failures: failures, reviews: Acceptance.guardReviews([p], guards: g.guards))
     e.guardRuns = (e.guardRuns ?? []) + [run]
     let before = e.state
-    if !run.failures.isEmpty, [.promising, .won, .needsReview].contains(e.state) { e.state = e.full == nil ? .rejected : .lost }
+    // A feature or guard check (expect same) that a guard fails has regressed, whatever its numbers said.
+    if !run.failures.isEmpty, e.expect == "same", [.noRegression, .inconclusive].contains(e.state) { e.state = .regressed }
+    else if !run.failures.isEmpty, [.promising, .inconclusive, .won, .needsReview].contains(e.state) { e.state = e.full == nil ? .rejected : .lost }
     else if !run.reviews.isEmpty, [.promising, .won].contains(e.state) { e.state = .needsReview }
     else if run.pass, e.state == .needsReview, by == "owner", let last = e.full ?? e.screen, last.verdict == "needsReview" {
       e.state = e.full == nil ? .promising : .won
@@ -114,7 +117,7 @@ extension Loop {
     }
     if e.state != before { e.notes.append("guards re-run \(n): \(before.rawValue) → \(e.state.rawValue)") }
     try store.save(e)
-    try store.ledger.append(stamped(LedgerEntry(experiment: e.id, state: e.state.rawValue, build: e.build?.hash, by: by,
+    try store.ledger.append(line(e, LedgerEntry(experiment: e.id, state: e.state.rawValue, build: e.build?.hash, by: by,
                                         note: "guards re-run \(n): \(run.pass ? "pass" : (run.failures + run.reviews).joined(separator: "; "))")))
     _ = explain(e)
     return (e, run)

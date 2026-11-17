@@ -23,7 +23,8 @@ perfloop suggest                             # hypotheses from what was recorded
 # one idea → edit the app → commit →
 perfloop exp new "<one-sentence hypothesis>" --build-cmd "<build>" --bench <bench path>
 perfloop exp new "<hypothesis>" --knobs name=value          # an idea the app already has as a knob: no rebuild
-perfloop exp full <id>                       # when the screen says promising
+perfloop exp screen <id> --more 3            # when the screen says inconclusive: 3 more pairs, judged with the first
+perfloop exp full <id>                       # when the screen says promising (or inconclusive)
 perfloop exp promote <id>                    # when the full says won; then a PR with explain.txt and the patch
 perfloop ledger                              # what was tried, by whom, with what result
 ```
@@ -34,13 +35,43 @@ perfloop ledger                              # what was tried, by whom, with wha
 2. **One idea per experiment**, said in one sentence that names the cost and why the change removes it. Two ideas in
    one build teach nothing when it loses.
 3. **Commit before `exp new`.** The bench is stamped with its commit; promotion refuses a dirty build.
-4. **Read the verdict, don't argue with it.** `rejected`: drop the change (reset your work branch) and go back to 1;
-   if you think the screen was borderline, say so in your report with its numbers and let the owner decide (there is
-   no way for you to get a full on it). `promising`: run the full. `won`: promote and open a PR. `lost`: drop it.
-   `needsReview`: stop and ask the owner.
+4. **Read the verdict, don't argue with it.** `rejected` (slower in every pair, a guard failed, or the gain can't
+   reach 5 % even at best): drop the change (reset your work branch) and go back to 1; there is no way for you to get
+   a full on it, so if you dispute it, say so in your report with its numbers and let the owner decide.
+   `inconclusive` (mixed signs, or a band wider than the gain: three pairs can't tell): add pairs with
+   `exp screen <id> --more 3` (cheaper; it then needs as many pairs won as a 3-pair screen's evidence, e.g. 5 of 6) or
+   run the full, which decides; never drop it on that screen alone. `promising`: run the full. `won`: promote and open
+   a PR. `lost`: drop it. `needsReview`: stop and ask the owner.
 5. **Stop** when `exp status` prints `stop:` (the budget is met, no cost ≥ 5 % of the objective is left that you can
    attribute, 5 non-promising candidates in a row, or 2 h / 20 candidates spent), and report from the ledger: what you
    tried, what won, what's left.
+
+## A feature PR: show it costs nothing (`--expect same`)
+
+When your change adds or alters a feature rather than making something faster, the question isn't "is it faster" but
+"does it cost anything". Ask that one:
+
+```sh
+perfloop exp new "the sidebar toggle" --build-cmd "<build>" --bench <bench path> --expect same [--scenario S]
+perfloop exp screen <id> --more 3            # when it says inconclusive; or perfloop exp full <id> (up to 10 + 10)
+```
+
+It measures the same interleaved pairs, guards and trust rules, and answers in a feature PR's terms:
+
+- `noRegression`: it costs nothing measurable. The verdict line says how much at most (`change +0.4 % (90 % interval
+  -0.8 % … +1.6 %, margin 5 %)`): quote it in the PR. Nothing to promote: these experiments never move the champion.
+- `regressed`: a guard failed, or it is slower (or hitches more) beyond the margin, by at least the interval's low
+  end. `next:` says by how much on which metric and where to look (the worst stretch, `profile`, `diff`). Fix it and
+  check the new build with a new `--expect same` experiment; a regression is the feature's to fix, not a reason to drop
+  it.
+- `inconclusive`: this Mac's noise is wider than the margin: add pairs (`--more`, then the full). Still inconclusive at
+  10 + 10: say exactly that in the PR, with the numbers, or check again on a quieter runner.
+
+The margin is the smallest change worth calling for the metric (5 % of CPU per step, 15 % or 3 ms of latency, 25 % of
+a frame metric), never the run's noise, so a noisy Mac makes it say "can't tell", not "costs nothing". It runs on the
+scenarios the champion's manifest has; a snapshot that differs from the champion's is listed as a `look:` for the PR,
+not a verdict (a feature changes what it shows). These checks get no "drop it", and count toward none of the stopping
+rules (the streak, the 2 h, the 20 candidates).
 
 ## Measuring without a verdict: `run` and `baseline`
 
@@ -67,7 +98,7 @@ perfloop baseline S --bench PATH [--reference S2]   # first numbers + a referenc
 - **Untrusted reps are named, never quoted.** A `run` whose reps were all untrusted prints `UNTRUSTED` and no number;
   rerun it when the Mac is quiet, and never copy an untrusted rep's value into a PR. `baseline` records nothing then.
 - A `run` or a baseline is information, not a verdict: different minutes, no interleaving with the champion. "No
-  regression" claims need an `exp`.
+  regression" claims need an `exp` (`exp new … --expect same`, above).
 
 ## Never
 

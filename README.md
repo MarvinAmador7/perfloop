@@ -81,7 +81,18 @@ perfloop exp new "Cache row ranks to remove repeated sorting during selection" \
   --bench .build/release/MyAppBench
 ```
 
-Use the returned experiment ID in `perfloop explain exp/ID`. If the verdict is `promising`, run `perfloop exp full ID`. If the full comparison says `won`, run `perfloop exp promote ID` to update the champion. [Bench contract and result schemas](ADAPTER.md)
+Use the returned experiment ID in `perfloop explain exp/ID`. If the verdict is `promising`, run `perfloop exp full ID`. If the screen says `inconclusive` (three pairs couldn't tell: mixed signs, or noise wider than the gain), add pairs with `perfloop exp screen ID --more 3` or run the full; `rejected` is kept for slower in every pair, a failed guard, or a gain that can't reach 5 %. If the full comparison says `won`, run `perfloop exp promote ID` to update the champion. [Bench contract and result schemas](ADAPTER.md)
+
+### Verify that a feature costs nothing
+
+A feature branch asks a different question: does the change cost anything? Add `--expect same`.
+
+```sh
+perfloop exp new "Sidebar toggle" --build-cmd "swift build -c release --product MyAppBench" \
+  --bench .build/release/MyAppBench --expect same
+```
+
+It runs the same interleaved pairs, guards and trust rules, and answers `noRegression`, `regressed` (by how much, on which metric, and where to look) or `inconclusive` (add pairs with `exp screen ID --more 3`, then `exp full ID`, up to 10 + 10). The test is non-inferiority per metric (the objective, and each frame guard both sides report): the paired differences' 90 % interval (Student's t) against the metric's margin, the smallest change worth calling (5 % of CPU per step, 15 % or 3 ms of latency, 25 % of a frame metric), never the run's noise band, so a noisy Mac says "can't tell" rather than "costs nothing". A faster feature costs nothing too. These experiments are never promoted, get no "drop it", and count toward none of the stopping rules. A snapshot that differs from the champion's is listed as a look for the PR, not a verdict.
 
 ## Connect an agent
 
@@ -121,6 +132,8 @@ Run `perfloop runner check ssh://user@spare-mac` before using a remote runner. L
 | --- | --- |
 | Diagnose setup and see the scenarios | `perfloop doctor --bench PATH` · `perfloop describe --bench PATH` |
 | Inspect a decision | `perfloop exp status` · `perfloop explain exp/ID` · `perfloop ledger` |
+| Check a feature costs nothing | `perfloop exp new "…" --bench PATH --expect same` |
+| Add pairs to a screen that couldn't tell | `perfloop exp screen ID --more 3` |
 | Find the next bottleneck | `perfloop suggest champion` · `perfloop causes RESULT.json` |
 | Profile a build or compare profiles | `perfloop profile champion` · `perfloop diff champion exp/ID` |
 | Measure one build, or a new scenario the champion doesn't have (no verdict) | `perfloop run BUILD --scenario S --reference S2` · `perfloop baseline S --bench PATH` |

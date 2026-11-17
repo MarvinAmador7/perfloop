@@ -24,8 +24,9 @@ public enum OwnerFlags {
 
   /// The refusal of a full (or a queued one) after a rejected screen: the agent's way on, not the owner's flag.
   public static func rejectedScreen(_ id: String) -> String {
-    "exp \(id) was rejected by its screen, and a rejected screen gets no full: that is the verdict. Drop the change (reset your work branch) and try "
-      + "the next idea; if you think the screen was borderline, report it to the owner with its numbers (perfloop explain exp/\(id)) and let them decide"
+    "exp \(id) was rejected by its screen, and a rejected screen gets no full: that is the verdict (a screen that can't tell says inconclusive, "
+      + "and gets more pairs or a full; this one was slower in every pair, failed a guard, or can't reach the 5 % a promotion needs). Drop the change "
+      + "(reset your work branch) and try the next idea; to dispute it, report it to the owner with its numbers (perfloop explain exp/\(id))"
   }
 
   /// The agent's own way forward when it reached for the flag: what to do today instead.
@@ -34,7 +35,7 @@ public enum OwnerFlags {
     case "force" where command.hasPrefix("queue run"):
       return "queue the work and let `perfloop queue run --runner local --idle 120` start it once nobody is using this Mac, or use a spare Mac (--runner ssh://…)"
     case "force":
-      return "a rejected screen is the verdict: drop the change (reset your work branch) and try the next idea; if you think the screen was borderline, report it to the owner with its numbers (perfloop explain exp/ID) and let them decide"
+      return "a rejected screen is the verdict: drop the change (reset your work branch) and try the next idea (a screen that can't tell says inconclusive, and its full needs no flag); to dispute it, report it to the owner with its numbers (perfloop explain exp/ID)"
     case "owner":
       return "what waits for the owner (a needsReview, a declared behaviour change, a changed contract) is theirs to decide: report the experiment with its explain.txt and go on with the next idea"
     case "guard-tolerance":

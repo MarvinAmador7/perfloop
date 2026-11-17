@@ -126,3 +126,35 @@ public enum SignTest {
     return r
   }
 }
+
+/// Student's t on paired differences: the mean and a one-sided 95 % bound each way (together a 90 % interval). Two
+/// one-sided tests at 5 % read it: "not worse than the margin" when the high bound is under it, "worse beyond the
+/// margin" when the low bound is over it (Schuirmann's TOST; non-inferiority on one side). Chosen over an
+/// order-statistic interval because it can bound three pairs at all (a sign-based interval needs five for any 90 %
+/// bound), and a wild pair widens it rather than narrowing it, so heavy tails make it say "can't tell", never "same".
+public enum PairedT {
+  public struct Bounds: Codable, Sendable, Equatable {
+    public var n: Int
+    public var mean: Double
+    /// nil with fewer than two differences: one can't bound anything.
+    public var low: Double?
+    public var high: Double?
+  }
+
+  public static func bounds(_ d: [Double]) -> Bounds {
+    let n = d.count
+    guard n > 0 else { return Bounds(n: 0, mean: 0, low: nil, high: nil) }
+    let mean = d.reduce(0, +) / Double(n)
+    guard n > 1 else { return Bounds(n: 1, mean: mean, low: nil, high: nil) }
+    let sd = (d.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(n - 1)).squareRoot()
+    let h = t95(n - 1) * sd / Double(n).squareRoot()
+    return Bounds(n: n, mean: mean, low: mean - h, high: mean + h)
+  }
+
+  /// The one-sided 95 % quantile of t with `df` degrees of freedom (the 30-df value past 30: conservative).
+  public static func t95(_ df: Int) -> Double {
+    let t = [6.314, 2.920, 2.353, 2.132, 2.015, 1.943, 1.895, 1.860, 1.833, 1.812, 1.796, 1.782, 1.771, 1.761, 1.753,
+             1.746, 1.740, 1.734, 1.729, 1.725, 1.721, 1.717, 1.714, 1.711, 1.708, 1.706, 1.703, 1.701, 1.699, 1.697]
+    return t[max(1, min(df, t.count)) - 1]
+  }
+}

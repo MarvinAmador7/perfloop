@@ -79,25 +79,38 @@ public final class MCPServer {
     Tool(name: "describe", description: "A bench's manifest: scenarios, objectives, guards, fixtures, knobs.",
          properties: ["bench": Self.prop("string", "Path to the bench executable")], required: ["bench"], kind: .now) { a in try ["describe", "--bench", Self.path(Self.req(a, "bench"))] },
     Tool(name: "gestures", description: "Recorded and synthetic gestures a gesture-replay scenario can take.", properties: [:], required: [], kind: .now) { _ in ["gestures", "list"] },
-    Tool(name: "new_experiment", description: "A candidate against the champion, then its screen (3 interleaved pairs; opens windows). One idea per experiment, said in one sentence that names the cost and why the change removes it; commit first (the bench is stamped with its commit). Returns a job.",
+    Tool(name: "new_experiment", description: "A candidate against the champion, then its screen (3 interleaved pairs; opens windows). One idea per experiment, said in one sentence that names the cost and why the change removes it; commit first (the bench is stamped with its commit). For a feature PR, expect \"same\": it checks the change costs nothing (no-regression | regressed | inconclusive) and is never promoted. Returns a job.",
          properties: ["hypothesis": Self.prop("string", "One sentence: the cost and why the change removes it"),
                       "bench": Self.prop("string", "The candidate's bench executable (built), or what build_cmd produces"),
                       "build_cmd": Self.prop("string", "A command that builds the candidate's bench (run in the current directory)"),
                       "knobs": Self.prop("string", "k=v,k=v: an idea the app already has as a knob (no rebuild)"),
                       "scenario": Self.prop("string", "Default: the champion's"), "fixture": Self.prop("string", "Default: the champion's"),
                       "behaviour_change": Self.prop("boolean", "The change alters what the user sees or can do: promotion then needs the owner"),
-                      "screen": Self.prop("boolean", "Screen it now (default true)"), "runner": Self.runnerProp],
+                      "screen": Self.prop("boolean", "Screen it now (default true)"), "runner": Self.runnerProp,
+                      "expect": Self.prop("string", "faster (default: an optimisation, promoted when it wins) or same (a feature or guard check: does it cost anything?)",
+                                          ["enum": .array(["faster", "same"].map(JSONValue.string))])],
          required: ["hypothesis"], kind: .job) { [unowned self] a in
       var x = try ["exp", "new", Self.text(Self.req(a, "hypothesis"))]
       x += try Self.opt(a, "bench", Self.path, flag: "--bench") + Self.opt(a, "build_cmd", { $0 }, flag: "--build-cmd") + Self.opt(a, "knobs", Self.knobs, flag: "--knobs")
       x += try Self.opt(a, "scenario", Self.name, flag: "--scenario") + Self.opt(a, "fixture", Self.name, flag: "--fixture")
       if a["behaviour_change"]?.bool == true { x.append("--behaviour-change") }
+      if let v = a["expect"]?.string, !v.isEmpty {
+        guard ["faster", "same"].contains(v) else { throw Refused(description: "expect is faster or same, not '\(v)'") }
+        x += ["--expect", v]
+      }
       if a["screen"]?.bool == false { x.append("--no-screen") } else { x += try self.runner(a) }
       return x },
-    Tool(name: "screen", description: "3 interleaved pairs, champion vs candidate: promising | rejected, or untrusted (untrusted reps decided nothing: rerun when the Mac is quiet). Opens windows. Returns a job.",
-         properties: ["id": Self.prop("string", "Experiment id"), "runner": Self.runnerProp], required: ["id"], kind: .job) { [unowned self] a in
-      try ["exp", "screen", Self.id(Self.req(a, "id"))] + self.runner(a) },
-    Tool(name: "full", description: "5 + 5 interleaved pairs (extended to 8 + 8 and 10 + 10 while undecided), frame guards, the second fixture: won | lost | needsReview. Opens windows. Returns a job.",
+    Tool(name: "screen", description: "3 interleaved pairs, champion vs candidate: promising | inconclusive (it can't tell: add pairs with `more`, or run the full) | rejected, or untrusted (untrusted reps decided nothing: rerun when the Mac is quiet); an expect-same experiment: no-regression | regressed | inconclusive. Opens windows. Returns a job.",
+         properties: ["id": Self.prop("string", "Experiment id"), "runner": Self.runnerProp,
+                      "more": Self.prop("integer", "Add this many pairs to a screen that couldn't tell (inconclusive), up to 10 in all; it is judged on all of them")],
+         required: ["id"], kind: .job) { [unowned self] a in
+      var x = try ["exp", "screen", Self.id(Self.req(a, "id"))]
+      if let m = a["more"]?.double {
+        guard m >= 1, m <= Double(Acceptance.maxScreenPairs), m == m.rounded() else { throw Refused(description: "more is a number of pairs, 1 to \(Acceptance.maxScreenPairs)") }
+        x += ["--more", String(Int(m))]
+      }
+      return try x + self.runner(a) },
+    Tool(name: "full", description: "5 + 5 interleaved pairs (extended to 8 + 8 and 10 + 10 while undecided), frame guards, the second fixture: won | lost | needsReview; after a promising or inconclusive screen. An expect-same experiment: no-regression | regressed | inconclusive. Opens windows. Returns a job.",
          properties: ["id": Self.prop("string", "Experiment id"), "runner": Self.runnerProp], required: ["id"], kind: .job) { [unowned self] a in
       try ["exp", "full", Self.id(Self.req(a, "id"))] + self.runner(a) },
     Tool(name: "promote", description: "A won experiment becomes the champion (refused for a dirty build, a declared behaviour change, or a guard that asks the owner). Then open a PR with its explain.txt and patch.",
@@ -143,7 +156,7 @@ public final class MCPServer {
       if let r = a["reps"]?.double { x += ["--reps", String(max(1, Int(r)))] }
       return try x + self.runner(a) },
     Tool(name: "queue_add", description: "Queues an experiment's stages for a runner (the owner's `queue run` takes them, e.g. overnight on a spare Mac).",
-         properties: ["id": Self.prop("string", "Experiment id"), "stage": Self.prop("string", "auto (default: the screen, then the full when promising), screen or full"),
+         properties: ["id": Self.prop("string", "Experiment id"), "stage": Self.prop("string", "auto (default: the screen, then the full when promising or inconclusive), screen or full"),
                       "runner": Self.prop("string", "ssh://user@host or local")], required: ["id"], kind: .now) { a in
       try ["queue", "add", Self.id(Self.req(a, "id"))] + Self.opt(a, "stage", Self.name, flag: "--stage") + Self.opt(a, "runner", Self.runnerSpec, flag: "--runner") },
     Tool(name: "job", description: "A job's state and the end of its output. Waits up to wait_s seconds (max 60) for it to finish first, so poll it instead of sleeping.",

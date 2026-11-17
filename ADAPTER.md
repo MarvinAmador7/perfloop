@@ -109,8 +109,8 @@ gate says), it presented frames, and it didn't exit 5. A pair with an untrusted 
 verdict is `untrusted` with the count and the cause (`screen: UNTRUSTED (6/6 reps untrusted: not quiet ×6 (busy up to
 99.8 %: swift-build)) …`), and rerunning it measures only those pairs again. The exception is one side's window wrong
 the same way in both orders while the other side's is right: the build does that, a rerun can't change it, and the
-stage says `deterministic` and stops early. (A screen whose trusted pairs already reject the candidate, a pair it
-didn't win or a guard it failed, is still rejected.)
+stage says `deterministic` and stops early. (A guard the candidate failed on a trusted pair still rejects it, or, for
+an `--expect same` check, makes it `regressed`, whatever the untrusted pairs say.)
 
 ## 3a. What `perfloop run` and `perfloop baseline` use
 
@@ -144,6 +144,15 @@ The runner can't see the processes `ab` starts, so for its trust rule (§3) `ab`
 
 An `ab` that reports neither still runs and decides as before, but nothing in it can be untrusted: every stage it
 measured says `trust: not checked` in `explain`.
+
+The runner decides; the adapter's own judgement of the pair isn't read. Each `ab` call is one pair (`--reps 1`), and the
+runner judges across pairs, so an `ab`'s `regression`, `improvement`, `guardsFailed`, noise-band lines and exit 4
+(regression by its own rule) change nothing: exit 4 is a pair with numbers like exit 0. That holds for `exp new
+--expect same` too (a feature check: does it cost anything?), which reads from each side: the objective (`summaryA`/`B`
+under its name, or `objective { name, value }`), and for its frame guards `hitchTimeRatioMsPerS` and `longestStretchMs`
+(medians, as deskbench's summary has them; `smoothness` for a gesture). A side without the frame metrics is judged on
+the objective alone, and the stage says `not checked: hitchTimeRatioMsPerS, longestStretchMs (the adapter reports none
+per side)`. Report `runs[]` (or the reps) as above, or an expect-same check can't tell a busy Mac's noise from a cost.
 
 ## 5. `snapdiff A.png B.png --json --diff-out D.png [--guard-param snapshot-diff.tolerance=X]`
 
