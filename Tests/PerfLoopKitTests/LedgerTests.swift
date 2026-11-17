@@ -25,6 +25,17 @@ final class LedgerTests: XCTestCase {
     XCTAssertEqual(l.latest()["0001"]?.objective?.after, 16.9)
   }
 
+  func testABaselineFromBeforeItsOwnStateIsReadAsOne() throws {
+    let l = Ledger(path: dir.appendingPathComponent("ledger.jsonl").path)
+    // As #9 wrote them: both `measure`, told apart by the note ("<kind> <scenario> on <fixture>: …").
+    try l.append(LedgerEntry(experiment: "m0001", state: "measure", note: "baseline toggle on swarm64: latencyMs 20 median, 2/2 reps trusted; recorded as the baseline of toggle"))
+    try l.append(LedgerEntry(experiment: "m0002", state: "measure", note: "run toggle on swarm64: latencyMs 21 median, 2/2 reps trusted"))
+    try l.append(LedgerEntry(experiment: "m0003", state: "baseline", note: "baseline palette on search: UNTRUSTED (…); no baseline recorded"))
+    XCTAssertEqual(l.entries().map(\.state), ["baseline", "measure", "baseline"])
+    XCTAssertTrue(l.entries()[0].text.contains(" m0001 baseline "), l.entries()[0].text)
+    XCTAssertTrue(try String(contentsOfFile: l.path, encoding: .utf8).contains(#""state":"measure""#), "the file isn't rewritten")
+  }
+
   func testSessions() throws {
     let l = Ledger(path: dir.appendingPathComponent("ledger.jsonl").path)
     try l.append(LedgerEntry(experiment: "0001", state: "rejected"))

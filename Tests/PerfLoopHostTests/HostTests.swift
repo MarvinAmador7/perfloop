@@ -154,6 +154,8 @@ import PerfLoopProbe
     XCTAssertEqual(m.fixtureNames, ["rows500", "rows50"])
     XCTAssertEqual(m.knobs.first?.name, "test.rank"); XCTAssertEqual(m.knobs.first?.choices, ["sort", "index"])
     XCTAssertEqual(m.defaultFixture, "rows500")
+    XCTAssertEqual(m.fixtureSchemes, [], "registered names only: a file: fixture is refused before a rep, not by every rep")
+    XCTAssertNotNil(m.unknownFixture("file:/tmp/x.json"))
     XCTAssertFalse(m.has(verb: "ab")); XCTAssertTrue(m.has(verb: "snapdiff"))
     XCTAssertTrue(m.has(verb: "profile")); XCTAssertTrue(m.has(verb: "diff"))
     XCTAssertEqual(m.defaultVia, "run", "no ab: the runner measures pairs through run")

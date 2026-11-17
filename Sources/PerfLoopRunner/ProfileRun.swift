@@ -49,6 +49,7 @@ extension Loop {
     }
     if let m = entry.manifest, let why = m.unknownFixture(t.fixture, whose: "\(target)'s manifest") { throw PLError.usage(why) }
     guard runner is LocalRunner else { throw PLError.usage("profiles record on this Mac (xctrace attaches to the bench here): use --runner local, not \(runner.name)") }
+    try checkFixtureFile(t.fixture)
     let dir = store.root.appendingPathComponent("profiles").appendingPathComponent("\(t.label)-\(t.scenario)-\(template)-\(Clock.now().replacingOccurrences(of: ":", with: ""))")
     var args = ["profile", t.scenario, "--template", template, "--fixture", t.fixture, "--out", dir.path, "--json"]
     for (k, v) in t.knobs.sorted(by: { $0.key < $1.key }) { args += ["--knob", "\(k)=\(v)"] }

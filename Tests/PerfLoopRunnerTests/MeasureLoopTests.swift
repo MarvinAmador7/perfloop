@@ -96,6 +96,9 @@ final class MeasureLoopTests: FakeBenchCase {
     XCTAssertTrue(FileManager.default.fileExists(atPath: store.abs("baselines/toggle/reference.png")))
     XCTAssertTrue(FileManager.default.fileExists(atPath: store.abs("baselines/toggle/reference.later.png")))
     XCTAssertTrue(store.ledger.entries().last?.note?.contains("recorded as the baseline of toggle") == true)
+    XCTAssertEqual(store.ledger.entries().last?.state, "baseline", "its own state, not a run's `measure`")
+    XCTAssertTrue(store.ledger.entries().last?.text.contains("m0001 baseline ") == true)
+    XCTAssertNil(Stopping.budgetClock(store.ledger.currentSession(), now: Date().addingTimeInterval(5 * 3600)), "no optimisation: no clock")
     XCTAssertTrue(b.next?.contains("perfloop run champion --scenario toggle compares it") == true, b.next ?? "")
     XCTAssertTrue(loop.status().contains("baselines waiting for a champion with their scenario: toggle (m0001)"), loop.status())
 
@@ -133,6 +136,7 @@ final class MeasureLoopTests: FakeBenchCase {
     XCTAssertEqual(Loop.exitCode(b), 5)
     XCTAssertTrue(b.next?.contains("no baseline was recorded") == true, b.next ?? "")
     XCTAssertTrue(store.ledger.entries().last?.note?.contains("no baseline recorded") == true)
+    XCTAssertEqual(store.ledger.entries().last?.state, "baseline", "a baseline that recorded nothing is still a baseline's line")
   }
 
   func testAReferenceRunsBesideEachRepInTheSameMinutes() throws {
@@ -173,6 +177,49 @@ final class MeasureLoopTests: FakeBenchCase {
     // A parametric spec of a listed fixture passes.
     o.fixture = "crew17@agents=3"; o.reps = 1
     XCTAssertEqual(try loop.runScenario(o).summary.trusted, 1)
+  }
+
+  func testAFileFixtureMustBeThereBeforeAnyRep() throws {
+    try baseline()
+    let path = tmp.appendingPathComponent("fixtures/big.json").path
+    let why = "no readable file at \(path) on this Mac: every rep would fail on it. Give the path of a file that exists, or create it first"
+    var n = Loop.NewOptions(hypothesis: "h"); n.bench = try bench("cand", ["CPU": "8"]); n.fixture = "file:" + path; n.screen = false
+    XCTAssertThrowsError(try loop.new(n)) { e in
+      XCTAssertEqual((e as? PLError)?.code, 1); XCTAssertEqual("\(e)", "fixture file:\(path): " + why)
+    }
+    XCTAssertEqual(store.experiments().map(\.id), ["0000"], "refused before an experiment (or a build) was made")
+    var o = options("champion", "step", reps: 1); o.fixture = "file:" + path
+    XCTAssertThrowsError(try loop.runScenario(o)) { XCTAssertEqual("\($0)", "fixture file:\(path): " + why) }
+    o.fixture = "file:no/such.json"
+    XCTAssertThrowsError(try loop.runScenario(o)) { XCTAssertTrue("\($0)".contains("(a relative path is read from the directory perfloop runs in, "), "\($0)") }
+    o.fixture = "file:~/no-such.json"
+    XCTAssertThrowsError(try loop.runScenario(o)) { XCTAssertTrue("\($0)".contains("nothing expands ~ on the way to the adapter"), "\($0)") }
+    XCTAssertTrue(store.measurements().isEmpty && !FileManager.default.fileExists(atPath: store.root.appendingPathComponent("runs").path), "no measurement started")
+    XCTAssertTrue(adapterCalls("run").isEmpty && adapterCalls("ab").isEmpty, "refused before any window")
+
+    // Once it's there, it runs: a scheme isn't on the manifest's list and needn't be.
+    try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    try "{}".write(toFile: path, atomically: true, encoding: .utf8)
+    o.fixture = "file://" + path
+    XCTAssertEqual(try loop.runScenario(o).summary.trusted, 1)
+    let e = try loop.new(n)
+    XCTAssertEqual(e.fixture, "file:" + path)
+    // Each stage asks again, on its own runner: the file went away since exp new.
+    try FileManager.default.removeItem(atPath: path)
+    XCTAssertThrowsError(try loop.screen(e.id)) { XCTAssertEqual("\($0)", "fixture file:\(path): " + why) }
+    XCTAssertTrue(adapterCalls("ab").isEmpty)
+    XCTAssertEqual(try store.experiment(e.id).state, .built, "nothing decided")
+  }
+
+  func testAnAdapterThatNamesItsSchemesRefusesAnother() throws {
+    try baseline(["SCHEMES": "file"])
+    var o = options("champion", "step", reps: 1); o.fixture = "s3:bucket/x"
+    XCTAssertThrowsError(try loop.runScenario(o)) {
+      XCTAssertEqual("\($0)", "fixture 's3:bucket/x': the adapter takes no s3: fixtures (champion's manifest has fixtureSchemes file:); its fixtures are crew17, swarm64")
+    }
+    var n = Loop.NewOptions(hypothesis: "h"); n.bench = try bench("cand", ["CPU": "8", "SCHEMES": "file"]); n.fixture = "s3:bucket/x"
+    XCTAssertThrowsError(try loop.new(n)) { XCTAssertTrue("\($0)".contains("the adapter takes no s3: fixtures (the champion's manifest"), "\($0)") }
+    XCTAssertTrue(adapterCalls("run").isEmpty && adapterCalls("ab").isEmpty)
   }
 
   func testAScenariosOwnFixtureIsItsDefault() throws {

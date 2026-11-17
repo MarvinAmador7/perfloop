@@ -35,6 +35,7 @@ FAKE_AB_REGRESSION=false
 FAKE_EXTRA=
 FAKE_STEP_FIXTURE=
 FAKE_RAN_FIXTURE=
+FAKE_SCHEMES=-
 
 self="$0"
 log() { if [ -n "$FAKE_LOG" ]; then echo "$*" >> "$FAKE_LOG"; fi; }
@@ -83,6 +84,8 @@ describe)
   # FAKE_EXTRA: a scenario only this build has (a feature's own), on its own fixture, with a snapshot guard.
   extra=""; if [ -n "$FAKE_EXTRA" ]; then extra=", { \"name\": \"$FAKE_EXTRA\", \"kind\": \"latency\", \"objective\": \"latencyMs\", \"guards\": [\"checks\", \"snapshot-diff\"], \"fixture\": \"swarm64\" }"; fi
   stepfx=""; if [ -n "$FAKE_STEP_FIXTURE" ]; then stepfx="\"fixture\": \"$FAKE_STEP_FIXTURE\","; fi
+  # FAKE_SCHEMES: the manifest's fixtureSchemes, comma separated ("-": no field; empty: []).
+  schemes=""; if [ "$FAKE_SCHEMES" != "-" ]; then schemes="\"fixtureSchemes\": [$(echo "$FAKE_SCHEMES" | sed 's/[^,][^,]*/"&"/g; s/,/, /g')],"; fi
   if [ "$FAKE_GUARDED" = 1 ]; then
   cat <<JSON
 { "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench", $verbs
@@ -96,7 +99,7 @@ JSON
   exit 0
   fi
   cat <<JSON
-{ "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench", $verbs
+{ "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench", $verbs $schemes
   "scenarios": [ { "name": "step", "kind": "smooth", "params": { "steps": "8" }, "objective": "$FAKE_OBJECTIVE", "guards": ["landed"], $stepfx "secondFixture": "swarm64" },
                  { "name": "switch", "kind": "latency", "objective": "latencyMs", "guards": ["checks"] } $extra ],
   "fixtures": [ { "name": "crew17" }, { "name": "swarm64" } ],

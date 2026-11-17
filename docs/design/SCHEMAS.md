@@ -48,6 +48,7 @@ machine; rerun).
   "knobs": [ { "name": "reel.slide", "type": "choice", "default": "ca", "choices": ["ca", "clip"], "since": "0.7" },
              { "name": "build.perFrame", "type": "int", "default": 2, "range": [1, 8] } ],
   "hosts": [ "scene", "window" ], "defaultHost": "scene", "defaultFixture": "crew17",
+  "fixtureSchemes": [ "file" ],                  // optional (2026-11): the scheme: forms --fixture takes; absent: any passes
   "probes": [ "Column", "ColumnHead", "ColumnThread", "EntryRow", "ColumnComposer", "CrewTab", "TitleBar", "OpenGroup", "Reel", "RootView", "DecisionBar", "FoldedDeck" ],
   "exitCodes": { "ok": 0, … } }
 ```
@@ -162,7 +163,13 @@ one-sided 95 % bounds, null with one pair; `margin` the metric's floor). Its led
 "state": "promoted", "objective": { "before": 41.2, "after": 16.9 }, "build": "sha256:…", "by": "agent|owner",
 "runner": "ssh://spare-mac.local", "machine": "Mac16,11", "ownerFlags": ["--force"], "ownerVia": "env|tty" }`
 (`runner`/`machine` on a stage's line: where its numbers came from; `ownerFlags`/`ownerVia` on a line an owner flag
-changed, and how the CLI saw it was the owner's: `PERFLOOP_OWNER=1` or a yes at a terminal).
+changed, and how the CLI saw it was the owner's: `PERFLOOP_OWNER=1` or a yes at a terminal). `state` is an
+experiment's state, or one of: `session` (`session start`; `experiment` is `-`), `merged` (the champion's PR landed),
+`measure` (`perfloop run`) and `baseline` (`perfloop baseline`, added 2026-11), whose `experiment` is the measurement's
+id (`m0003`, `runs/m0003/run.json`). A `baseline` line from before then says `measure`; its `note` starts `baseline `
+(a run's starts `run `), and the runner reads it as `baseline`. The stopping rules' time budget runs from the session's
+first line that is an optimisation experiment's (none of these states, no `"expect": "same"`) and leaves out the time
+an expect-same stage ran: from the line before its verdict (or guards) line to that line, when both are its own.
 
 Every pair and stage records where it ran (C10): `"runner": { "runner": "local" | "ssh://host" | "vm:tart/NAME",
 "model": "Mac16,11", "host": "spare-mac", "os": "26.6.2" }`. A pair without one predates runners and counts as

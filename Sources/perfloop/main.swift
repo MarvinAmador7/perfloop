@@ -35,7 +35,9 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             a candidate against the champion; screens it unless --no-screen.
                                             --expect same: a feature or guard check that it costs nothing (a feature
                                             PR): no-regression | regressed | inconclusive, never promoted, out of the
-                                            stopping rules
+                                            stopping rules. F (every verb): a listed fixture, NAME@k=v, or the
+                                            adapter's file:PATH, refused up front when the file isn't on the Mac the
+                                            reps run on
   exp status [ID]                           open experiments and what each needs next (with ID: its explain)
   exp screen ID [--more [N]]                3 interleaved pairs: promising | inconclusive | rejected (| untrusted:
                                             decided nothing); --more N (3) adds pairs to a screen that couldn't tell
@@ -61,7 +63,8 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
   baseline S --bench PATH|--build HASH [--fixture F] [--reps N] [--reference S2]
                                             first numbers (trusted reps only) and a reference snapshot for a scenario the
                                             champion doesn't have yet; once a champion has S, run champion --scenario S
-                                            is compared with it. Nothing is recorded when no rep could be trusted
+                                            is compared with it. Nothing is recorded when no rep could be trusted.
+                                            A ledger line `baseline`
   suggest [champion|exp/ID|RESULT.json] [--json]
                                             hypotheses for the next experiment from what was recorded (cause fan-out,
                                             repeated bodies, hot frames of ours, framework work they ask for, a profile's
@@ -83,7 +86,8 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
   gestures list [FILE…] [--dir DIR] [--bench PATH]
                                             recorded and synthetic gestures (perfloop.gesture/1) for a gesture-replay
                                             scenario: the store's gestures/, each --dir, the adapter's built-in ones
-  session start                             the stopping rules (SPEC §5.3) count from here
+  session start                             the stopping rules (SPEC §5.3) count from here; the 2 h time budget from
+                                            its first optimisation experiment, expect-same stages not counted
   mcp [--app NAME | --store DIR] [--lock DIR]
                                             the loop as MCP tools over stdio for a coding agent (README: Agents over MCP):
                                             stages run as jobs it polls with `job`; no owner flags

@@ -70,6 +70,13 @@ final class MCPTests: XCTestCase {
     XCTAssertEqual(try call("diff", ["a": .string("champion"), "b": .string("exp/0003")]).text, "ok: diff champion exp/0003 --app demo")
   }
 
+  func testAFileFixturePassesWhereANameWouldBeRefused() throws {
+    XCTAssertTrue(try call("run", ["target": .string("champion"), "scenario": .string("step"), "fixture": .string("file:/data/crew 64.json")]).text.hasPrefix("started job j1 (run)"))
+    XCTAssertTrue(called("run champion --scenario step --fixture file:/data/crew 64.json"), "\(calls())")
+    let r = try call("new_experiment", ["hypothesis": .string("h"), "fixture": .string("crew/64")])
+    XCTAssertTrue(r.isError); XCTAssertTrue(r.text.contains("'crew/64' isn't a name"), r.text)
+  }
+
   func testRunAndBaselineAreJobs() throws {
     let lock = tmp.appendingPathComponent("window.lock").path
     XCTAssertTrue(try call("run", ["target": .string("exp/7"), "scenario": .string("toggle"), "reference": .string("step"), "reps": .number(4)]).text.hasPrefix("started job j1 (run)"))

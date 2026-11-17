@@ -6,7 +6,9 @@ public struct LedgerEntry: Codable, Sendable, Equatable {
   public var schema = "perfloop.ledger/1"
   public var at: String
   public var experiment: String
-  /// An `ExpState`, or "session" (a session started: the stopping rules count from the newest one).
+  /// An `ExpState`; or "session" (a session started: the stopping rules count from the newest one), "merged" (the
+  /// champion's PR landed), "measure" (`perfloop run`), "baseline" (`perfloop baseline`): `experiment` is then the
+  /// measurement's id (`m0003`).
   public var state: String
   public var objective: Before?
   /// The experiment's build hash.
@@ -33,6 +35,14 @@ public struct LedgerEntry: Codable, Sendable, Equatable {
               runner: RunnerIdentity? = nil) {
     self.at = at; self.experiment = experiment; self.state = state; self.objective = objective; self.build = build; self.by = by; self.note = note
     self.runner = runner?.runner; machine = runner?.model
+  }
+
+  /// A line from before the `baseline` state (2026-11) recorded `perfloop baseline` as `measure`: its note, written
+  /// as "<kind> <scenario> on <fixture>: …", starts "baseline " (a run's starts "run "). Read as `baseline`.
+  public var upgraded: LedgerEntry {
+    guard state == "measure", note?.hasPrefix("baseline ") == true else { return self }
+    var e = self; e.state = "baseline"
+    return e
   }
 
   /// The line `perfloop ledger` prints.
@@ -67,10 +77,11 @@ public struct Ledger: Sendable {
     try h.write(contentsOf: Data(((torn ? "\n" : "") + PLJSON.line(e) + "\n").utf8))
   }
 
-  /// Every readable line, in order. A torn last line (a crash mid-write) is skipped, not fatal: resume carries on.
+  /// Every readable line, in order, older lines read as today's (`LedgerEntry.upgraded`). A torn last line (a crash
+  /// mid-write) is skipped, not fatal: resume carries on.
   public func entries() -> [LedgerEntry] {
     guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
-    return text.split(whereSeparator: \.isNewline).compactMap { try? PLJSON.decode(LedgerEntry.self, from: Data($0.utf8)) }
+    return text.split(whereSeparator: \.isNewline).compactMap { (try? PLJSON.decode(LedgerEntry.self, from: Data($0.utf8)))?.upgraded }
   }
 
   /// The newest state of each experiment.

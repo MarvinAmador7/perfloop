@@ -32,13 +32,16 @@ public struct Manifest: Codable, Sendable, Equatable {
   /// Paths (substrings of a patch's file names) that must never be recorded in an experiment's patch: the app's
   /// secrets and private state. `.trace` files are refused whatever this says.
   public var privatePaths: [String]?
+  /// The `scheme:` forms the adapter's `--fixture` takes besides its listed names (`["file"]`: `file:PATH`). nil: not
+  /// said (an adapter from before the field): any scheme passes through to it, as before; `[]`: none.
+  public var fixtureSchemes: [String]?
 
   public init(app: String, adapter: String, build: Build?, scenarios: [ScenarioEntry], fixtures: [JSONValue] = [], knobs: [KnobEntry] = [], source: String? = "describe") {
     schema = "perfloop.manifest/1"; self.protocol = 1; self.app = app; self.adapter = adapter; self.build = build
     self.scenarios = scenarios; self.fixtures = fixtures; self.knobs = knobs; self.source = source
   }
 
-  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards, gestures, verbs, privatePaths }
+  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards, gestures, verbs, privatePaths, fixtureSchemes }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     schema = try c.decodeIfPresent(String.self, forKey: .schema) ?? "perfloop.manifest/1"
@@ -57,6 +60,7 @@ public struct Manifest: Codable, Sendable, Equatable {
     isolationGuards = try? c.decodeIfPresent([String].self, forKey: .isolationGuards)
     verbs = try? c.decodeIfPresent([String].self, forKey: .verbs)
     privatePaths = try? c.decodeIfPresent([String].self, forKey: .privatePaths)
+    fixtureSchemes = try? c.decodeIfPresent([String].self, forKey: .fixtureSchemes)
   }
 
   /// Whether the adapter answers `verb` (adapters from before `verbs` answer deskbench's).
@@ -76,12 +80,35 @@ public struct Manifest: Codable, Sendable, Equatable {
 
   /// Why `fixture` can't run on this manifest's bench, or nil when it can: a listed name, a listed name with
   /// parameters (`crew@agents=24`), or an adapter's own `scheme:` form (`file:PATH`) pass; a manifest that lists no
-  /// fixtures passes anything. `whose` names the manifest in the message ("the champion's manifest").
+  /// fixtures passes any name. A scheme is the adapter's business unless it says which it takes (`fixtureSchemes`);
+  /// whether a `file:` fixture's file is there is the runner's (`Runner.missingFile`). `whose` names the manifest in
+  /// the message ("the champion's manifest").
   public func unknownFixture(_ fixture: String, whose: String = "the manifest") -> String? {
     let names = fixtureNames
+    if let s = Self.fixtureScheme(fixture) {
+      guard let takes = fixtureSchemes?.map({ $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ":")) }), !takes.contains(s) else { return nil }
+      return "fixture '\(fixture)': the adapter takes no \(s): fixtures (\(whose) has fixtureSchemes \(takes.isEmpty ? "none" : takes.map { $0 + ":" }.joined(separator: ", ")))"
+        + (names.isEmpty ? "" : "; its fixtures are \(names.joined(separator: ", "))")
+    }
     let base = Self.fixtureBase(fixture)
-    if names.isEmpty || names.contains(base) || base.contains(":") { return nil }
+    if names.isEmpty || names.contains(base) { return nil }
     return "unknown fixture '\(base)'; \(whose) has \(names.joined(separator: ", "))"
+  }
+
+  /// `file:PATH` → `file`: the scheme of an adapter's own fixture form, lowercased; nil for a name (`crew`,
+  /// `crew@agents=24`). A scheme is a letter, then letters, digits, `+`, `-` or `.`, before the first `:`.
+  public static func fixtureScheme(_ f: String) -> String? {
+    guard let i = f.firstIndex(of: ":") else { return nil }
+    let s = f[..<i]
+    guard let c = s.first, c.isASCII, c.isLetter, s.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "+-.".contains($0)) }) else { return nil }
+    return s.lowercased()
+  }
+
+  /// The path a `file:` fixture names, as the adapter gets it (`file:///abs` is `/abs` too); nil for anything else.
+  public static func fixtureFile(_ f: String) -> String? {
+    guard fixtureScheme(f) == "file" else { return nil }
+    let p = String(f.dropFirst(5))
+    return p.hasPrefix("///") ? String(p.dropFirst(2)) : p
   }
 
   /// `crew@agents=24` → `crew`: the fixture a parametric spec names.

@@ -109,6 +109,9 @@ public final class Loop {
     let fixtures = [o.fixture, env["PERFLOOP_FIXTURE"], parentExp?.scenario == sc ? parentExp?.fixture : nil, m?.scenario(sc)?.fixture, parentExp?.fixture, m?.fixture(for: sc)]
     guard let fx = fixtures.lazy.compactMap({ $0 }).first else { throw PLError.usage("pass --fixture") }
     for f in [fx, o.secondFixture].compactMap({ $0 }) { if let m, let why = m.unknownFixture(f, whose: "the champion's manifest") { throw PLError.usage(why) } }
+    // The second fixture guards a promotion against over-fitting one fixture: an expect-same check is never promoted.
+    let second = o.expect == "same" ? nil : o.secondFixture ?? m?.scenario(sc)?.secondFixture
+    for f in [fx, second].compactMap({ $0 }) { try checkFixtureFile(f) }
     guard [nil, "faster", "same"].contains(o.expect) else { throw PLError.usage("--expect faster|same (same: a feature or guard check that the candidate costs nothing), not '\(o.expect!)'") }
     let kind = o.knobs.isEmpty ? o.kind : "knob"
     if kind == "knob", o.knobs.isEmpty { throw PLError.usage("a knob experiment needs --knobs k=v[,k=v]") }
@@ -145,8 +148,7 @@ public final class Loop {
     e.knobs = o.knobs.isEmpty ? nil : o.knobs
     e.expect = o.expect == "same" ? "same" : nil
     e.behaviourChange = o.behaviourChange
-    // The second fixture guards a promotion against over-fitting one fixture: an expect-same check is never promoted.
-    e.secondFixture = o.expect == "same" ? nil : o.secondFixture ?? m?.scenario(sc)?.secondFixture
+    e.secondFixture = second
     e.params = o.params.isEmpty ? nil : o.params
     e.via = kind == "knob" ? "run" : (o.via ?? env["PERFLOOP_VIA"] ?? m?.defaultVia ?? "ab")
     e.patch = patch; e.notes = notes
@@ -195,6 +197,14 @@ public final class Loop {
     if !bad.isEmpty { throw PLError.refused("the patch touches paths that are never recorded: " + bad.joined(separator: "; ")) }
   }
 
+  /// Refuses a `file:` fixture whose file the reps couldn't read on the machine they run on (this Mac, or the runner's:
+  /// a remote runner is asked; a VM not booted yet is asked when its stage starts), before anything is built or
+  /// measured. Any other fixture passes: names are the manifest's to check (`Manifest.unknownFixture`).
+  func checkFixtureFile(_ f: String) throws {
+    guard let p = Manifest.fixtureFile(f), let why = try runner.missingFile(p) else { return }
+    throw PLError.usage("fixture \(f): \(why)")
+  }
+
   // MARK: measuring pairs
 
   struct Sides { var champion: Store.Entry; var candidate: Store.Entry; var championKnobs: [String: String]; var candidateKnobs: [String: String] }
@@ -217,6 +227,7 @@ public final class Loop {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     var out: [Pair] = []
     let here = try runner.identity()
+    var fileChecked = false
     for i in 0..<count {
       let rec = dir.appendingPathComponent("p\(i + 1).pair.json")
       if let p = try? PLJSON.read(Pair.self, path: rec.path), Acceptance.unusable(p) == nil {
@@ -227,6 +238,8 @@ public final class Loop {
         }
         out.append(p); continue
       }
+      // On the machine this stage runs on, which may not be the one `exp new` asked.
+      if !fileChecked { try checkFixtureFile(fixture); fileChecked = true }
       var p = try measureRedoingInterrupts(e, index: i, stage: stage, fixture: fixture, dir: dir, sides: s, metric: metric, scenario: scenario)
       // A failed or untrusted pair is redone once; an untrusted one that a rerun can't fix (the same side's window wrong
       // the same way in both orders) isn't, and the stage stops there rather than spend more windowed runs on it.

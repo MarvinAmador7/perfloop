@@ -32,6 +32,14 @@ public protocol Runner: AnyObject {
   func fetch(_ workDir: URL) throws
   /// Ends connections and the like.
   func close()
+  /// Why a `file:` fixture's `path` (as the adapter gets it) can't be read where the reps run, or nil when it can or
+  /// the runner can't tell yet. Asked before the reps, so a missing file is refused up front instead of failing each.
+  func missingFile(_ path: String) throws -> String?
+}
+
+extension Runner {
+  /// This Mac, where the adapter inherits perfloop's working directory: a relative path is read from there.
+  public func missingFile(_ path: String) throws -> String? { LocalRunner.missingHere(path) }
 }
 
 /// Why a runner stopped before a rep: the queue keeps the item and resumes it next time.
@@ -148,6 +156,15 @@ public final class LocalRunner: Runner {
   }
   public func prepare(_ build: Store.Entry) throws -> String { build.executable }
   public func fetch(_ workDir: URL) throws {}
+
+  /// Why `path` can't be read on this Mac, or nil. Nothing expands `~` on its way to the adapter, so it is said.
+  static func missingHere(_ path: String) -> String? {
+    if FileManager.default.isReadableFile(atPath: path) { return nil }
+    let cwd = FileManager.default.currentDirectoryPath
+    return "no readable file at \(path) on this Mac"
+      + (path.hasPrefix("~") ? " (nothing expands ~ on the way to the adapter: give the full path)" : path.hasPrefix("/") ? "" : " (a relative path is read from the directory perfloop runs in, \(cwd))")
+      + ": every rep would fail on it. Give the path of a file that exists, or create it first"
+  }
   public func close() {}
 
   public func run(_ exe: String, _ args: [String], env: [String: String], workDir: URL) throws -> Adapter.Output {
