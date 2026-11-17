@@ -64,7 +64,8 @@ run "$P" doctor --bench "$W/bench-champion" || true
 say "the champion: the app as it is"
 run "$P" store add "$W/bench-champion"
 if [ $dry = 1 ]; then h=HASH; else h=$("$P" store list --json | sed -n 's/.*"hash" : "sha256:\([0-9a-f]*\)".*/\1/p' | head -1); fi
-run "$P" champion set "$h" --merged --scenario select --fixture rows1000 --note "SlowList as it is"
+# The owner's command (you run this script): PERFLOOP_OWNER=1 for this one command, as for any owner flag in a script.
+run env PERFLOOP_OWNER=1 "$P" champion set "$h" --merged --scenario select --fixture rows1000 --note "SlowList as it is"
 
 say "1. a knob: one binary, two ideas, no rebuild"
 new_exp "rows look their rank up in a table built once instead of sorting the list" --knobs rows.rank=index --no-screen

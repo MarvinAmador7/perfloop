@@ -51,6 +51,37 @@ final class TraceLockTests: FakeBenchCase {
     XCTAssertEqual(doctorTraces(), .ok)
   }
 
+  /// A kept trace holds the environment the recorded process ran with: the adapter is started with an allowlist and
+  /// the names its manifest declares (`profileEnv`), so no token reaches it, declared or not.
+  func testAKeptTraceCarriesNoSecrets() throws {
+    try baseline()
+    let secrets = ["GITHUB_TOKEN": "ghp_fake", "OPENAI_API_KEY": "sk-fake", "PERFLOOP_OWNER": "1", "PERFLOOP_VM_PASSWORD": "admin", "SSH_AUTH_SOCK": "/tmp/agent.sock",
+                   "AWS_SECRET_ACCESS_KEY": "fake", "FAKE_API_TOKEN": "declared-but-secret", "SOME_TOOL_SETTING": "not declared"]
+    for (k, v) in secrets { setenv(k, v, 1) }
+    setenv("LC_ALL", "en_US.UTF-8", 1); setenv("PERFLOOP_KNOBS", "reel.slide=clip", 1)
+    defer { for k in Array(secrets.keys) + ["LC_ALL", "PERFLOOP_KNOBS"] { unsetenv(k) } }
+    let r = try loop.profile("champion", keepTrace: true)
+    let env = try String(contentsOfFile: try XCTUnwrap(r.doc.trace) + "/environment", encoding: .utf8)
+    let names = Set(env.split(separator: "\n").compactMap { $0.split(separator: "=", maxSplits: 1).first.map(String.init) })
+    for k in secrets.keys { XCTAssertFalse(names.contains(k), "\(k) reached the trace") }
+    XCTAssertFalse(env.contains("ghp_fake") || env.contains("sk-fake"))
+    // What the app needs, and what the adapter declares, are there.
+    for k in ["PATH", "HOME", "LC_ALL", "PERFLOOP_KNOBS", "FAKE_LOG"] { XCTAssertTrue(names.contains(k), "\(k) missing: \(names.sorted())") }
+    // Nothing else, but what the shell running the fake adapter sets itself (PWD, SHLVL, _).
+    let extra = names.filter { !$0.hasPrefix("LC_") }.subtracting(TraceEnv.system.union(TraceEnv.perfloop).union(["FAKE_LOG", "PWD", "SHLVL", "_", "OLDPWD"]))
+    XCTAssertEqual(extra, [], "\(names.sorted())")
+    XCTAssertEqual(doctorTraces(), .warn, "a kept trace stays a warning")
+  }
+
+  func testTheTraceEnvironmentAllowlist() {
+    let env = ["PATH": "/usr/bin", "HOME": "/h", "TMPDIR": "/t", "LANG": "C", "LC_CTYPE": "UTF-8", "DEVELOPER_DIR": "/x", "PERFLOOP_KNOBS": "a=b",
+               "PERFLOOP_OWNER": "1", "PERFLOOP_VM_PASSWORD": "p", "PERFLOOP_SSH": "/s", "GH_TOKEN": "t", "ANTHROPIC_API_KEY": "k", "NPM_CONFIG_AUTH": "a",
+               "MY_APP_MODE": "demo", "MY_APP_SESSION": "s", "TERM_SESSION_ID": "x"]
+    XCTAssertEqual(Set(TraceEnv.scrub(env).keys), ["PATH", "HOME", "TMPDIR", "LANG", "LC_CTYPE", "DEVELOPER_DIR", "PERFLOOP_KNOBS"])
+    XCTAssertEqual(Set(TraceEnv.scrub(env, declared: ["MY_APP_MODE", "MY_APP_SESSION", "PERFLOOP_OWNER"]).keys),
+                   ["PATH", "HOME", "TMPDIR", "LANG", "LC_CTYPE", "DEVELOPER_DIR", "PERFLOOP_KNOBS", "MY_APP_MODE"], "declared, but secret-like: dropped")
+  }
+
   func testAFailedDeleteIsReportedNotHidden() throws {
     try XCTSkipIf(getuid() == 0, "root deletes a read-only folder's contents anyway")
     try baseline()

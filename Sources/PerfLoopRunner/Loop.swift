@@ -41,7 +41,8 @@ public final class Loop {
   }
 
   /// `champion set BUILD`: the first champion (or an owner's reset), recorded as a baseline experiment that holds
-  /// the default scenario and fixture later experiments inherit.
+  /// the default scenario and fixture later experiments inherit. The owner's command (the CLI gates it): the use is
+  /// recorded like an owner flag's, on the baseline experiment, its ledger line and `champion.json` (`setBy`).
   @discardableResult
   public func setChampion(build key: String, merged: Bool, scenario: String?, fixture: String?, note: String? = nil) throws -> Champion {
     let entry = try store.entry(key)
@@ -52,21 +53,86 @@ public final class Loop {
     var e = Experiment(id: store.nextID(), hypothesis: note ?? "baseline", kind: "baseline", scenario: sc, fixture: fx, parent: nil, build: entry.build.embedded)
     e.state = .promoted; e.promotedAt = Clock.now()
     if store.champion() != nil { e.notes.append("set by hand over champion \(store.champion()!.experiment): the chain restarts here") }
-    let c = Champion.baseline(experiment: e.id, build: entry.build.embedded, merged: merged)
+    let use = OwnerFlagUse(flag: "champion set", via: owner?.via ?? "library", command: owner?.command ?? "library call",
+                           effect: "set the champion by hand to [\(entry.build.line)]\(merged ? " (merged)" : ""): every later verdict is judged against it", at: ownerAt)
+    e.used(use)
+    var c = Champion.baseline(experiment: e.id, build: entry.build.embedded, merged: merged)
+    c.setBy = use
     try store.save(e); try store.setChampion(c)
-    try store.ledger.append(LedgerEntry(experiment: e.id, state: ExpState.promoted.rawValue, build: entry.build.hash, by: "owner", note: "champion set by hand" + (merged ? " (merged)" : "")))
+    var l = LedgerEntry(experiment: e.id, state: ExpState.promoted.rawValue, build: entry.build.hash, by: "owner", note: "champion set by hand" + (merged ? " (merged)" : ""))
+    l.ownerFlags = ["champion set"]; l.ownerVia = use.via
+    try store.ledger.append(l)
+    log("exp \(e.id): champion set by hand (\(OwnerAuth.viaText(use.via)))")
     _ = explain(e)
     return c
   }
 
-  /// `champion merged SHA`: the champion's PR landed; the chain restarts at that commit.
+  /// `champion merged SHA`: the champion's PR landed; the chain restarts at that commit. Anyone may say so, so it is
+  /// checked instead of gated, in the app's checkout (`cwd`): SHA must be a commit on main (`--main REF`, else
+  /// `origin/main`, else `main`) that contains the champion's build commit.
   @discardableResult
-  public func markMerged(commit: String) throws -> Champion {
+  public func markMerged(commit sha: String, main: String? = nil) throws -> (champion: Champion, check: MergeCheck) {
     let (c, _) = try requireChampion()
-    let m = c.markMerged(at: commit)
+    let v = try verifyMerged(sha, champion: c, main: main)
+    let m = c.markMerged(at: v.commit)
     try store.setChampion(m)
-    try store.ledger.append(LedgerEntry(experiment: c.experiment, state: "merged", build: c.build.hash, by: "owner", note: "merged at \(commit)"))
-    return m
+    try store.ledger.append(LedgerEntry(experiment: c.experiment, state: "merged", build: c.build.hash, by: by, note: "merged at \(v.commit) (\(v.checked))"))
+    return (m, v)
+  }
+
+  /// What `champion merged` checked: the full commit, and the checks it passed, for the ledger.
+  public struct MergeCheck: Equatable {
+    public var commit: String
+    public var checked: String
+  }
+
+  /// SHA is a commit on main that contains the champion's build commit, in the checkout at `cwd`; else a refusal that
+  /// says what was checked and what to do.
+  public func verifyMerged(_ sha: String, champion c: Champion, main: String? = nil) throws -> MergeCheck {
+    func git(_ a: [String]) -> Adapter.Output? { try? Adapter.spawn("/usr/bin/env", ["git", "-C", cwd] + a, quiet: true) }
+    func commit(_ ref: String) -> String? {
+      guard !ref.hasPrefix("-"), let o = git(["rev-parse", "--verify", "--quiet", ref + "^{commit}"]), o.status == 0 else { return nil }
+      let s = o.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+      return s.isEmpty ? nil : s
+    }
+    /// git merge-base --is-ancestor: true, false, or nil when git couldn't say.
+    func contains(_ tip: String, _ ancestor: String) -> Bool? {
+      guard let o = git(["merge-base", "--is-ancestor", ancestor, tip]) else { return nil }
+      return o.status == 0 ? true : o.status == 1 ? false : nil
+    }
+    let short = { (s: String) in String(s.prefix(12)) }
+    guard let top = git(["rev-parse", "--show-toplevel"]), top.status == 0 else {
+      throw PLError.refused("\(cwd) isn't a git checkout, so nothing can show \(sha) is on main: run perfloop champion merged from the app's checkout")
+    }
+    guard let built = c.build.commit, !built.isEmpty else {
+      throw PLError.refused("champion \(c.experiment)'s build [\(c.build.line)] records no commit, so nothing can show \(sha) contains it: the champion stays unmerged. "
+                            + "Ask the owner to set the champion from a build of main (perfloop champion set BUILD --merged)")
+    }
+    guard let full = commit(sha) else {
+      throw PLError.refused("\(sha) isn't a commit in this checkout (\(cwd)): git fetch origin, then run it again with the commit where the champion's PR landed (git log --oneline origin/main)")
+    }
+    let refs = main.map { [$0] } ?? ["origin/main", "main"]
+    guard let ref = refs.first(where: { commit($0) != nil }), let tip = commit(ref) else {
+      throw PLError.refused("no \(refs.joined(separator: " or ")) in this checkout (\(cwd)) to check \(short(full)) against: git fetch origin, or name the main branch with --main REF")
+    }
+    switch contains(tip, full) {
+    case true?: break
+    case false?:
+      throw PLError.refused("\(short(full)) is not on \(ref) (checked: git merge-base --is-ancestor \(short(full)) \(ref)), so the chain doesn't restart there: nothing changed. "
+                            + "If the PR merged just now, git fetch origin and run it again; if it isn't merged yet, run this once it is, with the commit main has")
+    case nil: throw PLError.harness("git merge-base --is-ancestor \(short(full)) \(ref) failed in \(cwd)")
+    }
+    guard let b = commit(built) else {
+      throw PLError.refused("champion \(c.experiment)'s build commit \(built) isn't in this checkout (\(cwd)), so nothing can show \(short(full)) contains it: git fetch origin (the PR's branch too), then run it again")
+    }
+    switch contains(full, b) {
+    case true?: break
+    case false?:
+      throw PLError.refused("\(short(full)) doesn't contain champion \(c.experiment)'s build commit \(short(b)) (checked: git merge-base --is-ancestor \(short(b)) \(short(full))), so it isn't where the champion's PR landed: nothing changed. "
+                            + "Pass the commit on \(ref) that merged it (git log --oneline \(ref)). If the PR was squashed or rebased, its commits aren't in main's history: ask the owner to set the champion from a build of main (perfloop champion set BUILD --merged)")
+    case nil: throw PLError.harness("git merge-base --is-ancestor \(short(b)) \(short(full)) failed in \(cwd)")
+    }
+    return MergeCheck(commit: full, checked: "checked: on \(ref), contains the build commit \(short(b))" + (c.build.dirty ? "; the build was dirty: its uncommitted changes can't be checked" : ""))
   }
 
   // MARK: exp new
