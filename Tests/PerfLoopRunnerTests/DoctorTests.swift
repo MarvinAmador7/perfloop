@@ -17,7 +17,14 @@ final class DoctorTests: FakeBenchCase {
     XCTAssertTrue(r.ok, r.text)
     XCTAssertEqual(line(r, "build stamp")?.status, .ok)
     XCTAssertEqual(line(r, "pairs")?.detail, "measured through the adapter's own ab")
-    XCTAssertTrue(r.text.hasSuffix("doctor: nothing blocks the loop"))
+    XCTAssertTrue(r.text.hasSuffix("doctor: nothing blocks the loop (see the warnings)"), r.text)
+    // An adapter of its own (deskbench) has none of PerfLoopHost's helpers: said, with what to do (F17).
+    let h = try XCTUnwrap(line(r, "harness"))
+    XCTAssertEqual(h.status, .warn)
+    XCTAssertTrue(h.detail.contains("no step(until:), wait or settle") && h.fix?.contains("ADAPTER.md §3b") == true, h.detail)
+    let host = try doctor(["HARNESS": "PerfLoopHost"])
+    XCTAssertEqual(line(host, "harness")?.status, .ok)
+    XCTAssertTrue(host.text.hasSuffix("doctor: nothing blocks the loop"), host.text)
   }
 
   func testUnstampedIsAFailWithItsFix() throws {

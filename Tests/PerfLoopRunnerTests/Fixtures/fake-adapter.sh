@@ -36,6 +36,8 @@ FAKE_EXTRA=
 FAKE_STEP_FIXTURE=
 FAKE_RAN_FIXTURE=
 FAKE_SCHEMES=-
+FAKE_HARNESS=
+FAKE_INK=
 FAKE_INPUT=0
 
 self="$0"
@@ -47,9 +49,20 @@ build() { h=$(val "$1" FAKE_HASH); [ -n "$h" ] || h=$(sha "$1"); echo "{\"commit
 checks() { f=$(val "$1" FAKE_CHECK_FAIL); if [ -n "$f" ]; then echo "\"$f\""; elif [ "$2" = burst ] && [ "$(val "$1" FAKE_ISO_FAIL)" = 1 ]; then echo '"isolation-still"'; fi; }
 # The guards PERFLOOP_GUARDS asks for, as deskbench reports them (exe scenario dir): built-within fails on a FAKE_BLANK
 # build; snapshot-diff's capture is a "PNG" holding FAKE_SNAP, which the fake snapdiff compares byte for byte.
+# FAKE_INK (drawn | blank | flaky: blank on the build's 2nd run): the built-in ink guard, asked for or not, with a crop
+# in $PERFLOOP_ARTIFACTS/ink.
+ink() {
+  k=$(val "$1" FAKE_INK); [ -n "$k" ] || return 0
+  if [ "$k" = flaky ]; then k=drawn; [ "$(grep -c "^run .*$1\$" "$FAKE_LOG")" = 2 ] && k=blank; fi
+  pass=true; share=0.042; detail="1 region(s) drawn: rows after step 4.2 %"; if [ "$k" = blank ]; then pass=false; share=0; detail="rows after step: blank"; fi
+  mkdir -p "$3/ink"; echo "$k" > "$3/ink/$2-rows.png"
+  echo "{ \"name\": \"ink\", \"pass\": $pass, \"detail\": \"$detail\", \"artifacts\": [\"$3/ink/$2-rows.png\"], \"value\": $share, \"limit\": 0.005,
+    \"inkRegions\": [ { \"region\": \"rows\", \"after\": \"step\", \"pass\": $pass, \"ink\": $share, \"min\": 0.005, \"detail\": \"$detail\", \"picture\": \"$3/ink/$2-rows.png\" } ] }"
+}
 guards() {
-  if [ -z "$PERFLOOP_GUARDS" ] || [ "$(val "$1" FAKE_NOGUARDS)" = 1 ]; then echo null; return; fi
-  g=""; sep=""
+  i=$(ink "$@")
+  if [ -z "$PERFLOOP_GUARDS" ] || [ "$(val "$1" FAKE_NOGUARDS)" = 1 ]; then if [ -n "$i" ]; then echo "[ $i ]"; else echo null; fi; return; fi
+  g="$i"; sep=""; [ -n "$i" ] && sep=", "
   case ",$PERFLOOP_GUARDS," in *,built-within,*)
     bw=true; if [ "$(val "$1" FAKE_BLANK)" = 1 ]; then bw=false; fi
     g="{ \"name\": \"built-within\", \"pass\": $bw, \"detail\": \"fake columns built=$bw\", \"artifacts\": [], \"value\": 12, \"limit\": 300 }"; sep=", " ;;
@@ -87,6 +100,8 @@ describe)
   stepfx=""; if [ -n "$FAKE_STEP_FIXTURE" ]; then stepfx="\"fixture\": \"$FAKE_STEP_FIXTURE\","; fi
   # FAKE_SCHEMES: the manifest's fixtureSchemes, comma separated ("-": no field; empty: []).
   schemes=""; if [ "$FAKE_SCHEMES" != "-" ]; then schemes="\"fixtureSchemes\": [$(echo "$FAKE_SCHEMES" | sed 's/[^,][^,]*/"&"/g; s/,/, /g')],"; fi
+  # FAKE_HARNESS: the manifest's harness (PerfLoopHost); empty: none, an adapter of its own.
+  if [ -n "$FAKE_HARNESS" ]; then schemes="$schemes \"harness\": \"$FAKE_HARNESS\","; fi
   if [ "$FAKE_GUARDED" = 1 ]; then
   cat <<JSON
 { "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench", $verbs

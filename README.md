@@ -61,7 +61,7 @@ cd /path/to/your/package
 perfloop init --app MyApp
 ```
 
-Add the printed dependency and target declarations to `Package.swift`. In the generated `Sources/MyAppBench/main.swift`, replace the placeholder view with your app's views, add representative fixtures and user actions, and define the checks those actions must pass. Use `--package` with `init` to generate a standalone bench package.
+Add the printed dependency and target declarations to `Package.swift`. In the generated `Sources/MyAppBench/main.swift`, replace the placeholder view with your app's views, add representative fixtures and user actions, and define the checks those actions must pass. Name the regions each step must leave drawn (`run.step("open", ink: [.view("sidebar", sidebar)]) { … }`): the built-in ink guard fails a blank one and leaves a picture of each; measure to the frame that shows a change with `until:`, and wait before a check with `run.wait` ([ADAPTER.md §3b](ADAPTER.md)). Use `--package` with `init` to generate a standalone bench package.
 
 Build and register the baseline from a clean, merged commit.
 

@@ -300,6 +300,39 @@ final class ChainEnd: NSResponder {
   }
 }
 
+// MARK: accessibility elements
+
+/// SwiftUI's views are accessibility elements, not NSViews, and SwiftUI builds them only for an assistive client.
+@MainActor enum AccessibilityElements {
+  /// The screen frame of the element with this identifier under `root`: views and their accessibility children,
+  /// breadth first. SwiftUI's elements answer the accessibility methods without declaring the protocol to Swift, so
+  /// they are asked through the Objective-C runtime.
+  static func frame(_ identifier: String, in root: NSView) -> NSRect? {
+    func ask(_ o: NSObject, _ k: String) -> Any? { o.responds(to: Selector((k))) ? o.value(forKey: k) : nil }
+    var queue: [NSObject] = [root], seen = Set<ObjectIdentifier>()
+    while !queue.isEmpty, seen.count < 5000 {
+      let o = queue.removeFirst()
+      guard seen.insert(ObjectIdentifier(o)).inserted else { continue }
+      if ask(o, "accessibilityIdentifier") as? String == identifier, let f = (ask(o, "accessibilityFrame") as? NSValue)?.rectValue, !f.isEmpty { return f }
+      if let v = o as? NSView { queue += v.subviews }
+      queue += (ask(o, "accessibilityChildren") as? [Any] ?? []).compactMap { $0 as? NSObject }
+    }
+    return nil
+  }
+
+  /// `find`, and when it finds nothing, again with SwiftUI's accessibility tree built: `AXEnhancedUserInterface` on
+  /// (as VoiceOver sets it) for the second walk, off after. SwiftUI may keep the tree up to date for the rest of the
+  /// process, which costs main-thread time: `turnedOn` says it happened.
+  static func withTree<T>(_ find: () -> T?) -> (found: T?, turnedOn: Bool) {
+    if let f = find() { return (f, false) }
+    let eui = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    guard (NSApp.accessibilityAttributeValue(eui) as? Bool) != true else { return (nil, false) }
+    NSApp.accessibilitySetValue(true, forAttribute: eui)
+    defer { NSApp.accessibilitySetValue(false, forAttribute: eui) }
+    return (find(), true)
+  }
+}
+
 // MARK: focus
 
 /// Where to expect the keyboard after a step (`expectFocus:`, `run.expectFocus`): a view (or a view inside it), an
@@ -417,9 +450,9 @@ extension Run {
   /// put on the app's event queue, as a hand's would be. The step records which menu item fired (and its action's
   /// target), or that none did and what took the keys instead (a view's key equivalent, a responder, or nobody), with
   /// the focus before and after. `expect`: the menu item's title (or its path, `View › Split Down`) the keys must fire,
-  /// else the check `press <keys>` fails. `until` and the timing are `step`'s.
+  /// else the check `press <keys>` fails. `until`, `ink` and the timing are `step`'s (every input step takes them).
   @discardableResult
-  public func press(_ shortcut: String, expect: String? = nil, expectFocus: FocusTarget? = nil, name: String? = nil, timeoutMs: Double = 5000, quietMs: Double = 100,
+  public func press(_ shortcut: String, expect: String? = nil, ink: [InkRegion] = [], expectFocus: FocusTarget? = nil, name: String? = nil, timeoutMs: Double = 5000, quietMs: Double = 100,
                     until: (() -> Bool)? = nil) async -> StepRecord {
     let label = name ?? "press \(shortcut)"
     let resolved: Result<(Shortcut, KeyStroke), ShortcutError> = Shortcut.parse(shortcut).flatMap { s in keyMap.press(s).map { (s, $0) } }
@@ -427,36 +460,36 @@ extension Run {
       if case .failure(let e) = resolved { check(label, false, "\(e)") }
       return await step(label) {}
     }
-    return await keys(kind: "press", label: label, keys: sc.display, presses: [(kp, nil)], expect: expect, expectFocus: expectFocus, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
+    return await keys(kind: "press", label: label, keys: sc.display, presses: [(kp, nil)], expect: expect, ink: ink, expectFocus: expectFocus, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
   }
 
   /// One measured step: a named key (`.escape`, `.down`, `.return`…) with `modifiers`, recorded as `press` is.
   @discardableResult
-  public func key(_ key: Key, modifiers: NSEvent.ModifierFlags = [], expectFocus: FocusTarget? = nil, name: String? = nil, timeoutMs: Double = 5000,
+  public func key(_ key: Key, modifiers: NSEvent.ModifierFlags = [], ink: [InkRegion] = [], expectFocus: FocusTarget? = nil, name: String? = nil, timeoutMs: Double = 5000,
                   quietMs: Double = 100, until: (() -> Bool)? = nil) async -> StepRecord {
     let sc = Shortcut(key: key.rawValue, control: modifiers.contains(.control), option: modifiers.contains(.option), shift: modifiers.contains(.shift),
                       command: modifiers.contains(.command))
     let label = name ?? "key \(sc.display)"
     guard case .success(let kp) = keyMap.press(sc) else { check(label, false, "no key \(key.rawValue)"); return await step(label) {} }
-    return await keys(kind: "key", label: label, keys: sc.display, presses: [(kp, nil)], expect: nil, expectFocus: expectFocus, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
+    return await keys(kind: "key", label: label, keys: sc.display, presses: [(kp, nil)], expect: nil, ink: ink, expectFocus: expectFocus, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
   }
 
   /// One measured step: `text` typed, a key down and up per character on the current layout (⇧ and ⌥ as the layout
   /// needs; a character no key types goes as text, as an input method inserts it), to whatever has the keyboard. One
   /// step for the whole text: type a character per step to time each key.
   @discardableResult
-  public func type(_ text: String, expectFocus: FocusTarget? = nil, name: String? = nil, timeoutMs: Double = 5000, quietMs: Double = 100,
+  public func type(_ text: String, ink: [InkRegion] = [], expectFocus: FocusTarget? = nil, name: String? = nil, timeoutMs: Double = 5000, quietMs: Double = 100,
                    until: (() -> Bool)? = nil) async -> StepRecord {
     let label = name ?? "type '\(text)'"
     let presses: [(KeyStroke, String?)] = text.map { c in keyMap.stroke(c).map { ($0, nil) } ?? (KeyStroke(keyCode: 0), String(c)) }
-    return await keys(kind: "type", label: label, keys: nil, text: text, presses: presses, expect: nil, expectFocus: expectFocus, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
+    return await keys(kind: "type", label: label, keys: nil, text: text, presses: presses, expect: nil, ink: ink, expectFocus: expectFocus, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
   }
 
   /// One measured step: a click on `view`, at the middle of its visible part. The step records the view AppKit
   /// hit-tested there (when it isn't `view` or inside it, something on top took the point, and the check
   /// `click <view>` fails) and what took the mouse-down: a view, a gesture recognizer, or nobody.
   @discardableResult
-  public func click(_ view: NSView, count: Int = 1, modifiers: NSEvent.ModifierFlags = [], expectFocus: FocusTarget? = nil, name: String? = nil,
+  public func click(_ view: NSView, count: Int = 1, modifiers: NSEvent.ModifierFlags = [], ink: [InkRegion] = [], expectFocus: FocusTarget? = nil, name: String? = nil,
                     timeoutMs: Double = 5000, quietMs: Double = 100, until: (() -> Bool)? = nil) async -> StepRecord {
     let asked = Focus.ref(view)
     let label = name ?? "click \(asked.identifier.map { "#\($0)" } ?? asked.class)"
@@ -466,37 +499,37 @@ extension Run {
     let r = vr.isEmpty ? view.bounds : vr
     guard !r.isEmpty else { check(label, false, "\(asked.text) has no visible part to click"); return await step(label) {} }
     let p = view.convert(NSPoint(x: r.midX, y: r.midY), to: nil)
-    return await click(at: p, window: w, asked: asked, askedView: view, count: count, modifiers: modifiers, expectFocus: expectFocus, label: label, timeoutMs: timeoutMs,
+    return await click(at: p, window: w, asked: asked, askedView: view, count: count, modifiers: modifiers, ink: ink, expectFocus: expectFocus, label: label, timeoutMs: timeoutMs,
                        quietMs: quietMs, until: until)
   }
 
   /// A click on the view or accessibility element (a SwiftUI view's `.accessibilityIdentifier`) with this identifier.
   @discardableResult
-  public func click(identifier: String, count: Int = 1, modifiers: NSEvent.ModifierFlags = [], expectFocus: FocusTarget? = nil, name: String? = nil,
+  public func click(identifier: String, count: Int = 1, modifiers: NSEvent.ModifierFlags = [], ink: [InkRegion] = [], expectFocus: FocusTarget? = nil, name: String? = nil,
                     timeoutMs: Double = 5000, quietMs: Double = 100, until: (() -> Bool)? = nil) async -> StepRecord {
     let label = name ?? "click #\(identifier)"
     if let v = view(identifier: identifier) {
-      return await click(v, count: count, modifiers: modifiers, expectFocus: expectFocus, name: label, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
+      return await click(v, count: count, modifiers: modifiers, ink: ink, expectFocus: expectFocus, name: label, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
     }
     let treeWasOn = accessibilityTreeOn
-    guard let (w, rect) = element(identifier: identifier) else {
+    // The walk runs off the clock: it never lands in a step's stretches.
+    guard let (w, rect) = await offTheClock({ element(identifier: identifier) }) else {
       check(label, false, "no view or accessibility element #\(identifier) in the windows")
       return await step(label) {}
     }
-    await endTurn()   // the walk never lands in the step's stretches
     let note = accessibilityTreeOn && !treeWasOn
       ? ["finding #\(identifier) turned on SwiftUI's accessibility tree (AXEnhancedUserInterface, as VoiceOver does): SwiftUI may keep it up to date for the rest of the rep, which the steps after this one pay for"] : []
     return await click(at: CGPoint(x: rect.midX, y: rect.midY), window: w, asked: ResponderRef(class: "element", identifier: identifier), askedView: nil, count: count,
-                       modifiers: modifiers, expectFocus: expectFocus, label: label, timeoutMs: timeoutMs, quietMs: quietMs, until: until, notes: note)
+                       modifiers: modifiers, ink: ink, expectFocus: expectFocus, label: label, timeoutMs: timeoutMs, quietMs: quietMs, until: until, notes: note)
   }
 
   /// A click at `point` in `window`'s coordinates (the bench window's by default; AppKit's, origin bottom-left).
   @discardableResult
-  public func click(at point: CGPoint, in window: NSWindow? = nil, count: Int = 1, modifiers: NSEvent.ModifierFlags = [], expectFocus: FocusTarget? = nil,
+  public func click(at point: CGPoint, in window: NSWindow? = nil, count: Int = 1, modifiers: NSEvent.ModifierFlags = [], ink: [InkRegion] = [], expectFocus: FocusTarget? = nil,
                     name: String? = nil, timeoutMs: Double = 5000, quietMs: Double = 100, until: (() -> Bool)? = nil) async -> StepRecord {
     let label = name ?? "click (\(Int(point.x)), \(Int(point.y)))"
     guard let w = window ?? self.window else { check(label, false, "no window to click in"); return await step(label) {} }
-    return await click(at: point, window: w, asked: nil, askedView: nil, count: count, modifiers: modifiers, expectFocus: expectFocus, label: label, timeoutMs: timeoutMs,
+    return await click(at: point, window: w, asked: nil, askedView: nil, count: count, modifiers: modifiers, ink: ink, expectFocus: expectFocus, label: label, timeoutMs: timeoutMs,
                        quietMs: quietMs, until: until)
   }
 
@@ -519,9 +552,7 @@ extension Run {
     let v = Focus.view(NSApp.keyWindow)
     if target.matches(after, before: before, view: v) { return true }
     guard case .identifier(let id) = target.kind, let view = v, let w = view.window else { return false }
-    await endTurn()
-    guard let (ew, frame) = element(identifier: id), ew === w else { await endTurn(); return false }
-    await endTurn()
+    guard let (ew, frame) = await offTheClock({ element(identifier: id) }), ew === w else { return false }
     let r = view.convert(view.bounds, to: nil)
     return frame.insetBy(dx: -2, dy: -2).contains(CGPoint(x: r.midX, y: r.midY))
   }
@@ -539,39 +570,16 @@ extension Run {
   }
 
   /// The window and the frame (window coordinates) of the accessibility element with this identifier: how a SwiftUI
-  /// view's `.accessibilityIdentifier` is found, as it has no NSView of its own. SwiftUI builds its accessibility tree
-  /// only for an assistive client, so the lookup turns `AXEnhancedUserInterface` on while it walks (as VoiceOver
-  /// would) and back off after; SwiftUI may keep the tree up to date for the rest of the rep, which costs main-thread
-  /// time: in a scenario measured for speed, click a view or a point instead.
+  /// view's `.accessibilityIdentifier` is found, as it has no NSView of its own (`AccessibilityElements`).
   public func element(identifier: String) -> (NSWindow, CGRect)? {
-    if let found = walkElements(identifier) { return found }
-    let eui = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-    let was = (NSApp.accessibilityAttributeValue(eui) as? Bool) ?? false
-    guard !was else { return nil }
-    NSApp.accessibilitySetValue(true, forAttribute: eui)
-    defer { NSApp.accessibilitySetValue(false, forAttribute: eui) }
-    accessibilityTreeOn = true
-    return walkElements(identifier)
-  }
-
-  /// Views and their accessibility children, breadth first. SwiftUI's elements answer the accessibility methods
-  /// without declaring the protocol to Swift, so they are asked through the Objective-C runtime.
-  func walkElements(_ identifier: String) -> (NSWindow, CGRect)? {
-    func ask(_ o: NSObject, _ k: String) -> Any? { o.responds(to: Selector((k))) ? o.value(forKey: k) : nil }
-    for w in benchWindows() {
-      guard let root = w.contentView else { continue }
-      var queue: [NSObject] = [root], seen = Set<ObjectIdentifier>()
-      while !queue.isEmpty, seen.count < 5000 {
-        let o = queue.removeFirst()
-        guard seen.insert(ObjectIdentifier(o)).inserted else { continue }
-        if ask(o, "accessibilityIdentifier") as? String == identifier, let f = (ask(o, "accessibilityFrame") as? NSValue)?.rectValue, !f.isEmpty {
-          return (w, w.convertFromScreen(f))
-        }
-        if let v = o as? NSView { queue += v.subviews }
-        queue += (ask(o, "accessibilityChildren") as? [Any] ?? []).compactMap { $0 as? NSObject }
+    let (found, turnedOn) = AccessibilityElements.withTree { () -> (NSWindow, CGRect)? in
+      for w in benchWindows() {
+        if let c = w.contentView, let f = AccessibilityElements.frame(identifier, in: c) { return (w, w.convertFromScreen(f)) }
       }
+      return nil
     }
-    return nil
+    if turnedOn { accessibilityTreeOn = true }
+    return found
   }
 
   // MARK: the steps
@@ -589,7 +597,7 @@ extension Run {
     return (owned + [b]).sorted { a, _ in a.isKeyWindow }
   }
 
-  func keys(kind: String, label: String, keys: String?, text: String? = nil, presses: [(KeyStroke, String?)], expect: String?, expectFocus: FocusTarget?,
+  func keys(kind: String, label: String, keys: String?, text: String? = nil, presses: [(KeyStroke, String?)], expect: String?, ink: [InkRegion], expectFocus: FocusTarget?,
             timeoutMs: Double, quietMs: Double, until: (() -> Bool)?) async -> StepRecord {
     // The window the keys are for: the key window when it is the bench window or one it owns (a palette), else the
     // bench window.
@@ -599,7 +607,7 @@ extension Run {
     let probe = InputProbe()
     let fr = target?.firstResponder
     probe.arm(chainFrom: fr)
-    var r = await step(label, timeoutMs: timeoutMs, quietMs: quietMs, until: until, expectFocus: expectFocus, input: true) { probe.post(events) }
+    var r = await measuredStep(label, timeoutMs: timeoutMs, quietMs: quietMs, until: until, expectFocus: expectFocus, input: true) { probe.post(events) }
     if !probe.delivered { await probe.waitDelivered(timeoutMs: 1000) }
     probe.disarm()
     var rec = InputRecord(kind: kind, outcome: "delivered")
@@ -636,10 +644,11 @@ extension Run {
     else if kind == "press", rec.outcome == "undelivered" { check(label, false, rec.line) }
     if let i = r.input { r.input?.line = InputRecord.line(i, focus: r.focus) }
     replace(r)
+    if !ink.isEmpty { await self.ink(ink, after: label) }
     return r
   }
 
-  func click(at p: CGPoint, window w: NSWindow, asked: ResponderRef?, askedView: NSView?, count: Int, modifiers: NSEvent.ModifierFlags, expectFocus: FocusTarget?,
+  func click(at p: CGPoint, window w: NSWindow, asked: ResponderRef?, askedView: NSView?, count: Int, modifiers: NSEvent.ModifierFlags, ink: [InkRegion] = [], expectFocus: FocusTarget?,
              label: String, timeoutMs: Double, quietMs: Double, until: (() -> Bool)?, notes extra: [String] = []) async -> StepRecord {
     let root = w.contentView?.superview ?? w.contentView
     let hitView = root.flatMap { $0.superview == nil ? $0.hitTest(p) : $0.hitTest($0.superview!.convert(p, from: nil)) }
@@ -648,7 +657,7 @@ extension Run {
     let before = await picture()
     let probe = InputProbe()
     probe.arm(chainFrom: hitView, recognizersOf: hitView)
-    var r = await step(label, timeoutMs: timeoutMs, quietMs: quietMs, until: until, expectFocus: expectFocus, input: true) { probe.post(events) }
+    var r = await measuredStep(label, timeoutMs: timeoutMs, quietMs: quietMs, until: until, expectFocus: expectFocus, input: true) { probe.post(events) }
     if !probe.delivered { await probe.waitDelivered(timeoutMs: 1000) }
     probe.disarm()
     var rec = InputRecord(kind: "click", outcome: "hit")
@@ -679,6 +688,7 @@ extension Run {
     if asked != nil || rec.outcome == "undelivered" { check(label, rec.outcome == "hit", rec.line) }
     if let i = r.input { r.input?.line = InputRecord.line(i, focus: r.focus) }
     replace(r)
+    if !ink.isEmpty { await self.ink(ink, after: label) }
     return r
   }
 
@@ -715,28 +725,20 @@ extension Run {
 
   // MARK: pictures
 
-  /// The bench window's picture before an input step, when pictures were asked for (`--pictures DIR`), taken in a
-  /// run-loop turn of its own so it never lands in the step's stretches.
+  /// The bench window's picture before an input step, when pictures were asked for (`--pictures DIR`), off the clock.
   func picture() async -> Data? {
-    guard picturesDir != nil, let w = window, let png = Snapshot.png(of: w) else { return nil }
-    await endTurn()
-    return png
+    guard picturesDir != nil, let w = window else { return nil }
+    return await offTheClock { Snapshot.png(of: w) }
   }
 
-  /// After the step: the window again; when it differs from `before`, both pictures and the difference are written and
-  /// described. The comparison runs off the main thread, the capture in a turn of its own.
+  /// After the step: the window again, off the clock; when it differs from `before`, both pictures and the difference
+  /// are written and described (the comparison off the main thread).
   func picture(after before: Data?, step: String) async -> InputPictures? {
-    guard let dir = picturesDir, let b = before, let w = window, let a = Snapshot.png(of: w) else { return nil }
+    guard let dir = picturesDir, let b = before, let w = window else { return nil }
     let scale = Double(w.backingScaleFactor)
     let base = URL(fileURLWithPath: dir).appendingPathComponent("\(scenario)-rep\(rep)-\(steps.count)-\(Self.slug(step))").path
-    await endTurn()
+    guard let a = await offTheClock({ Snapshot.png(of: w) }) else { return nil }
     return await Task.detached { InputPictures.write(before: b, after: a, base: base, scale: scale) }.value
-  }
-
-  /// Lets the stretch we're in close: work done before it never counts in the next step's stretches.
-  func endTurn() async {
-    let n = recorder.timeline.stretches.count
-    _ = await recorder.wait(timeoutMs: 500) { [unowned self] in recorder.timeline.stretches.count > n }
   }
 
   static func slug(_ s: String) -> String {

@@ -83,6 +83,20 @@ public enum Explain {
       if !w.topFramework.isEmpty { o.append("  framework: " + w.topFramework.joined(separator: "; ")) }
       if let c = w.causes { o.append("  causes: " + c) }
     }
+    o += benchWarnings(use.flatMap { [$0.a, $0.b] })
+    return o
+  }
+
+  /// A step's worst stretch this share of bench code or more gets a warning (F18): the numbers are partly the bench's.
+  public static let benchWarnPct = 25.0
+
+  /// One warning per step whose worst stretch (in any of these reps) was mostly the bench's own code.
+  public static func benchWarnings(_ sides: [Side]) -> [String] {
+    var seen: Set<String> = [], o: [String] = []
+    for w in sides.compactMap(\.worstStretch).sorted(by: { ($0.benchPct ?? 0) > ($1.benchPct ?? 0) }) {
+      guard let t = w.benchWarning, seen.insert(w.step ?? "").inserted else { continue }
+      o.append("warning: " + t)
+    }
     return o
   }
 

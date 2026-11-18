@@ -7,7 +7,7 @@ deliberately slow path, and its PerfLoop bench. It is the second app PerfLoop ru
 |---|---|
 | `Sources/SlowListKit/Model.swift` | a knob (`ListKnobs.rank`) where an idea varies, and `Mutations.record` on the state that drives bodies |
 | `Sources/SlowListKit/Views.swift` | `Probe.body("Row", id:)` in the bodies worth counting; the slow path; the fix (`SLOWLIST_ROW_VALUES`); a cheat (`SLOWLIST_CHEAT`) |
-| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, four scenarios (one replays a trackpad gesture, one presses real keys through the menu bar), a knob, a guard of its own, `bench.main()` |
+| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, four scenarios (one replays a trackpad gesture, one presses real keys and clicks through the menu bar), ink regions each step must leave drawn (the rows, the status line), a knob, a guard of its own, `bench.main()` |
 | `Package.swift` | depends on PerfLoop like an outside app; the `PerfLoopStamp` plugin on the bench target |
 | `walkthrough.sh` | the loop end to end on this app |
 
@@ -21,7 +21,9 @@ click on an M-series Mac. Two fixes are built in:
 - the code fix (`-Xswiftc -DSLOWLIST_ROW_VALUES`): rows take values (`Equatable`), so a selection re-evaluates the two
   rows whose values changed, and ranks come from one sort.
 
-And one cheat (`-DSLOWLIST_CHEAT`): rows draw nothing. It is very fast and wrong; the guards refuse it.
+And one cheat (`-DSLOWLIST_CHEAT`): rows draw nothing. It is very fast and wrong; the guards refuse it: `rows-drawn`
+counts the row bodies, and the built-in ink guard finds the rows region blank after every selection (its crops,
+`ink/select-rep0-…-rows.png`, show it).
 
 ## Run it
 

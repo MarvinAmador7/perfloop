@@ -99,8 +99,13 @@ public final class Bench: @unchecked Sendable {
 
   /// `stamp` is `perfLoopBuildStamp` from the PerfLoopStamp plugin; nil leaves the bench unstamped, which
   /// `perfloop store add` refuses.
-  public init(app: String, adapter: String? = nil, version: String = "1", stamp: String?) {
+  /// The bench target's module(s): their named functions, sampled inside a step, are the bench measuring itself
+  /// (`explain` warns). Taken from where `Bench(…)` is called.
+  public var benchModules: [String]
+
+  public init(app: String, adapter: String? = nil, version: String = "1", stamp: String?, fileID: String = #fileID) {
     self.app = app; self.adapter = adapter ?? "\(app)-bench"; self.version = version; self.stamp = stamp
+    benchModules = fileID.split(separator: "/").first.map { [String($0)] } ?? []
   }
 
   // MARK: registration
@@ -183,6 +188,7 @@ public final class Bench: @unchecked Sendable {
     m.gestures = gestures.isEmpty ? nil : gestures
     // `resolveFixture` takes only registered names when there are some (any name when none): no `scheme:` form.
     m.fixtureSchemes = fixtures.isEmpty ? nil : []
+    m.harness = "PerfLoopHost"
     return m
   }
 
@@ -380,13 +386,17 @@ public final class Bench: @unchecked Sendable {
     let env = ProcessInfo.processInfo.environment
     let fromEnv: [String] = (env["PERFLOOP_GUARDS"] ?? "").split(separator: ",").map(String.init)
     let fromFlags: [String] = a.all("guards").flatMap { $0.split(separator: ",").map(String.init) }
-    let requested: Set<String> = Set((fromEnv + fromFlags).filter { !$0.isEmpty && $0 != "checks" })
+    // `ink` is judged after the steps that name regions, whether asked for or not (a built-in guard).
+    let asked = Set((fromEnv + fromFlags).filter { !$0.isEmpty && $0 != "checks" })
+    let requested = asked.subtracting([GuardNames.ink])
+    let inkAsked = asked.contains(GuardNames.ink) || spec.guards.contains(GuardNames.ink)
     let artifacts = a.one("artifacts") ?? env["PERFLOOP_ARTIFACTS"]
     let pictures = (a.one("pictures") ?? env["PERFLOOP_PICTURES"]).map { ($0 as NSString).expandingTildeInPath }
     let gp = guardParams(a, scenario: spec)
     let samplerOn = !(a.one("sampler") == "off" || (a.one("sampler") == nil && env["PERFLOOP_SAMPLER"] == "off"))
     let sampler: MainThreadSampler? = samplerOn && MainThreadSampler.supported ? MainThreadSampler(config: SamplerConfig()) : nil
     Symbols.appModulePrefixes = appModules
+    Symbols.benchModules = Set(benchModules)
     let activate = !a.has("no-activate")
     let startedAt = Clock.now()
     // `profile`'s child: the first rep's window waits for the go file once it is up, and the run says when it is done.
@@ -404,6 +414,8 @@ public final class Bench: @unchecked Sendable {
       let run = Run(scenario: name, fixture: fixture, params: params, rep: i, recorder: recorder, activate: activate, sampler: sampler)
       run.appearance = appearance
       run.picturesDir = pictures
+      run.inkMin = gp["ink.min"] ?? Ink.defaultMin
+      run.inkDir = URL(fileURLWithPath: artifacts ?? NSTemporaryDirectory() + "perfloop-\(app)-\(ProcessInfo.processInfo.processIdentifier)").appendingPathComponent("ink")
       if i == 0 { run.waitFor = waitFor }
       defer { run.close(); Probe.sink = nil; Mutations.sink = nil }
       try await body(run)
@@ -417,9 +429,15 @@ public final class Bench: @unchecked Sendable {
         var gs: [GuardResult] = []
         for g in requested.sorted() { gs.append(await judge(g, run: run, params: gp, artifacts: artifacts)) }
         guards = gs
-      } else if let dir = artifacts, let w = run.window, let png = Snapshot.png(of: w) {
+      } else if let dir = a.one("artifacts"), let w = run.window, let png = Snapshot.png(of: w) {
+        // Asked for on the command line only: the runner always passes PERFLOOP_ARTIFACTS (for the ink crops).
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name)-rep\(i).png"))
+      }
+      if !run.inkResults.isEmpty {
+        guards = (guards ?? []) + [Ink.guardResult(run.inkResults)]
+      } else if inkAsked {
+        guards = (guards ?? []) + [GuardResult(name: GuardNames.ink, pass: false, detail: "the scenario lists the ink guard but no step named a region (run.step(…, ink: [.view(…)]))")]
       }
       if run.steps.isEmpty { run.note("the scenario measured no step: call run.step") }
       let rec = recorder.timeline.rep(index: i, steps: run.steps, checks: run.checks, guards: guards, window: window, notes: run.notes) { r, s in
@@ -551,9 +569,19 @@ public final class Bench: @unchecked Sendable {
       if let o = w.topOurs, !o.isEmpty { out.append("    ours: " + o.prefix(4).map { "\($0.symbol) ×\($0.samples)" }.joined(separator: ", ")) }
       if let f = w.topFramework, !f.isEmpty { out.append("    framework: " + f.prefix(3).map { "\($0.symbol) ×\($0.samples)\($0.under.map { " under \($0)" } ?? "")" }.joined(separator: ", ")) }
     }
+    // The bench measured itself in a step: say so (F18), from any rep.
+    var warned: Set<String> = []
+    for w in r.reps.flatMap(\.worstStretches) {
+      guard let b = w.benchSamples, let n = w.samples, n > 0, !warned.contains(w.step) else { continue }
+      var note = StretchNote(durationMs: w.durationMs, step: w.step, topOurs: [], topFramework: [])
+      note.benchPct = Stats.round(Double(b) / Double(n) * 100, 1); note.topBench = w.topBench?.prefix(3).map { "\($0.symbol) ×\($0.samples)" }
+      if let t = note.benchWarning { out.append("  warning: " + t); warned.insert(w.step) }
+    }
     out += Self.inputLines(r.reps)
     for c in r.reps.flatMap(\.checks) where !c.pass { out.append("  check \(c.name) FAILED: \(c.detail)") }
     for g in r.reps.flatMap({ $0.guards ?? [] }) where !g.pass { out.append("  guard \(g.name) FAILED: \(g.detail)") }
+    let crops = r.reps.flatMap { ($0.guards ?? []).filter { $0.name == GuardNames.ink }.flatMap(\.artifacts) }
+    if !crops.isEmpty { out.append("  look at (ink): " + crops.prefix(6).joined(separator: " ") + (crops.count > 6 ? " (+\(crops.count - 6) more)" : "")) }
     out += r.notes.map { "  " + $0 }
     return out.joined(separator: "\n")
   }

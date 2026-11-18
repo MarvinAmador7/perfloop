@@ -86,6 +86,10 @@ public struct StretchRecord: Codable, Sendable, Equatable {
   public var topOurs: [SymbolCount]?
   public var topFramework: [SymbolCount]?
   public var topSelf: [SymbolCount]?
+  /// Samples whose work was the bench's own code, not the app's (`StackProfile.benchSamples`), and those frames: a
+  /// check or a capture that ran inside the step. `explain` warns when it is a large share of the stretch.
+  public var benchSamples: Int?
+  public var topBench: [SymbolCount]?
 }
 
 /// A check a scenario makes beyond timing (`run.check`): the `checks` guard vetoes a candidate that fails one the
@@ -241,25 +245,33 @@ public struct Timeline: Sendable {
   public var ticks: [Double] = []
   public var stretches: [StretchSample] = []
   public var bodies: [BodySample] = []
+  /// The bench's own work between steps (the ink guard, `await run.check`), each in run-loop turns of its own: the
+  /// stretches, frame intervals and bodies inside these windows are left out of every number (F18).
+  public var offClock: [ClosedRange<Double>] = []
   public init(nominalHz: Double) { self.nominalHz = nominalHz }
 
-  /// The display-link intervals whose ticks fall in (a, b].
+  func off(_ a: Double, _ b: Double) -> Bool { offClock.contains { a < $0.upperBound && b > $0.lowerBound } }
+
+  /// The display-link intervals whose ticks fall in (a, b], but those the bench's own work held up.
   public func intervals(from a: Double, to b: Double) -> [Double] {
     var out: [Double] = []
     var prev: Double?
     for t in ticks {
       if t > b { break }
-      if let p = prev, t > a { out.append(t - p) }
+      if let p = prev, t > a, !off(p, t) { out.append(t - p) }
       prev = t
     }
     return out
   }
 
-  /// Stretches that overlap [a, b): a step's action runs inside a stretch that opened before it.
-  public func stretches(from a: Double, to b: Double) -> [StretchSample] { stretches.filter { $0.atMs + $0.durationMs > a && $0.atMs < b } }
+  /// Stretches that overlap [a, b): a step's action runs inside a stretch that opened before it. The bench's own turns
+  /// are left out.
+  public func stretches(from a: Double, to b: Double) -> [StretchSample] {
+    stretches.filter { $0.atMs + $0.durationMs > a && $0.atMs < b && !off($0.atMs, $0.atMs + $0.durationMs) }
+  }
 
   public func bodyCounts(from a: Double, to b: Double) -> [String: Int] {
-    bodies.filter { $0.atMs >= a && $0.atMs <= b }.reduce(into: [:]) { $0[$1.view, default: 0] += 1 }
+    bodies.filter { $0.atMs >= a && $0.atMs <= b && !off($0.atMs, $0.atMs) }.reduce(into: [:]) { $0[$1.view, default: 0] += 1 }
   }
 
   /// The step's record from its measured edges.

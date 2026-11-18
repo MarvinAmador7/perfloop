@@ -24,7 +24,8 @@ final class GuardTests: XCTestCase {
     let ps = guarded(pairs(3, a: 40, b: 4, seed: 1), a: [ok, same], b: [blank, differs])
     let s = Acceptance.screen(ps, metric: "mainThreadCpuMsPerStep", guards: guards)
     XCTAssertEqual(s.wins, 3); XCTAssertEqual(s.verdict, "rejected")
-    XCTAssertEqual(s.guardFailures.count, 3); XCTAssertEqual(s.guardReviews?.count, 3)
+    XCTAssertEqual(s.guardFailures, ["built-within failed on the candidate in pairs 1, 2, 3: agt-1: no ColumnThread body · the candidate passed 0/3"], "one line per guard, counted")
+    XCTAssertEqual(s.guardReviews?.count, 3)
     let f = Acceptance.full(guarded(pairs(5, a: 40, b: 4, seed: 2), a: [ok, same], b: [blank, same]), metric: "mainThreadCpuMsPerStep", guards: guards, lastLook: false)
     XCTAssertEqual(f.verdict, "lost"); XCTAssertTrue(f.reasons.contains { $0.hasPrefix("built-within failed on the candidate") })
   }

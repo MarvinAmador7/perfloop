@@ -172,7 +172,11 @@ public struct SamplerConfig: Sendable {
     if dladdr(UnsafeRawPointer(bitPattern: a), &info) != 0 {
       let image = info.dli_fname.map { URL(fileURLWithPath: String(cString: $0)).lastPathComponent }
       let ours = info.dli_fbase == UnsafeMutableRawPointer(mutating: #dsohandle)
-      if let s = info.dli_sname { f = StackFrame(Symbols.name(String(cString: s), image: image), ours: ours) }
+      if let s = info.dli_sname {
+        let d = Symbols.demangle(String(cString: s))
+        let role = ours ? Symbols.benchRole(d, benchModules: Symbols.benchModules) : .other
+        f = StackFrame(Symbols.clean(d, image: image), ours: ours, bench: role == .bench, driver: role == .driver)
+      }
       else { f = StackFrame("(\(image ?? "?"))", ours: ours) }
     }
     symbolCache[a] = f
@@ -185,6 +189,7 @@ public struct SamplerConfig: Sendable {
     guard let s = span(stretch: id) else { w.samples = 0; w.unsampled = w.durationMs < config.gateMs + 1000 / config.hz ? "gate" : "missed"; return }
     let p = profile(s)
     w.samples = p.samples; w.stacks = p.tree; w.topOurs = p.ours; w.topFramework = p.framework; w.topSelf = p.selfTop
+    w.benchSamples = p.benchSamples; w.topBench = p.bench.isEmpty ? nil : p.bench
   }
 
   // MARK: costs

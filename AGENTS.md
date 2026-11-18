@@ -104,6 +104,13 @@ perfloop baseline S --bench PATH [--reference S2]   # first numbers + a referenc
   champion --scenario S` is compared with the baseline (numbers and picture). Quote the baseline in the PR.
 - **`--reference S2`** runs a champion scenario beside each rep, in the same minutes, so a reader can tell a slow
   feature from a slow Mac ("this Mac runs 12 % slower than at the champion's full"). Use one whenever the Mac is shared.
+- **A check must pass in every trusted rep.** One that passes in some is `flaky 2/3`, and a failure (exit 3 for `run`,
+  a veto in `exp`): it races something, usually the first commit after a structural change. Fix the check (ADAPTER.md
+  §3b: `until:`, `wait`, `settle`), never rerun until it passes.
+- **Look at the pictures.** The built-in ink guard (a scenario's `run.step(…, ink: [regions])`) leaves a crop of every
+  region it judged; `run` and `explain` print `look at (ink…): PATH`. Open them: a region can pass with the wrong content.
+- **The bench measuring itself** shows as `warning: N % of the worst stretch … is the bench's own code`: move the check
+  out of the step (`await run.check(name) { … }` or the ink guard run off the clock) before reading the step's numbers.
 - **Untrusted reps are named, never quoted.** A `run` whose reps were all untrusted prints `UNTRUSTED` and no number;
   rerun it when the Mac is quiet, and never copy an untrusted rep's value into a PR. `baseline` records nothing then.
 - **`file:` fixtures** (`--fixture file:PATH`, when your adapter takes them): the file must be on the Mac the reps run
