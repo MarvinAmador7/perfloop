@@ -46,7 +46,7 @@ Every answer comes under the loop's trust rules, unchanged:
 | Drawn | guard `ink` (regions by view, identifier, rect or a find closure, named in `run.step(…, ink:)`) | Do the regions have content after the step settles? | per region `pass` / `fail` with the ink share against a floor (`ink.min`, 0.5 %), a crop of each region to look at; the champion-relative floor is not built | Vetoes like any guard, whatever the manifest lists (built in) | in the stage | built (v3) |
 | Focus | step record `focus {before, after}` + `expectFocus` | Is the first responder (or field editor) where it should be? | `pass` / `fail`, naming the responder's class and identifier; a move the step didn't expect is a note | Vetoes as a check | in the stage | built (v4, PerfLoopHost) |
 | Input fired | `run.press` / `run.key` / `run.type` / `run.click` | Did the event reach its target? | `fired <menu item>` · `fired <other item>` (fails) · `not fired` (and what took it: a view's key equivalent, a responder, or nobody); a click reports the hit view and what took the mouse-down (a view, a gesture recognizer, or `nobody`), `missed` when it isn't the view asked for (fails) | Vetoes as a check | in the stage | built (v4, PerfLoopHost) |
-| Looks | `snapshot-diff` with regions and `--expect-look R` | Did the picture change only where the change was declared? | per region `same` · `moved N pt` · `differs`; outside declared regions over tolerance: `REVIEW` (the owner); inside them: listed, not a review | `REVIEW` waits for the owner, never a win | in the stage | planned (v5) |
+| Looks | `snapshot-diff` with regions and `--expect-look R` | Did the picture change only where the change was declared? | per region `same` · `moved dx,dy pt` · `differs` · `missing` · `resized`, each changed one with its before, after and diff pictures; outside declared regions: `REVIEW` (the owner); inside them: `declared`, passed, for the PR's reviewer | `REVIEW` waits for the owner, never a win | in the stage | built (v5) |
 | Readable | guard `contrast` over named text regions; optional AX audit | Text ≥ 4.5:1 against its local background; controls labelled | `pass` / `fail` with the ratio; audit findings as a list | Decision 4 | in the stage | planned (v8) |
 
 `untrusted` is a verdict in every mode, and `FORCED (owner flag)` is printed on any stage an owner flag changed.
@@ -84,15 +84,15 @@ Re-ordered for verification from the study's (b) and (c) rows. Sizes: S ≈ a da
 | v2 | `exp new --expect same` with `noRegression` / `regressed` / `inconclusive`; `inconclusive` screens and `exp screen --more N` (b2, b3) | S6, S7 | M + S | **in progress** (`expect-same`) | The "costs nothing" answer, without the optimiser's words |
 | v3 | `ink` guard over named regions, run in its own run-loop turn after the step; `explain` warns when a step's worst stretch is bench code (c3, c6) | S14, S18 | M | built (ADAPTER.md §3b) | Caught a real bug in all four features; generic, so it judges new scenarios the agent can't have tuned |
 | v4 | `run.press` / `type` / `key` through `NSApp.postEvent` with layout-correct characters, reporting the menu item fired; `run.click` with hit and consumer; focus before and after each step (c1, c2) | S12, S13 | M + M | built (PerfLoopHost; ADAPTER.md §6c) | The ~65 min the study lost to input; "it answers real input" has no evidence without it |
-| v5 | Region-scoped `snapshot-diff`, an alignment search (`moved` vs `differs`), regions declared by the agent with `--expect-look` (b5) | S16 | M | planned | Every feature changes the picture somewhere; today that is a global `REVIEW` the owner has to open |
+| v5 | Region-scoped `snapshot-diff`, an alignment search (`moved` vs `differs`), regions declared by the agent with `--expect-look` (b5) | S16 | M | built | Every feature changes the picture somewhere; today that is a global `REVIEW` the owner has to open |
 | v6 | **`perfloop verify`** and the bundle (§3); an MCP `verify` tool that returns a job | new | S, then grows | planned, after v1–v2 | See below |
-| v7 | Visible child windows drawn into the default snapshots (c4, first part) | S15 | S | planned | A palette or popover is invisible to every looks check without it |
+| v7 | Visible child windows drawn into the default snapshots (c4, first part) | S15 | S | built | A palette or popover is invisible to every looks check without it |
 | v8 | Opt-in ScreenCaptureKit `looks` capture (materials, title bar), the `contrast` guard, an optional AX audit (c4, rest) | S15 | L | planned | Needs the screen-recording permission (decision 3) |
 | v9 | Checks counted per trusted rep: `flaky N/M` instead of a pass; `until:`/`wait`/`settle` documented, and doctor names a protocol-1 adapter without PerfLoopHost's helpers (c5 docs) | S17 | S | built (ADAPTER.md §3, §3b) | A check that races the first commit passes one rep and fails the next |
 | v10 | Busy % and load per rep in the pair lines, a body-count delta per step (load-independent) (b6) | S23 | S | planned | On a busy Mac, structure is the only evidence left; it turns some `inconclusive` into readable |
-| v11 | Appearances: `--set appearance=dark` and the larger text sizes as a scenario parameter the bench applies, so looks, ink and contrast run in each | new | S | planned | The study never checked dark mode; every looks claim is for one appearance |
+| v11 | Appearances: `--set appearance=dark` and the larger text sizes as a scenario parameter the bench applies, so looks, ink and contrast run in each | new | S | built (text sizes: the bench applies them through the app's setting) | The study never checked dark mode; every looks claim is for one appearance |
 | v12 | `exp new --base BUILD` (b7) | S24 | M | later | Convenience: knob A/B on a branch build without a second store |
-| – | capcomd: move DeskBench onto PerfLoopHost (c5) | S17, S20 | M (capcomd) | capcomd's | Until then v3–v5 reach capcomd only if its adapter rebuilds them |
+| – | capcomd: move DeskBench onto PerfLoopHost (c5) | S17, S20 | M (capcomd) | capcomd's | Until then v3–v5, v7 and v11 reach capcomd only if its adapter rebuilds them (ADAPTER.md §5a) |
 
 **`perfloop verify`: worth it, kept thin.** It judges nothing itself. Given the bench and the PR's new scenarios, it
 runs `exp new --expect same` on the champion's scenarios and `run` (and `baseline` when asked) on the new ones, as one
@@ -120,10 +120,13 @@ to them and don't re-ask.
 
 ## 6. What not to claim
 
-Of v3–v12, v3, v4 (input and focus) and v9 are built, and no agent has verified a feature through `perfloop verify` yet;
-v1 (#9) and v2 (#8) are merged. The ink guard and the input and focus records reach an adapter only through PerfLoopHost
-(capcomd's DeskBench must move onto it, or report `guards[]` named `ink` and `steps[].input`/`focus` itself).
-`noRegression` means no change beyond the metric's margin on these scenarios,
+Of v3–v12, v3, v4 (input and focus), v5, v7, v9 and v11 are built (ink, input and focus, checks per trusted rep, and
+looks: regions, child windows, appearances), and no agent has verified a feature through `perfloop verify` yet; v1 (#9)
+and v2 (#8) are merged. The ink guard, the input and focus records and the looks reach an adapter only through
+PerfLoopHost (capcomd's DeskBench must move onto it, or report `guards[]` named `ink`, `steps[].input`/`focus` and
+snapshot layouts itself, ADAPTER.md §5a). A `declared` look is the agent's claim that the change meant it, accepted by a
+person looking at the pictures, not by PerfLoop; `moved` means the same pixels shifted, not that the layout is right; a
+snapshot without ScreenCaptureKit shows no title bar and draws materials flat. `noRegression` means no change beyond the metric's margin on these scenarios,
 fixtures, appearance and machine, not no change. Checks the agent wrote in the same PR show what the agent believes the
 feature does, not that it is what the owner asked for. In-process input goes through the app's event queue, not the
 HID path, input methods or accessibility clients: it proves routing, not that a hand on a keyboard gets the same

@@ -8,22 +8,154 @@ import PerfLoopKit
 /// The `snapshot-diff` guard (CAPABILITIES.md C6): the window as a PNG after the rep settles, and a second one half a
 /// second later (`.later.png`) so what moves by itself (a caret, a spinner) is left out of the comparison. The runner
 /// hands the champion's and the candidate's pictures to the champion's `snapdiff`, so a candidate can't judge itself.
+///
+/// The picture is the content view drawn by itself (no screen-recording permission), with the window's visible child
+/// windows (palettes, popovers, sheets, panels) drawn in where they are on screen (v7). Beside it, `X.layout.json`
+/// (`perfloop.snapshot/1`) says where the scenario's named regions and the child windows are, and in which appearance it
+/// was drawn, so `snapdiff` compares region by region (v5). What this can't show: the title bar, and materials
+/// (vibrancy, blur), which draw flat; ScreenCaptureKit can (v8, opt-in).
 public enum Snapshot {
-  /// The window's content view drawn into a bitmap (no screen-recording permission: the view draws itself), over the
-  /// window's background colour, which `cacheDisplay` leaves out (text would be drawn on transparency).
-  @MainActor public static func png(of window: NSWindow) -> Data? {
-    guard let v = window.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return nil }
-    v.cacheDisplay(in: v.bounds, to: rep)
-    guard let content = rep.cgImage else { return rep.representation(using: .png, properties: [:]) }
+  /// The window's content (and its child windows) drawn into a bitmap over the window's background colour, which
+  /// `cacheDisplay` leaves out (text would be drawn on transparency).
+  @MainActor public static func png(of window: NSWindow) -> Data? { capture(window)?.png }
+
+  /// A picture and its layout.
+  public struct Capture {
+    public var png: Data
+    public var layout: SnapshotLayout
+  }
+
+  /// The window as `png(of:)` draws it, with its named regions located and its child windows drawn in. `children` nil:
+  /// the window's visible child windows and sheets, at any depth (a test passes its own).
+  @MainActor public static func capture(_ window: NSWindow, regions: [InkRegion] = [], appearance: String? = nil, textSize: String? = nil,
+                                        children: [NSWindow]? = nil) -> Capture? {
+    guard let v = window.contentView, let content = image(of: v) else { return nil }
     let w = content.width, h = content.height
+    let scale = v.bounds.width > 0 ? Double(w) / Double(v.bounds.width) : window.backingScaleFactor
     guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-    var bg = NSColor.windowBackgroundColor.cgColor
-    window.effectiveAppearance.performAsCurrentDrawingAppearance { bg = (window.backgroundColor ?? .windowBackgroundColor).cgColor }
-    ctx.setFillColor(bg); ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+    ctx.setFillColor(background(window)); ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
     ctx.draw(content, in: CGRect(x: 0, y: 0, width: w, height: h))
-    guard let img = ctx.makeImage() else { return nil }
-    return NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])
+    // Where the content is on screen: child windows and regions are placed from their screen rects.
+    let origin = window.convertToScreen(v.convert(v.bounds, to: nil))
+    var layout = SnapshotLayout(size: [w, h], scale: scale, appearance: appearance, textSize: textSize)
+    var notCaptured = ["the title bar"]
+    var flat = visualEffectViews(in: v)
+    var kids: [SnapshotLayout.ChildWindow] = []
+    for (i, c) in (children ?? childWindows(of: window)).enumerated() {
+      guard let cv = c.contentView, let img = image(of: cv) else { continue }
+      let r = pixels(c.convertToScreen(cv.convert(cv.bounds, to: nil)), in: origin, scale: scale, height: h)
+      ctx.saveGState()
+      ctx.clip(to: r.cg)
+      ctx.setFillColor(background(c)); ctx.fill(r.cg)
+      ctx.draw(img, in: r.cg)
+      ctx.restoreGState()
+      let effects = visualEffectViews(in: cv)
+      flat += effects
+      let name = [c.identifier?.rawValue, c.title].compactMap { $0 }.first { !$0.isEmpty } ?? "\(String(describing: type(of: c)))-\(i + 1)"
+      kids.append(SnapshotLayout.ChildWindow(name: name, kind: String(describing: type(of: c)), rect: r.topLeft, clipped: r.clipped ? true : nil,
+                                             material: !c.isOpaque || effects > 0 ? true : nil, sheet: c.sheetParent != nil ? true : nil))
+    }
+    if flat > 0 { notCaptured.append("materials: \(flat) visual-effect view(s) drawn flat (no vibrancy or blur)") }
+    if kids.contains(where: { $0.material == true }) { notCaptured.append("child windows' materials and shapes: drawn as their content over the window background colour") }
+    if kids.contains(where: { $0.clipped == true }) { notCaptured.append("child windows outside the bench window's content are cut off at its edge") }
+    if !kids.isEmpty { notCaptured[0] = "the title bars (the window's and its child windows')" }
+    layout.childWindows = kids.isEmpty ? nil : kids
+    layout.notCaptured = notCaptured
+    // Named regions, then each child window as one (unless a named region has its name).
+    var missing: [String] = []
+    for region in regions {
+      guard let rect = screenRect(region, in: window), let inside = pixels(rect, in: origin, scale: scale, height: h).inside(w, h) else {
+        missing.append(region.name); continue
+      }
+      layout.regions.append(SnapshotLayout.Region(name: region.name, rect: inside, source: source(region)))
+    }
+    for k in kids where !layout.regions.contains(where: { $0.name == k.name }) {
+      let r = PixelRect(x: k.rect[0], y: k.rect[1], w: k.rect[2], h: k.rect[3], height: h)
+      if let inside = r.inside(w, h) { layout.regions.append(SnapshotLayout.Region(name: k.name, rect: inside, source: "child window")) }
+    }
+    layout.missing = missing.isEmpty ? nil : missing
+    guard let img = ctx.makeImage(), let png = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) else { return nil }
+    return Capture(png: png, layout: layout)
+  }
+
+  /// Where a region is on screen now (the ink guard's placing, `Ink.resolve`), or nil: not found, or a hidden view.
+  @MainActor static func screenRect(_ r: InkRegion, in window: NSWindow) -> CGRect? {
+    switch r.place {
+    case .view(let v) where v.isHiddenOrHasHiddenAncestor || v.alphaValue == 0: return nil
+    default: break
+    }
+    guard let (cv, rect) = Ink.resolve(r, in: window), let w = cv.window, rect.width > 0, rect.height > 0 else { return nil }
+    return w.convertToScreen(cv.convert(rect, to: nil))
+  }
+
+  static func source(_ r: InkRegion) -> String {
+    switch r.place { case .rect: "rect"; case .view, .find: "view"; case .identifier: "identifier" }
+  }
+
+  /// Writes a capture to `X.png` and its layout to `X.layout.json`; false when either couldn't be written.
+  public static func write(_ c: Capture, to png: URL) -> Bool {
+    guard (try? c.png.write(to: png)) != nil else { return false }
+    return (try? PLJSON.encode(c.layout).write(toFile: Looks.layoutPath(png.path), atomically: true, encoding: .utf8)) != nil
+  }
+
+  /// A view drawn by itself into a bitmap of its backing scale.
+  @MainActor static func image(of v: NSView) -> CGImage? {
+    guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return nil }
+    v.cacheDisplay(in: v.bounds, to: rep)
+    return rep.cgImage
+  }
+
+  /// A window's background colour as it draws in its own appearance: what shows behind its content. A window that
+  /// isn't opaque (a popover, a panel over a material) gets the window background colour, a flat stand-in for its material.
+  @MainActor static func background(_ w: NSWindow) -> CGColor {
+    var bg = NSColor.windowBackgroundColor.cgColor
+    w.effectiveAppearance.performAsCurrentDrawingAppearance {
+      let c = w.backgroundColor ?? .windowBackgroundColor
+      bg = (w.isOpaque && c.alphaComponent > 0 ? c : .windowBackgroundColor).cgColor
+    }
+    return bg
+  }
+
+  /// The window's visible child windows and sheets, at any depth, in the order they were added.
+  @MainActor public static func childWindows(of w: NSWindow, visibleOnly: Bool = true) -> [NSWindow] {
+    var out: [NSWindow] = [], seen: Set<ObjectIdentifier> = [ObjectIdentifier(w)]
+    func walk(_ x: NSWindow) {
+      for c in (x.childWindows ?? []) + x.sheets where !seen.contains(ObjectIdentifier(c)) {
+        seen.insert(ObjectIdentifier(c))
+        if !visibleOnly || c.isVisible { out.append(c) }
+        walk(c)
+      }
+    }
+    walk(w)
+    return out
+  }
+
+  @MainActor static func visualEffectViews(in v: NSView) -> Int {
+    (v is NSVisualEffectView ? 1 : 0) + v.subviews.reduce(0) { $0 + visualEffectViews(in: $1) }
+  }
+
+  /// A screen rect in the picture's pixels: `cg` for drawing (bottom-left origin), `topLeft` for the layout.
+  struct PixelRect {
+    var x: Int, y: Int, w: Int, h: Int
+    /// The picture's height, to flip y.
+    var height: Int
+    var topLeft: [Int] { [x, y, w, h] }
+    var cg: CGRect { CGRect(x: x, y: height - y - h, width: w, height: h) }
+    var clipped: Bool { x < 0 || y < 0 || x + w > widthLimit || y + h > height }
+    var widthLimit = Int.max
+    /// The part inside a w×h picture, or nil when none is.
+    func inside(_ pw: Int, _ ph: Int) -> [Int]? {
+      let x0 = max(0, x), y0 = max(0, y), x1 = min(pw, x + w), y1 = min(ph, y + h)
+      return x1 > x0 && y1 > y0 ? [x0, y0, x1 - x0, y1 - y0] : nil
+    }
+  }
+
+  static func pixels(_ r: CGRect, in origin: CGRect, scale: Double, height: Int) -> PixelRect {
+    let x = Int(((r.minX - origin.minX) * scale).rounded()), y = Int(((origin.maxY - r.maxY) * scale).rounded())
+    var p = PixelRect(x: x, y: y, w: Int((r.width * scale).rounded()), h: Int((r.height * scale).rounded()), height: height)
+    p.widthLimit = Int((origin.width * scale).rounded())
+    return p
   }
 
   /// RGBA8 pixels of a PNG (or any image ImageIO reads), drawn at its own size.
@@ -97,20 +229,28 @@ public enum Snapshot {
     return Comparison(share: compared > 0 ? Double(differing) / Double(compared) : 0, differing: differing, compared: compared, moving: moving, sizeMismatch: false, diff: d)
   }
 
-  /// `snapdiff A.png B.png`: the guard record the runner reads (`{ "guard": … }`) and the exit code (0 within
-  /// tolerance, 3 over it: the owner reviews).
-  public static func snapdiff(a: String, b: String, tolerance: Double, threshold: Int = 16, diffOut: String?) -> (GuardResult, Int32) {
-    func later(_ p: String) -> String { p.hasSuffix(".png") ? String(p.dropLast(4)) + ".later.png" : p + ".later" }
+  /// `snapdiff A.png B.png`: the guard record the runner reads (`{ "guard": … }`) and the exit code (0 when nothing
+  /// changed outside the `expected` regions, 3 when something did: the owner reviews). Region by region when the
+  /// pictures have layouts (`X.layout.json`), else the whole window as one region; two pictures drawn in different
+  /// looks (appearance, text size) are not compared at all.
+  public static func snapdiff(a: String, b: String, tolerance: Double, threshold: Int = 16, diffOut: String?, expected: [String] = [], maxMovePt: Double = 120) -> (GuardResult, Int32) {
     guard let pa = Pixels(path: a) else { return (GuardResult(name: "snapshot-diff", pass: false, detail: "can't read \(a)", artifacts: [a, b], review: true), 2) }
     guard let pb = Pixels(path: b) else { return (GuardResult(name: "snapshot-diff", pass: false, detail: "can't read \(b)", artifacts: [a, b], review: true), 2) }
-    let c = compare(pa, pb, aLater: Pixels(path: later(a)), bLater: Pixels(path: later(b)), threshold: threshold, diffPicture: diffOut != nil)
+    let la = try? PLJSON.read(SnapshotLayout.self, path: Looks.layoutPath(a)), lb = try? PLJSON.read(SnapshotLayout.self, path: Looks.layoutPath(b))
+    if la?.key != lb?.key {
+      return (GuardResult(name: "snapshot-diff", pass: false, detail: "not comparable: the champion's picture was drawn in \(la?.key ?? "light") and the candidate's in \(lb?.key ?? "light") "
+                          + "(appearance or text size; a bench without v11 draws light only): run both in the same look", artifacts: [a, b], review: true), 3)
+    }
+    let aLater = Pixels(path: Looks.laterPath(a)), bLater = Pixels(path: Looks.laterPath(b))
+    let c = compare(pa, pb, aLater: aLater, bLater: bLater, threshold: threshold, diffPicture: diffOut != nil)
     var artifacts = [a, b]
     if let o = diffOut, let d = c.diff?.png() { try? d.write(to: URL(fileURLWithPath: o)); artifacts.append(o) }
-    let pass = c.share <= tolerance
-    let pct = Stats.round(c.share * 100, 2)
-    let detail = c.sizeMismatch ? "the snapshots differ in size (\(pa.width)×\(pa.height) vs \(pb.width)×\(pb.height))"
-      : "\(pct) % of the pixels differ (\(c.differing) of \(c.compared); \(c.moving) moving by themselves left out), tolerance \(Stats.round(tolerance * 100, 2)) %"
-    return (GuardResult(name: "snapshot-diff", pass: pass, detail: detail, artifacts: artifacts, value: Stats.round(c.share, 5), limit: tolerance, review: pass ? nil : true), pass ? 0 : 3)
+    let base = diffOut.map { $0.hasSuffix(".png") ? String($0.dropLast(4)) : $0 }
+    let looks = regionLooks(a: pa, b: pb, aLater: aLater, bLater: bLater, la: la, lb: lb, threshold: threshold, tolerance: tolerance, maxMovePt: maxMovePt,
+                            pictures: base, whole: (a, b, artifacts.count > 2 ? artifacts[2] : nil))
+    let raw = GuardResult(name: "snapshot-diff", pass: c.share <= tolerance, detail: "", artifacts: artifacts, value: Stats.round(c.share, 5), limit: tolerance, looks: looks)
+    let g = Looks.judge(raw, expected: expected)
+    return (g, g.pass ? 0 : 3)
   }
 }
 #endif

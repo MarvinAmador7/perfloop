@@ -15,6 +15,8 @@ public enum Explain {
     if let b = e.build { o.append("candidate: [\(b.line)]") }
     if let k = e.knobs, !k.isEmpty { o.append("knobs: " + k.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ", ")) }
     if e.behaviourChange { o.append("behaviour change: declared; the owner approves it before promotion") }
+    if let l = e.expectLook, !l.isEmpty { o.append("expect look: \(l.joined(separator: ", ")) (declared by the agent: a change there is for the PR's reviewer, anywhere else for the owner)") }
+    if let k = Looks.key(e.params) { o.append("look: \(k) (both sides drew in it)") }
     if let s = e.screen { o += stage("screen", s) }
     if let f = e.full { o += stage("full", f) }
     if let s = e.secondScreen, s.stage.verdict == "untrusted" { o.append("second fixture \(s.fixture): UNTRUSTED (\(s.stage.untrusted ?? "untrusted reps")): not judged") }
@@ -144,7 +146,8 @@ public enum Explain {
     let last = e.full ?? e.screen
     if let s = last, s.verdict == "untrusted" { return untrustedNext(s, "perfloop exp \(e.full == nil ? "screen" : "full") \(e.id)", e) }
     let c = last?.costs?.first, m = last?.metric ?? "the objective"
-    let looks = (last?.guardReviews ?? []).isEmpty ? "" : "; the snapshots differ from the champion's (the look lines above): if the feature means to change what this scenario shows, put both PNGs and the diff in the PR, else find why"
+    var looks = (last?.guardReviews ?? []).isEmpty ? "" : "; the snapshots differ from the champion's (the look lines above): if the feature means to change what this scenario shows, declare the regions with --expect-look in a new experiment or put the pictures in the PR for the owner, else find why"
+    if !(last?.declaredLooks ?? []).isEmpty { looks += "; the declared look change goes in the PR with its pictures (the look lines above name them): the PR's reviewer accepts it by looking" }
     switch e.state {
     case .noRegression:
       return "it costs nothing measurable: say so in the feature's PR with the stage line above (\"no regression on \(m): \(c?.text ?? "-")\"). Nothing to promote: an expect-same experiment never moves the champion" + looks

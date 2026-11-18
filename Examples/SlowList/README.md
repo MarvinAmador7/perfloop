@@ -6,8 +6,8 @@ deliberately slow path, and its PerfLoop bench. It is the second app PerfLoop ru
 | File | What it shows |
 |---|---|
 | `Sources/SlowListKit/Model.swift` | a knob (`ListKnobs.rank`) where an idea varies, and `Mutations.record` on the state that drives bodies |
-| `Sources/SlowListKit/Views.swift` | `Probe.body("Row", id:)` in the bodies worth counting; the slow path; the fix (`SLOWLIST_ROW_VALUES`); a cheat (`SLOWLIST_CHEAT`) |
-| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, four scenarios (one replays a trackpad gesture, one presses real keys and clicks through the menu bar), ink regions each step must leave drawn (the rows, the status line), a knob, a guard of its own, `bench.main()` |
+| `Sources/SlowListKit/Views.swift` | `Probe.body("Row", id:)` in the bodies worth counting; the slow path; the fix (`SLOWLIST_ROW_VALUES`); a cheat (`SLOWLIST_CHEAT`); a look change (`SLOWLIST_LOOK`: the status line names the item); the details panel (a child window) |
+| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, five scenarios (one replays a trackpad gesture, one presses real keys and clicks through the menu bar, one opens a child panel), ink regions each step must leave drawn (the rows, the status line), which are also the regions snapshots are compared by, a knob, a guard of its own, `bench.main()` |
 | `Package.swift` | depends on PerfLoop like an outside app; the `PerfLoopStamp` plugin on the bench target |
 | `walkthrough.sh` | the loop end to end on this app |
 
@@ -36,6 +36,7 @@ $B run select --reps 1                       # opens a window for ~3 s; prints w
 PERFLOOP_KNOBS=rows.rank=index $B run select --reps 1
 $B run scroll --reps 1                       # a trackpad flick replayed into the list: how closely the content followed
 $B run find --reps 1 --pictures /tmp/find    # ⌘F, typing, ⌘K: the menu item each fired, the focus, the window before/after
+$B run details --set appearance=dark --reps 1   # the details panel over the list, in dark mode
 $B run scroll --set gesture=synthetic:drag-down --set inject-block-ms=60 --reps 1   # the meter's self-check: stalls
 $B record-gesture scroll --name my-swipe     # your own swipe over the list, for --set gesture=FILE
 $B profile select                            # the same scenario under xctrace: call trees per step
@@ -98,3 +99,32 @@ the middle of the drag) reported 16 stalls, a 28 pt worst error and an 86 ms lon
 step on the slow path, 8.8 with `rows.rank=index`; `diff` of the two names `ListModel.rankBySorting`'s sort (insertion
 sort −61.5 ms, `CFStringCompareWithOptionsAndLocale` −40.6 ms per step) as what shrank. The trace was deleted after its
 tables were exported.
+
+## Looks: regions, a child window, dark mode (2026-11-18, the owner's spare Mac mini over ssh, macOS 26.6.2)
+
+The regions the ink guard checks after each step (`rows`, the scroll view; `status`, the AppKit status line by its
+`identifier`) are also the regions snapshots are compared by, with `filter` (a rect: SwiftUI's views aren't NSViews)
+added for every scenario. The `details` scenario opens a panel attached to the window (`DetailsPanel`, a child window)
+and selects rows; the panel is drawn into the snapshot where it is on screen and is the region `details`. With the
+champion's build and one with `-DSLOWLIST_LOOK` (the status line reads "Item 12 selected · 1000 items" instead of
+"Selected item 12"):
+
+```sh
+perfloop baseline details --bench bench-champ --reps 2 --runner ssh://…            # light reference picture
+perfloop baseline details --bench bench-champ --reps 2 --set appearance=dark …     # dark: baselines/details~dark/
+perfloop run bench-look --scenario details --reps 1 …                               # REVIEW: status resized
+perfloop run bench-look --scenario details --reps 1 --expect-look status …          # changed where declared
+perfloop run bench-champ --scenario details --set appearance=dark --reps 1 …       # same in every region
+```
+
+| Run | Snapshot against its look's baseline |
+|---|---|
+| look build, nothing declared | `REVIEW · status resized (92×14 → 158×14 pt); same: filter, rows, details, rest`, the status line's before and after crops on a `look at:` line; next: the owner's call |
+| look build, `--expect-look status` | `changed where declared · status resized … [declared]`; exit 0; next: put the region's pictures in the PR for the reviewer |
+| look build, dark, `--expect-look status` | the same against the dark baseline (`baselines/details~dark/reference.png`) |
+| champion build, dark | `same · the same in every region (filter, rows, status, details, rest)` |
+
+Every rep was trusted, and the ink guard passed in each (`ink ✓`). The layout beside each picture listed the panel
+(`childWindows: details, DetailsPanel`) and `notCaptured: the title bars (the window's and its child windows')`. The
+status line is a label sized to its text, so its region grew with it: `resized`, not `differs`. A whole-window
+`snapdiff` with the alignment search took under 0.1 s on 900×700 pictures.

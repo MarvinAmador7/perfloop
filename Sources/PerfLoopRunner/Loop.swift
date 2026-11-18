@@ -177,6 +177,9 @@ public final class Loop {
     public var kind: String = "code"
     public var knobs: [String: String] = [:]
     public var behaviourChange = false
+    /// Regions the change means to alter the look of (`--expect-look`): a snapshot that differs only there is the PR
+    /// reviewer's to accept; in the optimisation loop it is a behaviour change too.
+    public var expectLook: [String] = []
     public var via: String?
     public var params: [String: String] = [:]
     public var patch: String?
@@ -203,6 +206,7 @@ public final class Loop {
     // The second fixture guards a promotion against over-fitting one fixture: an expect-same check is never promoted.
     let second = o.expect == "same" ? nil : o.secondFixture ?? m?.scenario(sc)?.secondFixture
     for f in [fx, second].compactMap({ $0 }) { try checkFixtureFile(f) }
+    if let m, let why = m.unsupportedLook(o.params, whose: "the champion's adapter") { throw PLError.usage(why) }
     guard [nil, "faster", "same"].contains(o.expect) else { throw PLError.usage("--expect faster|same (same: a feature or guard check that the candidate costs nothing), not '\(o.expect!)'") }
     let kind = o.knobs.isEmpty ? o.kind : "knob"
     if kind == "knob", o.knobs.isEmpty { throw PLError.usage("a knob experiment needs --knobs k=v[,k=v]") }
@@ -234,11 +238,14 @@ public final class Loop {
       parent = ParentRef(experiment: x.id, build: xb)
     }
     if entry.build.hash == parent.build.hash && o.knobs.isEmpty { throw PLError.refused("the candidate is the champion's own build (\(Build.short(parent.build.hash ?? ""))): nothing to compare") }
+    if let cm = entry.manifest, let why = cm.unsupportedLook(o.params, whose: "the candidate's adapter") { throw PLError.usage(why) }
 
     var e = Experiment(id: id, hypothesis: o.hypothesis, kind: kind, scenario: sc, fixture: fx, parent: parent, build: entry.build.embedded)
     e.knobs = o.knobs.isEmpty ? nil : o.knobs
     e.expect = o.expect == "same" ? "same" : nil
-    e.behaviourChange = o.behaviourChange
+    e.behaviourChange = o.behaviourChange || (!o.expectLook.isEmpty && o.expect != "same")
+    e.expectLook = o.expectLook.isEmpty ? nil : o.expectLook
+    if !o.expectLook.isEmpty && !o.behaviourChange && o.expect != "same" { notes.append("--expect-look declares a look change: a behaviour change (promotion needs the owner)") }
     e.secondFixture = second
     e.params = o.params.isEmpty ? nil : o.params
     e.via = kind == "knob" ? "run" : (o.via ?? env["PERFLOOP_VIA"] ?? m?.defaultVia ?? "ab")
@@ -391,7 +398,7 @@ public final class Loop {
       a?.exit = status["a"].map(Int.init); b?.exit = status["b"].map(Int.init)
       Self.stamp(&a, machines["a"]); Self.stamp(&b, machines["b"])
       var p = Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure ?? (a == nil || b == nil ? "no result" : nil) ?? Self.fixtureMismatch(p: a, b, asked: fixture))
-      judgeSnapshots(&p, g, dir: pdir, sides: s)
+      judgeSnapshots(&p, g, dir: pdir, sides: s, expected: sc == e.scenario ? e.expectLook ?? [] : [])
       return p
     }
     let firstExe = first ? s.champion.executable : s.candidate.executable, secondExe = first ? s.candidate.executable : s.champion.executable
@@ -412,7 +419,7 @@ public final class Loop {
     }
     if a?.objective == nil || b?.objective == nil, a?.noFrames != true, b?.noFrames != true, failure == nil { failure = "the ab output has no \(metric) (an adapter older than the objective: use --via run)" }
     var p = Pair(index: i, order: order, result: store.rel(raw), a: a ?? Side(objective: nil), b: b ?? Side(objective: nil), failure: failure ?? Self.fixtureMismatch(p: a, b, asked: fixture))
-    judgeSnapshots(&p, g, dir: pdir, sides: s)
+    judgeSnapshots(&p, g, dir: pdir, sides: s, expected: sc == e.scenario ? e.expectLook ?? [] : [])
     return p
   }
 

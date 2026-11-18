@@ -152,8 +152,57 @@ public final class ListContainerView: NSView {
 
   func observe() {
     withObservationTracking {
+      #if SLOWLIST_LOOK
+      // A look change (for the walkthrough): the status line names the item and counts the list. Only it changes.
+      footer.stringValue = model.selection.map { "Item \($0) selected · \(model.items.count) items" } ?? "Nothing selected"
+      #else
       footer.stringValue = model.selection.map { "Selected item \($0)" } ?? "Nothing selected"
+      #endif
     } onChange: { [weak self] in DispatchQueue.main.async { self?.observe() } }
+  }
+}
+
+/// The selected item's details in a panel attached to the window (a child window, like an inspector or a palette): the
+/// app's `⌘I`. It follows the selection and never takes the keyboard.
+public final class DetailsPanel: NSPanel {
+  public let model: ListModel
+  public init(model: ListModel) {
+    self.model = model
+    super.init(contentRect: NSRect(x: 0, y: 0, width: 260, height: 120), styleMask: [.titled, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: false)
+    identifier = NSUserInterfaceItemIdentifier("details")
+    title = "Details"
+    isReleasedWhenClosed = false
+    becomesKeyOnlyIfNeeded = true
+    let h = NSHostingView(rootView: ItemDetails(model: model))
+    h.sizingOptions = []
+    contentView = h
+  }
+
+  /// Shows the panel over the top-right corner of `window`'s content, as its child window.
+  public func show(over window: NSWindow) {
+    let c = window.contentRect(forFrameRect: window.frame)
+    setFrameTopLeftPoint(NSPoint(x: c.maxX - frame.width - 16, y: c.maxY - 48))
+    window.addChildWindow(self, ordered: .above)
+    orderFront(nil)
+  }
+
+  public func hide() { parent?.removeChildWindow(self); orderOut(nil) }
+}
+
+struct ItemDetails: View {
+  let model: ListModel
+  var body: some View {
+    let item = model.selection.flatMap { id in model.items.first { $0.id == id } }
+    VStack(alignment: .leading, spacing: 6) {
+      Text(item?.title ?? "Nothing selected").font(.headline)
+      if let item {
+        Text(item.detail).foregroundStyle(.secondary)
+        Text("Score \(item.score)").monospacedDigit()
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(12)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 }
 #endif

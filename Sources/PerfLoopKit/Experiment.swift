@@ -26,6 +26,10 @@ public struct Experiment: Codable, Sendable, Equatable {
   /// gets no "drop it", stays out of the stopping rules, and is never promoted.
   public var expect: String?
   public var behaviourChange: Bool
+  /// Regions whose look the change means to alter (`exp new --expect-look`): a snapshot that differs only there passes,
+  /// marked `declared`, for the PR's reviewer to accept by looking (decision 5); a difference elsewhere still asks the
+  /// owner. In the optimisation loop it is a behaviour change too (promotion needs the owner).
+  public var expectLook: [String]?
   /// The champion at creation.
   public var parent: ParentRef?
   public var patch: String?
@@ -189,6 +193,8 @@ public struct Stage: Codable, Sendable, Equatable {
   /// Guards over tolerance that ask the owner (a snapshot unlike the champion's): the stage can't be won, it is
   /// `needsReview`.
   public var guardReviews: [String]?
+  /// Snapshot regions that changed where the agent declared it (`--expect-look`): passed, listed for the PR's reviewer.
+  public var declaredLooks: [String]?
   /// promising | rejected (screen); won | lost | unknown | noDecision (full); needsReview (either: the objective
   /// would pass but a guard asks the owner); untrusted (either: pairs it needs had untrusted reps, so it decided
   /// nothing); error when no pair produced numbers.

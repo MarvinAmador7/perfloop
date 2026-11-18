@@ -229,6 +229,9 @@ public struct HostResult: Codable, Sendable, Equatable {
   /// The scenario's parameters as run, and `knobs`: the full knob vector, defaults included.
   public var params: [String: JSONValue]
   public var profiled = false
+  /// The look the reps drew in: light | dark | system, and the bench's text size when one was asked for (v11).
+  public var appearance: String?
+  public var textSize: String?
   public var runner: String?
   public var startedAt: String
   public var reps: [RepRecord]

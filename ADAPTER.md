@@ -47,7 +47,9 @@ candidate's, so an experiment can't change how it is judged. Without `describe`,
   "privatePaths": [".secrets/"],                                       // optional; never recorded in a patch
   "fixtureSchemes": ["file"],                                         // optional; the scheme: forms --fixture takes
   "profileEnv": ["MYAPP_DATA_DIR"],                                   // optional; what `profile` needs beyond the allowlist (§6)
-  "harness": "PerfLoopHost" }                                         // optional; the library answering the contract (§3b)
+  "harness": "PerfLoopHost",                                          // optional; the library answering the contract (§3b)
+  "appearances": ["light", "dark", "system"],                         // optional; what --set appearance= takes (§5a)
+  "textSizes": ["large", "xLarge"] }                                  // optional; what --set textSize= takes (§5a)
 ```
 
 `kind`: `smooth` and `isolation` climb on main-thread CPU per step, `latency` on the time to the frame that shows the
@@ -206,11 +208,43 @@ per side)`. Report `runs[]` (or the reps) as above, or an expect-same check can'
 ## 5. `snapdiff A.png B.png --json --diff-out D.png [--guard-param snapshot-diff.tolerance=X]`
 
 Needed when a scenario guards `snapshot-diff`. After each rep the bench writes the window, at rest, to
-`$PERFLOOP_ARTIFACTS/<scenario>-rep<N>.settled.png` and half a second later to `….settled.later.png`, and reports
-`{ "name": "snapshot-diff", "pass": true, "artifacts": [png, later] }`. The runner then asks the **champion's**
-`snapdiff` to compare the champion's picture with the candidate's (pixels that moved between a picture and its `.later`
-are left out). Print `{ "guard": { "name": "snapshot-diff", "pass", "detail", "value", "limit", "review" } }`; exit 0
-within tolerance, 3 over it (`review: true`: the owner decides; never a win).
+`$PERFLOOP_ARTIFACTS/<scenario>-rep<N>[-<look>].settled.png` and half a second later to `….settled.later.png`, and
+reports `{ "name": "snapshot-diff", "pass": true, "artifacts": [png, later, layout] }`. The runner then asks the
+**champion's** `snapdiff` to compare the champion's picture with the candidate's (pixels that moved between a picture
+and its `.later` are left out). Print `{ "guard": { "name": "snapshot-diff", "pass", "detail", "value", "limit",
+"review", "looks" } }`; exit 0 when nothing changed, 3 when something did (`review: true`: the owner decides; never a
+win).
+
+**Regions (v5, optional but what makes a look reviewable).** Beside each picture, write its layout `X.layout.json`
+(`perfloop.snapshot/1`, SCHEMAS.md §3): the picture's size and scale, the look it was drawn in, and where the scenario's
+named regions are (`[x, y, w, h]` pixels from the top-left). `snapdiff` then reports `looks[]`, one per region and one
+`rest` for everything outside them (`window` when none is named): `same` within tolerance where it was, `moved` with
+`movedPt` when the same pixels sit elsewhere (an alignment search, up to `snapshot-diff.maxMovePt`, 120 pt), `differs`,
+`missing` (one picture only) or `resized`; a changed region's crops go to `D-<region>.before.png`, `.after.png` and
+`.diff.png` (red where it differs). `pass` is false when any region changed. The runner then marks the regions the agent
+declared with `--expect-look` (`expected: true`): a change only there passes, and its pictures stay for the PR's
+reviewer (VERIFICATION.md decision 5); any other change stays `review: true` for the owner. Two pictures whose layouts
+name different looks are not compared (`review: true`, "not comparable"). Without layouts or `looks`, the record is
+judged as before: the whole window, the owner reviews any change.
+
+## 5a. Looks: child windows, appearances, text sizes (PerfLoopHost; what a protocol-1 adapter rebuilds)
+
+PerfLoopHost does all of this; an adapter of its own (capcomd's deskbench) gets it only by rebuilding it:
+
+| What | PerfLoopHost | A protocol-1 adapter must |
+|---|---|---|
+| Regions | one region model for the ink guard and the looks (§3b's `InkRegion`: `.view`, `.identifier`, `.rect` in points from the content's top-left, `.find`): every region a step names for the ink guard is a snapshot region too; add others with `bench.regions([…])` or `run.regions([…])`; a visible child window is a region by its `identifier` or title | write `X.layout.json` beside each capture with the regions' rects, and answer `snapdiff` with `looks[]` (§5) |
+| Child windows (v7) | each visible child window and sheet of the bench window, at any depth, is drawn into the snapshot where it is on screen (its content over its background colour) and listed in `childWindows`; keep a panel up past the scenario's end with `run.atClose { panel.close() }` | draw `window.childWindows` and `sheets` into its `cacheDisplay` picture at their screen offsets |
+| Appearance (v11) | `--set appearance=light\|dark\|system` (light by default) sets the bench window's and `NSApp.appearance`, so panels, popovers and sheets follow; the result says `appearance`, the snapshot's file and layout carry it | set its windows' appearance from the parameter, list `appearances` in the manifest, write it into the layout |
+| Text size (v11) | `--set textSize=NAME`, refused unless the bench lists `bench.textSizes`; the scenario reads `run.textSize` and applies it through the app's own setting (macOS has no system text size an app follows) | the same, listing `textSizes` |
+
+The runner refuses `--set appearance=` or `textSize=` for an adapter whose manifest doesn't list the value, rather than
+measure the default look under that name. Each look has its own baseline (`baselines/<scenario>~dark/`) and its runs
+are compared with it; an experiment's two sides both draw in its look.
+
+What the default capture can't show (it needs no screen-recording permission): the title bars, and materials (vibrancy,
+blur), which draw flat; a child window's shape (a popover's arrow) and anything of it outside the bench window. The
+layout's `notCaptured` says which applied. ScreenCaptureKit capture (v8, opt-in) is for those.
 
 ## 6. `profile` and `diff` (optional)
 
@@ -311,11 +345,12 @@ adapter that can't can be wrapped instead: `perfloop lock -- BENCH ab …`.
 
 | Document | Version | Written by | Stability |
 |---|---|---|---|
-| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `fixtureSchemes`, `profileEnv`, `harness` added 2026-11 |
+| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `fixtureSchemes`, `profileEnv`, `harness`, `appearances`, `textSizes` added 2026-11 |
 | `perfloop.build` | 1 | adapter (`tool.build`), store (`build.json`) | stable |
-| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11), `guards[].inkRegions` and `worstStretches[].benchSamples`/`topBench` (2026-11), `steps[].input` and `steps[].focus` (§6c, 2026-11) |
-| `perfloop.measure`, `perfloop.baseline` | 1 | runner (`runs/<id>/run.json`, `baselines/<scenario>/baseline.json`) | new (2026-11); a pair's `Side` gained `fixture` (what the rep ran); `input` (one rep's input lines and pictures, §6c) |
-| `perfloop.snapdiff` | 1 (reads `deskbench.snapdiff/1`) | adapter `snapdiff` | stable |
+| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11), `guards[].inkRegions` and `worstStretches[].benchSamples`/`topBench` (2026-11), `steps[].input` and `steps[].focus` (§6c, 2026-11), `appearance` and `textSize` (2026-11, v11) |
+| `perfloop.measure`, `perfloop.baseline` | 1 | runner (`runs/<id>/run.json`, `baselines/<scenario>[~<look>]/baseline.json`) | new (2026-11); a pair's `Side` gained `fixture` (what the rep ran); `input` (one rep's input lines and pictures, §6c); a baseline gained `look` (one per look) |
+| `perfloop.snapdiff` | 1 (reads `deskbench.snapdiff/1`) | adapter `snapdiff` | fields only added; `guard.looks[]` (2026-11, v5) |
+| `perfloop.snapshot` | 1 | adapter (`X.layout.json` beside a snapshot) | new (2026-11, v5/v7/v11) |
 | `perfloop.experiment`, `perfloop.ledger`, `perfloop.champion` | 1 | runner (store) | stable since Phase 2 |
 | `perfloop.sweep`, `perfloop.queue`, `perfloop.gesture`, `perfloop.gestures` | 1 | runner / probe | stable since Phase 3–4; `perfloop.sweep` gained `walls` (2026-11) |
 | `perfloop.doctor` | 1 | runner `doctor --json` | new |
