@@ -52,7 +52,7 @@ import PerfLoopKit
 }
 
 /// A key to press: the virtual key and the modifiers (Carbon's kVK_* codes, the same on every layout).
-public struct KeyPress: Sendable, Equatable {
+public struct KeyStroke: Sendable, Equatable {
   public var keyCode: Int
   public var command = false, shift = false, option = false, control = false
   /// A key that isn't a character (arrows, F-keys, ⌦…): AppKit's events carry the function (and arrows the keypad) flag.
@@ -95,27 +95,27 @@ public struct KeyPress: Sendable, Equatable {
   }
 
   /// The key and modifiers for a shortcut, or why there is none on this layout.
-  public func press(_ s: Shortcut) -> Result<KeyPress, ShortcutError> {
+  public func press(_ s: Shortcut) -> Result<KeyStroke, ShortcutError> {
     if let code = Shortcut.named[s.key] {
       let arrow = (123...126).contains(code), fn = arrow || [117, 115, 119, 116, 121, 122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111].contains(code)
-      return .success(KeyPress(keyCode: code, command: s.command, shift: s.shift, option: s.option, control: s.control, function: fn, arrow: arrow))
+      return .success(KeyStroke(keyCode: code, command: s.command, shift: s.shift, option: s.option, control: s.control, function: fn, arrow: arrow))
     }
     guard let k = keys[s.key] ?? keys[s.key.lowercased()] else {
       return .failure(ShortcutError("no key types '\(s.key)' on the keyboard layout \(layout)"))
     }
     // ⌥ is part of the key here only when the character needs it (⌥L for "@" on a German layout).
-    return .success(KeyPress(keyCode: k.code, command: s.command, shift: s.shift || k.shift, option: s.option || k.option, control: s.control))
+    return .success(KeyStroke(keyCode: k.code, command: s.command, shift: s.shift || k.shift, option: s.option || k.option, control: s.control))
   }
 
   /// The key for one typed character, nil when the layout has none (it is then typed as text).
-  public func stroke(_ c: Character) -> KeyPress? {
+  public func stroke(_ c: Character) -> KeyStroke? {
     switch c {
-    case "\n", "\r": return KeyPress(keyCode: 36)
-    case "\t": return KeyPress(keyCode: 48)
+    case "\n", "\r": return KeyStroke(keyCode: 36)
+    case "\t": return KeyStroke(keyCode: 48)
     default: break
     }
     guard let k = keys[String(c)] else { return nil }
-    return KeyPress(keyCode: k.code, shift: k.shift, option: k.option)
+    return KeyStroke(keyCode: k.code, shift: k.shift, option: k.option)
   }
 }
 
@@ -134,7 +134,7 @@ enum InputEvents {
   /// the system from the virtual keys (characters from the current layout), for `window`. The modifiers' own events
   /// matter: AppKit keeps the modifier state they set, and without the release a later ⌘D still reads as ⇧⌘D.
   /// `text`: characters to carry instead (one the layout has no key for, as an input method would insert it).
-  static func key(_ p: KeyPress, window: NSWindow?, text: String? = nil) -> [NSEvent] {
+  static func key(_ p: KeyStroke, window: NSWindow?, text: String? = nil) -> [NSEvent] {
     let src = CGEventSource(stateID: .privateState)
     func event(_ code: CGKeyCode, down: Bool, flags: CGEventFlags, text: String? = nil) -> NSEvent? {
       guard let cg = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: down) else { return nil }
@@ -422,7 +422,7 @@ extension Run {
   public func press(_ shortcut: String, expect: String? = nil, expectFocus: FocusTarget? = nil, name: String? = nil, timeoutMs: Double = 5000, quietMs: Double = 100,
                     until: (() -> Bool)? = nil) async -> StepRecord {
     let label = name ?? "press \(shortcut)"
-    let resolved: Result<(Shortcut, KeyPress), ShortcutError> = Shortcut.parse(shortcut).flatMap { s in keyMap.press(s).map { (s, $0) } }
+    let resolved: Result<(Shortcut, KeyStroke), ShortcutError> = Shortcut.parse(shortcut).flatMap { s in keyMap.press(s).map { (s, $0) } }
     guard case .success(let (sc, kp)) = resolved else {
       if case .failure(let e) = resolved { check(label, false, "\(e)") }
       return await step(label) {}
@@ -448,7 +448,7 @@ extension Run {
   public func type(_ text: String, expectFocus: FocusTarget? = nil, name: String? = nil, timeoutMs: Double = 5000, quietMs: Double = 100,
                    until: (() -> Bool)? = nil) async -> StepRecord {
     let label = name ?? "type '\(text)'"
-    let presses: [(KeyPress, String?)] = text.map { c in keyMap.stroke(c).map { ($0, nil) } ?? (KeyPress(keyCode: 0), String(c)) }
+    let presses: [(KeyStroke, String?)] = text.map { c in keyMap.stroke(c).map { ($0, nil) } ?? (KeyStroke(keyCode: 0), String(c)) }
     return await keys(kind: "type", label: label, keys: nil, text: text, presses: presses, expect: nil, expectFocus: expectFocus, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
   }
 
@@ -482,6 +482,7 @@ extension Run {
       check(label, false, "no view or accessibility element #\(identifier) in the windows")
       return await step(label) {}
     }
+    await endTurn()   // the walk never lands in the step's stretches
     return await click(at: CGPoint(x: rect.midX, y: rect.midY), window: w, asked: ResponderRef(class: "element", identifier: identifier), askedView: nil, count: count,
                        modifiers: modifiers, expectFocus: expectFocus, label: label, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
   }
@@ -498,9 +499,9 @@ extension Run {
 
   /// Checks the focus now: the check `name` (default `focus <target>`) fails, naming what has the keyboard instead.
   @discardableResult
-  public func expectFocus(_ target: FocusTarget, _ name: String? = nil) -> Bool {
+  public func expectFocus(_ target: FocusTarget, _ name: String? = nil) async -> Bool {
     let f = focus()
-    let ok = focusMatches(target, f, before: f)
+    let ok = await focusMatches(target, f, before: f)
     check(name ?? "focus \(target)", ok, ok ? "focus: \(f.text)" : "expected \(target), focus: \(f.text)")
     return ok
   }
@@ -510,10 +511,14 @@ extension Run {
 
   /// Whether the focus is `target`. An identifier no view carries (SwiftUI puts `.accessibilityIdentifier` on its
   /// accessibility element, not on the AppKit view it hosts) matches when that element's frame holds the focused view.
-  func focusMatches(_ target: FocusTarget, _ after: FocusRecord, before: FocusRecord) -> Bool {
+  /// The accessibility walk runs in run-loop turns of its own, so it never lands in a step's stretches.
+  func focusMatches(_ target: FocusTarget, _ after: FocusRecord, before: FocusRecord) async -> Bool {
     let v = Focus.view(NSApp.keyWindow)
     if target.matches(after, before: before, view: v) { return true }
-    guard case .identifier(let id) = target.kind, let view = v, let w = view.window, let (ew, frame) = element(identifier: id), ew === w else { return false }
+    guard case .identifier(let id) = target.kind, let view = v, let w = view.window else { return false }
+    await endTurn()
+    guard let (ew, frame) = element(identifier: id), ew === w else { await endTurn(); return false }
+    await endTurn()
     let r = view.convert(view.bounds, to: nil)
     return frame.insetBy(dx: -2, dy: -2).contains(CGPoint(x: r.midX, y: r.midY))
   }
@@ -531,20 +536,35 @@ extension Run {
   }
 
   /// The window and the frame (window coordinates) of the accessibility element with this identifier: how a SwiftUI
-  /// view's `.accessibilityIdentifier` is found, as it has no NSView of its own.
+  /// view's `.accessibilityIdentifier` is found, as it has no NSView of its own. SwiftUI builds its accessibility tree
+  /// only for an assistive client, so the lookup turns `AXEnhancedUserInterface` on while it walks (as VoiceOver
+  /// would) and back off after; SwiftUI may keep the tree up to date for the rest of the rep, which costs main-thread
+  /// time: in a scenario measured for speed, click a view or a point instead.
   public func element(identifier: String) -> (NSWindow, CGRect)? {
+    if let found = walkElements(identifier) { return found }
+    let eui = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+    let was = (NSApp.accessibilityAttributeValue(eui) as? Bool) ?? false
+    guard !was else { return nil }
+    NSApp.accessibilitySetValue(true, forAttribute: eui)
+    defer { NSApp.accessibilitySetValue(false, forAttribute: eui) }
+    return walkElements(identifier)
+  }
+
+  /// Views and their accessibility children, breadth first. SwiftUI's elements answer the accessibility methods
+  /// without declaring the protocol to Swift, so they are asked through the Objective-C runtime.
+  func walkElements(_ identifier: String) -> (NSWindow, CGRect)? {
+    func ask(_ o: NSObject, _ k: String) -> Any? { o.responds(to: Selector((k))) ? o.value(forKey: k) : nil }
     for w in benchWindows() {
       guard let root = w.contentView else { continue }
-      var queue: [Any] = [root], seen = 0
-      while !queue.isEmpty, seen < 5000 {
-        let x = queue.removeFirst(); seen += 1
-        guard let e = x as? NSAccessibilityElementProtocol & NSObjectProtocol else { continue }
-        let id = (x as? NSAccessibilityProtocol)?.accessibilityIdentifier() ?? ""
-        if id == identifier, let f = (x as? NSAccessibilityProtocol)?.accessibilityFrame(), !f.isEmpty {
+      var queue: [NSObject] = [root], seen = Set<ObjectIdentifier>()
+      while !queue.isEmpty, seen.count < 5000 {
+        let o = queue.removeFirst()
+        guard seen.insert(ObjectIdentifier(o)).inserted else { continue }
+        if ask(o, "accessibilityIdentifier") as? String == identifier, let f = (ask(o, "accessibilityFrame") as? NSValue)?.rectValue, !f.isEmpty {
           return (w, w.convertFromScreen(f))
         }
-        _ = e
-        if let kids = (x as? NSAccessibilityProtocol)?.accessibilityChildren() { queue += kids }
+        if let v = o as? NSView { queue += v.subviews }
+        queue += (ask(o, "accessibilityChildren") as? [Any] ?? []).compactMap { $0 as? NSObject }
       }
     }
     return nil
@@ -565,7 +585,7 @@ extension Run {
     return (owned + [b]).sorted { a, _ in a.isKeyWindow }
   }
 
-  func keys(kind: String, label: String, keys: String?, text: String? = nil, presses: [(KeyPress, String?)], expect: String?, expectFocus: FocusTarget?,
+  func keys(kind: String, label: String, keys: String?, text: String? = nil, presses: [(KeyStroke, String?)], expect: String?, expectFocus: FocusTarget?,
             timeoutMs: Double, quietMs: Double, until: (() -> Bool)?) async -> StepRecord {
     // The window the keys are for: the key window when it is the bench window or one it owns (a palette), else the
     // bench window.

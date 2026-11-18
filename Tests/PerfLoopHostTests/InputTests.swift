@@ -4,6 +4,7 @@ import AppKit
 @testable import PerfLoopHost
 import PerfLoopKit
 import PerfLoopProbe
+import SwiftUI
 
 /// Real input in-process (run.press / type / key / click) and the focus record. The grammar, the layout map and the
 /// lines are plain values; the delivery tests use windows ordered in far off any screen (-10000, -10000) in a process
@@ -50,16 +51,16 @@ import PerfLoopProbe
   func testShortcutsTakeTheKeyTheLayoutTypesTheCharacterWith() throws {
     let m = KeyMap(FakeLayout())
     XCTAssertEqual(m.layout, "fake.de")
-    func press(_ s: String) throws -> KeyPress { try m.press(try Shortcut.parse(s).get()).get() }
-    XCTAssertEqual(try press("⇧⌘Z"), KeyPress(keyCode: 16, command: true, shift: true))
+    func press(_ s: String) throws -> KeyStroke { try m.press(try Shortcut.parse(s).get()).get() }
+    XCTAssertEqual(try press("⇧⌘Z"), KeyStroke(keyCode: 16, command: true, shift: true))
     XCTAssertEqual(try press("⌘z").keyCode, 16, "z is where this layout has it, not where a US one does (6)")
-    XCTAssertEqual(try press("⌘?"), KeyPress(keyCode: 27, command: true, shift: true), "? needs ⇧ here: the press gets it")
-    XCTAssertEqual(try press("⌘@"), KeyPress(keyCode: 37, command: true, option: true), "@ is ⌥L")
-    XCTAssertEqual(try press("⌘↓"), KeyPress(keyCode: 125, command: true, function: true, arrow: true))
+    XCTAssertEqual(try press("⌘?"), KeyStroke(keyCode: 27, command: true, shift: true), "? needs ⇧ here: the press gets it")
+    XCTAssertEqual(try press("⌘@"), KeyStroke(keyCode: 37, command: true, option: true), "@ is ⌥L")
+    XCTAssertEqual(try press("⌘↓"), KeyStroke(keyCode: 125, command: true, function: true, arrow: true))
     XCTAssertEqual(try press("⎋").keyCode, 53)
     XCTAssertThrowsError(try press("⌘q")) { XCTAssertEqual("\($0)", "no key types 'q' on the keyboard layout fake.de") }
-    XCTAssertEqual(m.stroke("Z"), KeyPress(keyCode: 16, shift: true))
-    XCTAssertEqual(m.stroke("\n"), KeyPress(keyCode: 36))
+    XCTAssertEqual(m.stroke("Z"), KeyStroke(keyCode: 16, shift: true))
+    XCTAssertEqual(m.stroke("\n"), KeyStroke(keyCode: 36))
     XCTAssertNil(m.stroke("é"), "no key for it: typed as text")
   }
 
@@ -279,6 +280,32 @@ import PerfLoopProbe
     XCTAssertTrue(w.makeFirstResponder(nil))
     XCTAssertEqual(Focus.record(bench: w, key: w).text, "nothing (the bench window is key)")
     XCTAssertEqual(Focus.record(bench: w, key: nil).text, "no key window")
+  }
+
+  /// A SwiftUI view's `.accessibilityIdentifier` is on its accessibility element, not on an NSView: it is found there,
+  /// through a plain container view, and clicked.
+  func testASwiftUIElementIsFoundAndClickedByItsIdentifier() async throws {
+    final class Tapped { var n = 0 }
+    let tapped = Tapped()
+    let w = window(key: false)
+    defer { w.close() }
+    let host = NSHostingView(rootView: VStack(spacing: 0) {
+      Color.blue.frame(width: 400, height: 150)
+      Text("Row seven").frame(width: 400, height: 150).contentShape(Rectangle()).onTapGesture { tapped.n += 1 }
+        .accessibilityElement(children: .combine).accessibilityIdentifier("row-7")
+    })
+    host.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
+    w.contentView!.addSubview(host)
+    host.layoutSubtreeIfNeeded()
+    let r = run(w)
+    defer { r.close() }
+    let (ew, frame) = try XCTUnwrap(r.element(identifier: "row-7"))
+    XCTAssertTrue(ew === w)
+    XCTAssertEqual(frame.midY, 75, accuracy: 2, "the lower half, in window coordinates")
+    let s = await r.click(identifier: "row-7", timeoutMs: 200)
+    XCTAssertEqual(s.input?.asked?.identifier, "row-7")
+    XCTAssertTrue(s.input?.hit?.class.contains("Hosting") == true || s.input?.hit != nil, s.input?.line ?? "")
+    XCTAssertTrue(s.input?.line.hasPrefix("click #row-7 → hit ") == true, s.input?.line ?? "")
   }
 
   func testFocusTargetsMatchTheRecord() {
