@@ -44,8 +44,9 @@ extension Snapshot {
             if let m = mb, !m[rb + x] { continue }
             compared += 1
             let i = (ra + x) * 4, j = (rb + x) * 4
-            if abs(Int(pa[i]) - Int(pb[j])) > threshold || abs(Int(pa[i + 1]) - Int(pb[j + 1])) > threshold
-              || abs(Int(pa[i + 2]) - Int(pb[j + 2])) > threshold || abs(Int(pa[i + 3]) - Int(pb[j + 3])) > threshold { differing += 1 }
+            var d = false
+            for c in 0..<4 where abs(Int(pa[i + c]) - Int(pb[j + c])) > threshold { d = true; break }
+            if d { differing += 1 }
           }
         }
       }
@@ -61,7 +62,11 @@ extension Snapshot {
     for y in 0..<h {
       for x in 0..<w {
         let k = [(2 * y) * p.width + 2 * x, (2 * y) * p.width + 2 * x + 1, (2 * y + 1) * p.width + 2 * x, (2 * y + 1) * p.width + 2 * x + 1]
-        for c in 0..<4 { out[(y * w + x) * 4 + c] = UInt8(k.reduce(0) { $0 + Int(p.bytes[$1 * 4 + c]) } / 4) }
+        for c in 0..<4 {
+          var sum = 0
+          for q in k { sum += Int(p.bytes[q * 4 + c]) }
+          out[(y * w + x) * 4 + c] = UInt8(sum / 4)
+        }
         if let m { mo![y * w + x] = k.allSatisfy { m[$0] } }
       }
     }
@@ -135,7 +140,9 @@ extension Snapshot {
     }
     func pt(_ px: Int) -> Int { Int((Double(px) / scale).rounded()) }
     var names: [String] = []
-    for n in (la?.regions.map(\.name) ?? []) + (lb?.regions.map(\.name) ?? []) + (la?.missing ?? []) + (lb?.missing ?? []) where !names.contains(n) { names.append(n) }
+    let namesA: [String] = (la?.regions ?? []).map(\.name), namesB: [String] = (lb?.regions ?? []).map(\.name)
+    let missingA: [String] = la?.missing ?? [], missingB: [String] = lb?.missing ?? []
+    for n in namesA + namesB + missingA + missingB where !names.contains(n) { names.append(n) }
     var out: [RegionLook] = []
     for n in names {
       let ra = la?.regions.first { $0.name == n }?.rect, rb = lb?.regions.first { $0.name == n }?.rect
@@ -181,9 +188,14 @@ extension Snapshot {
     var inA = [Bool](repeating: false, count: n), inB = [Bool](repeating: false, count: n)
     paint(la?.regions.map(\.rect) ?? [], true, into: &inA); paint(lb?.regions.map(\.rect) ?? [], true, into: &inB)
     for k in 0..<n { mask[k] = !inA[k] || !inB[k] }
-    let onlyA = la?.regions.filter { r in !(lb?.regions.contains { $0.name == r.name } ?? false) }.map(\.rect) ?? []
-    let onlyB = lb?.regions.filter { r in !(la?.regions.contains { $0.name == r.name } ?? false) }.map(\.rect) ?? []
-    let anchored = (la?.regions ?? []).compactMap { r in lb?.regions.first { $0.name == r.name && $0.rect[0] == r.rect[0] && $0.rect[1] == r.rect[1] }.map { [r.rect, $0.rect] } }.flatMap { $0 }
+    let inBoth = Set(namesA).intersection(namesB)
+    let onlyA: [[Int]] = (la?.regions ?? []).filter { !inBoth.contains($0.name) }.map(\.rect)
+    let onlyB: [[Int]] = (lb?.regions ?? []).filter { !inBoth.contains($0.name) }.map(\.rect)
+    var anchored: [[Int]] = []
+    for r in la?.regions ?? [] {
+      guard let o = lb?.regions.first(where: { $0.name == r.name }), o.rect[0] == r.rect[0], o.rect[1] == r.rect[1] else { continue }
+      anchored += [r.rect, o.rect]
+    }
     paint(onlyA + onlyB + anchored, false, into: &mask)
     if let m = movA { for k in 0..<n where m[k] { mask[k] = false } }
     if let m = movB { for k in 0..<n where m[k] { mask[k] = false } }
