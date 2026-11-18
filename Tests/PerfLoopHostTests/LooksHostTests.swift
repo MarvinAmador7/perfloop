@@ -111,7 +111,7 @@ import PerfLoopKit
     XCTAssertTrue(ok.detail.contains("only where declared"), ok.detail)
     // The bench's verb: --expect-look, and the look-at lines.
     let text = Bench(app: "t", stamp: nil).handle(["snapdiff", a, b, "--diff-out", diff, "--expect-look", "footer"])
-    XCTAssertEqual(text.0, 0); XCTAssertTrue(text.1.contains("look footer differs"), text.1); XCTAssertTrue(text.1.contains("look at: "), text.1)
+    XCTAssertEqual(text.0, 0); XCTAssertTrue(text.1.contains("look footer differs"), text.1); XCTAssertTrue(text.1.contains("look at (snapshot footer): "), text.1)
     // Declaring a region that isn't there is said, and changes nothing.
     XCTAssertTrue(Snapshot.snapdiff(a: a, b: b, tolerance: 0.005, diffOut: nil, expected: ["footr"]).0.detail.contains("declared footr but no region has that name"))
 

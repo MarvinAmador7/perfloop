@@ -164,7 +164,7 @@ public enum Looks {
   public static func lines(_ g: GuardResult, indent: String = "    ") -> [String] {
     (g.looks ?? []).filter(\.changed).map { l in
       let who = l.expected == true ? "declared by the agent: the PR's reviewer accepts it" : "not declared: the owner reviews it"
-      return "\(indent)look \(l.line) · \(who)" + (l.pictures.isEmpty ? "" : " · look at: " + l.pictures.joined(separator: " "))
+      return "\(indent)look \(l.line) · \(who)" + (l.pictures.isEmpty ? "" : " · look at (snapshot \(l.name)): " + l.pictures.joined(separator: " "))
     }
   }
 

@@ -99,29 +99,31 @@ step on the slow path, 8.8 with `rows.rank=index`; `diff` of the two names `List
 sort −61.5 ms, `CFStringCompareWithOptionsAndLocale` −40.6 ms per step) as what shrank. The trace was deleted after its
 tables were exported.
 
-## Looks: regions, a child window, dark mode (2026-11-17, the owner's spare Mac mini over ssh, macOS 26.6.2)
+## Looks: regions, a child window, dark mode (2026-11-18, the owner's spare Mac mini over ssh, macOS 26.6.2)
 
-The bench names regions for its snapshots: `footer` (the AppKit status line, by its `identifier`), `list` (the scroll
-view) and `filter` (a rect: SwiftUI's views aren't NSViews). The `details` scenario opens a panel attached to the window
-(`DetailsPanel`, a child window) and selects rows; the panel is drawn into the snapshot where it is on screen and is a
-region of its own. With the champion's build and one with `-DSLOWLIST_LOOK` (the footer reads "Item 12 selected · 1000
-items" instead of "Selected item 12"):
+The regions the ink guard checks after each step (`rows`, the scroll view; `status`, the AppKit status line by its
+`identifier`) are also the regions snapshots are compared by, with `filter` (a rect: SwiftUI's views aren't NSViews)
+added for every scenario. The `details` scenario opens a panel attached to the window (`DetailsPanel`, a child window)
+and selects rows; the panel is drawn into the snapshot where it is on screen and is the region `details`. With the
+champion's build and one with `-DSLOWLIST_LOOK` (the status line reads "Item 12 selected · 1000 items" instead of
+"Selected item 12"):
 
 ```sh
 perfloop baseline details --bench bench-champ --reps 2 --runner ssh://…            # light reference picture
 perfloop baseline details --bench bench-champ --reps 2 --set appearance=dark …     # dark: baselines/details~dark/
-perfloop run bench-look --scenario details --reps 1 …                               # REVIEW: footer resized (92×14 → 158×14 pt)
+perfloop run bench-look --scenario details --reps 1 …                               # REVIEW: status resized
 perfloop run bench-look --scenario details --reps 1 --expect-look status …          # changed where declared
 perfloop run bench-champ --scenario details --set appearance=dark --reps 1 …       # same in every region
 ```
 
 | Run | Snapshot against its look's baseline |
 |---|---|
-| look build, nothing declared | `REVIEW · footer resized (92×14 → 158×14 pt); same: list, filter, details, rest`, the footer's before and after crops named on a `look at:` line; next: the owner's call |
-| look build, `--expect-look status` | `changed where declared · footer resized … [declared]`; exit 0; next: put the footer's pictures in the PR for the reviewer |
-| champion build, dark | `same · the same in every region (footer, list, filter, details, rest)` |
+| look build, nothing declared | `REVIEW · status resized (92×14 → 158×14 pt); same: filter, rows, details, rest`, the status line's before and after crops on a `look at (snapshot status):` line; next: the owner's call |
+| look build, `--expect-look status` | `changed where declared · status resized … [declared]`; exit 0; next: put the region's pictures in the PR for the reviewer |
+| look build, dark, `--expect-look status` | the same against the dark baseline (`baselines/details~dark/reference.png`) |
+| champion build, dark | `same · the same in every region (filter, rows, status, details, rest)` |
 
-Every rep was trusted. The layout beside each picture listed the panel (`childWindows: details, DetailsPanel`) and
-`notCaptured: the title bars (the window's and its child windows')`. The footer is a label sized to its text, so its
-region grew with it: `resized`, not `differs`. A whole-window `snapdiff` with the alignment search took under 0.1 s on
-900×700 pictures.
+Every rep was trusted, and the ink guard passed in each (`ink ✓`). The layout beside each picture listed the panel
+(`childWindows: details, DetailsPanel`) and `notCaptured: the title bars (the window's and its child windows')`. The
+status line is a label sized to its text, so its region grew with it: `resized`, not `differs`. A whole-window
+`snapdiff` with the alignment search took under 0.1 s on 900×700 pictures.

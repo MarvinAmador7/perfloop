@@ -35,7 +35,7 @@ final class LooksLoopTests: FakeBenchCase {
     let text = loop.explain(e)
     XCTAssertTrue(text.contains("expect look: footer"), text)
     XCTAssertTrue(text.contains("snapshot-diff ✓ declared look"), text)
-    XCTAssertTrue(text.contains("look footer differs") && text.contains("[declared]") && text.contains("look at: exp/"), text)
+    XCTAssertTrue(text.contains("look footer differs") && text.contains("[declared]") && text.contains("look at (snapshot footer): exp/"), text)
     XCTAssertTrue(Explain.next(e).contains("the declared look change goes in the PR"), Explain.next(e))
   }
 
