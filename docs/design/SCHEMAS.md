@@ -49,6 +49,7 @@ machine; rerun).
              { "name": "build.perFrame", "type": "int", "default": 2, "range": [1, 8] } ],
   "hosts": [ "scene", "window" ], "defaultHost": "scene", "defaultFixture": "crew17",
   "fixtureSchemes": [ "file" ],                  // optional (2026-11): the scheme: forms --fixture takes; absent: any passes
+  "harness": "PerfLoopHost",                     // optional (2026-11): the library answering the contract (doctor; ADAPTER.md §3b)
   "probes": [ "Column", "ColumnHead", "ColumnThread", "EntryRow", "ColumnComposer", "CrewTab", "TitleBar", "OpenGroup", "Reel", "RootView", "DecisionBar", "FoldedDeck" ],
   "exitCodes": { "ok": 0, … } }
 ```
@@ -83,13 +84,20 @@ Everything in `deskbench.result/1` (`Results.swift`) stays with the same names a
                  "samples": 231,
                  "topOurs": [ { "symbol": "ReelView.slide", "samples": 180 } ],
                  "topFramework": [ { "symbol": "LayoutEngineBox.sizeThatFits", "samples": 229, "under": "ReelRepresentable" } ],
-                 "causes": [ … ] } ],
+                 "causes": [ … ],
+                 "benchSamples": 200, "topBench": [ { "symbol": "Drive.inkOpened", "samples": 200 } ] } ],   // the bench's own code (2026-11)
     "guards": [ { "name": "snapshot-diff", "pass": true, "detail": "0.1 % of pixels differ", "artifacts": ["…/step-rep0.png"],
-                  "value": 0.001, "limit": 0.005, "review": null } ]   // review: true = over tolerance, the owner decides
+                  "value": 0.001, "limit": 0.005, "review": null },   // review: true = over tolerance, the owner decides
+                { "name": "ink", "pass": false, "detail": "pane after open: blank: no pixel differs from its background (look at: …)",
+                  "artifacts": ["…/ink/toggle-rep0-01-open-pane.png", …], "value": 0, "limit": 0.005,       // built in (2026-11)
+                  "inkRegions": [ { "region": "pane", "after": "open", "pass": false, "ink": 0, "min": 0.005,
+                                    "rect": [220, 0, 680, 700], "detail": "blank: …", "picture": "…/ink/toggle-rep0-01-open-pane.png" } ] } ]
   } ] }
 ```
 
-`checks[]` is unchanged; `guards[]` is the subset that gates acceptance plus the new ones. `Budgets.evaluate` keeps
+`checks[]` is unchanged; `guards[]` is the subset that gates acceptance plus the new ones. Both are counted per trusted
+rep by every verdict (Checks.swift): a check passing in some trusted reps only is `flaky N/M`, a failure; `perfloop.measure/1`'s
+`summary.checks[] { name, kind: check|guard, passed, of }` holds the counts (2026-11). `Budgets.evaluate` keeps
 its rule text and adds nothing: the verdict words (`pass|fail|untrusted|regression`) are kept.
 
 ## 4. `perfloop.profile/2` (from `deskbench.profile/1`)

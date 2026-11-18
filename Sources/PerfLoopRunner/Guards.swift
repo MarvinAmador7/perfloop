@@ -14,10 +14,15 @@ extension Loop {
   }
 
   /// What a side's run gets in its environment: the guards it runs itself, their parameters, where to write.
+  /// The artifacts directory is always given: a built-in guard (ink) writes its pictures there whatever the manifest
+  /// lists.
   func guardEnv(_ g: (guards: [String], params: [String: JSONValue]), dir: URL) -> [String: String] {
     let run = GuardNames.adapterRun(g.guards)
-    guard !run.isEmpty else { return [:] }
-    return ["PERFLOOP_GUARDS": run.joined(separator: ","), "PERFLOOP_GUARD_PARAMS": GuardNames.params(g.params), "PERFLOOP_ARTIFACTS": dir.path]
+    var env = ["PERFLOOP_ARTIFACTS": dir.path]
+    let params = GuardNames.params(g.params)
+    if !params.isEmpty { env["PERFLOOP_GUARD_PARAMS"] = params }
+    if !run.isEmpty { env["PERFLOOP_GUARDS"] = run.joined(separator: ",") }
+    return env
   }
 
   /// After a pair: the candidate's snapshot against the champion's, judged by the champion's adapter. The candidate's
@@ -54,7 +59,12 @@ extension Loop {
   func relativise(_ p: inout Pair) {
     for side in [\Pair.a, \Pair.b] {
       guard var gs = p[keyPath: side].guards else { continue }
-      for i in gs.indices { gs[i].artifacts = gs[i].artifacts.filter { FileManager.default.fileExists(atPath: store.abs($0)) }.map { store.rel(URL(fileURLWithPath: store.abs($0))) } }
+      for i in gs.indices {
+        gs[i].artifacts = gs[i].artifacts.filter { FileManager.default.fileExists(atPath: store.abs($0)) }.map { store.rel(URL(fileURLWithPath: store.abs($0))) }
+        for k in (gs[i].inkRegions ?? []).indices {
+          gs[i].inkRegions![k].picture = gs[i].inkRegions![k].picture.flatMap { FileManager.default.fileExists(atPath: store.abs($0)) ? store.rel(URL(fileURLWithPath: store.abs($0))) : nil }
+        }
+      }
       p[keyPath: side].guards = gs
     }
   }

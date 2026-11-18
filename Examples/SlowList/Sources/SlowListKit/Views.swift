@@ -102,6 +102,7 @@ public final class ListContainerView: NSView {
     list.sizingOptions = []
     footer.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
     footer.textColor = .secondaryLabelColor
+    footer.identifier = NSUserInterfaceItemIdentifier("status")
     for v in [list, footer] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
     NSLayoutConstraint.activate([
       list.topAnchor.constraint(equalTo: topAnchor), list.leadingAnchor.constraint(equalTo: leadingAnchor), list.trailingAnchor.constraint(equalTo: trailingAnchor),

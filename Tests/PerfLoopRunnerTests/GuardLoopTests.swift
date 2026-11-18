@@ -117,4 +117,20 @@ final class GuardLoopTests: FakeBenchCase {
     XCTAssertEqual(adapterCalls("snapdiff").count, 3, "one binary, two settings: the pictures are still compared")
     XCTAssertTrue(adapterCalls("snapdiff")[0].contains("/screen/p1/a/step-rep0.settled.png") && adapterCalls("snapdiff")[0].contains("/screen/p1/b/"))
   }
+
+  /// The ink guard is PerfLoop's: a candidate whose region comes out blank is rejected though no manifest lists ink,
+  /// and the explain names the crops to look at.
+  func testABlankInkRegionRejectsACandidateTheManifestDoesntMention() throws {
+    try baseline(["INK": "drawn"])
+    var o = Loop.NewOptions(hypothesis: "skip drawing the rows")
+    o.bench = try bench("blank", ["CPU": "4", "INK": "blank"])
+    let e = try loop.new(o)
+    XCTAssertEqual(e.state, .rejected)
+    XCTAssertEqual(e.screen?.guardFailures, ["ink failed on the candidate in pairs 1, 2, 3: rows after step: blank · the candidate passed 0/3"])
+    let text = try String(contentsOfFile: store.abs("exp/\(e.id)/explain.txt"), encoding: .utf8)
+    XCTAssertTrue(text.contains("guards pair 1: ink ✗ 0 % ink"), text)
+    let look = try XCTUnwrap(text.split(separator: "\n").first { $0.contains("look at (ink failed): ") })
+    let crop = String(look.split(separator: " ").last!)
+    XCTAssertFalse(crop.hasPrefix("/")); XCTAssertTrue(FileManager.default.fileExists(atPath: store.abs(crop)), crop)
+  }
 }
