@@ -30,6 +30,8 @@ public enum ListKnobs {
   public private(set) var items: [Item]
   public var selection: Int? { didSet { Mutations.record("ListModel.selection") } }
   public var filter: String = "" { didSet { Mutations.record("ListModel.filter") } }
+  /// Find (⌘F) asks the list to put the keyboard in its filter field: the view follows the count.
+  public var findRequests = 0
   @ObservationIgnored private var rankTable: [Int: Int]?
 
   public init(items: [Item]) { self.items = items }

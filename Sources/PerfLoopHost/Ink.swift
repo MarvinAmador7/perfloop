@@ -106,17 +106,10 @@ public enum Ink {
     return nil
   }
 
-  /// The screen frame of the accessibility element with `id` under `root` (SwiftUI's views are elements, not NSViews).
+  /// The screen frame of the accessibility element with `id` under `root` (SwiftUI's views are elements, not NSViews;
+  /// `AccessibilityElements` builds SwiftUI's tree when it has to).
   @MainActor static func accessibilityFrame(_ id: String, in root: NSView) -> NSRect? {
-    var budget = 5000
-    func walk(_ e: Any, _ depth: Int) -> NSRect? {
-      budget -= 1
-      guard budget > 0, depth < 64, let el = e as? NSAccessibilityProtocol else { return nil }
-      if el.accessibilityIdentifier() == id { return el.accessibilityFrame() }
-      for c in el.accessibilityChildren() ?? [] { if let f = walk(c, depth + 1) { return f } }
-      return nil
-    }
-    return walk(root, 0)
+    AccessibilityElements.withTree { AccessibilityElements.frame(id, in: root) }.found
   }
 
   /// `rect` of `content` as its views draw it, over the window's background colour (as the snapshots are).

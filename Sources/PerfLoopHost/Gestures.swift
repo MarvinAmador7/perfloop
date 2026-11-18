@@ -26,7 +26,7 @@ extension Run {
   }
 
   /// The gesture a scenario's `gesture` parameter names (`synthetic:scroll-down`, or a file), or `fallback`.
-  public func gesture(_ fallback: String = "synthetic:scroll-down") throws -> Gesture {
+  public func gesture(_ fallback: String = "synthetic:scroll-down") throws -> ReplayGesture {
     do { return try SyntheticGestures.load(param("gesture") ?? fallback) } catch { throw HostError.usage("\(error)") }
   }
 
@@ -36,7 +36,7 @@ extension Run {
   /// smoothness: position error p95 while the fingers were down, stalls, jerk, latency in frames (`steps[].smoothness`).
   /// `timestamps: false` stamps every event 0, as an old synthetic fling did (AppKit can't see the release velocity then).
   @discardableResult
-  public func swipe(_ gesture: Gesture, in scrollView: NSScrollView? = nil, name: String? = nil, timestamps: Bool = true, timeoutMs: Double? = nil) async -> StepRecord {
+  public func swipe(_ gesture: ReplayGesture, in scrollView: NSScrollView? = nil, name: String? = nil, timestamps: Bool = true, timeoutMs: Double? = nil) async -> StepRecord {
     let label = name ?? "swipe \(gesture.name)"
     guard let sv = scrollView ?? self.scrollView(), let w = window else {
       check("scroll-view", false, "no NSScrollView with a document view in the window")

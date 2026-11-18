@@ -10,6 +10,10 @@ import Foundation
 
 public let gestureSchema = "perfloop.gesture/1"
 
+/// The same type under a name SwiftUI doesn't have: a bench that imports SwiftUI and PerfLoopProbe finds `Gesture`
+/// ambiguous ("'Gesture' is ambiguous for type lookup"); `ReplayGesture` never is.
+public typealias ReplayGesture = Gesture
+
 /// One recorded gesture: the scroll-wheel events from the fingers touching to the momentum's end.
 public struct Gesture: Codable, Sendable, Equatable {
   public var schema = gestureSchema

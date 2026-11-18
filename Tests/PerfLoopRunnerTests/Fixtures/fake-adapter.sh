@@ -38,6 +38,7 @@ FAKE_RAN_FIXTURE=
 FAKE_SCHEMES=-
 FAKE_HARNESS=
 FAKE_INK=
+FAKE_INPUT=0
 FAKE_APPEARANCES=
 
 self="$0"
@@ -181,10 +182,22 @@ run)
   step="{ \"name\": \"step\", \"atMs\": 0, \"durationMs\": 300, \"latencyMs\": $lat, \"frames\": { \"steadyHz\": 120 }, \"mainThread\": { \"cpuMs\": 1 }, \"bodies\": {}, \"notes\": [] }"
   fail=$(checks "$self" "$sc"); landed=true; if [ "$fail" = '"landed"' ]; then landed=false; fi
   iso=true; if [ "$fail" = '"isolation-still"' ]; then iso=false; fi
+  # A PerfLoopHost bench's input step (run.press) and its pictures under PERFLOOP_PICTURES; a step whose focus moved.
+  inputs=""
+  if [ "$FAKE_INPUT" = 1 ]; then
+    pics=""
+    if [ -n "$PERFLOOP_PICTURES" ]; then
+      mkdir -p "$PERFLOOP_PICTURES"; for k in before after diff; do printf 'png' > "$PERFLOOP_PICTURES/press-k.$k.png"; done
+      pics=", \"pictures\": { \"before\": \"$PERFLOOP_PICTURES/press-k.before.png\", \"after\": \"$PERFLOOP_PICTURES/press-k.after.png\", \"diff\": \"$PERFLOOP_PICTURES/press-k.diff.png\", \"changedPct\": 12 }"
+    fi
+    inputs=", { \"name\": \"press ⌘K\", \"atMs\": 0, \"durationMs\": 30, \"frames\": {}, \"mainThread\": {}, \"bodies\": {}, \"notes\": [],
+      \"input\": { \"kind\": \"press\", \"outcome\": \"fired\", \"line\": \"press ⌘K → fired menu 'Search…'; focus: nothing → #palette.field\", \"notes\": [\"the window wasn't key\"] $pics } },
+      { \"name\": \"close\", \"atMs\": 0, \"durationMs\": 30, \"frames\": {}, \"mainThread\": {}, \"bodies\": {}, \"notes\": [\"focus: #palette.field → nothing (the step has no expectFocus: say where the keyboard should land)\"] }"
+  fi
   cat <<JSON
 { "schema": "deskbench.result/1", "tool": { "name": "FakeBench", "version": "1", "configuration": "release", "build": $(build "$self") },
   "scenario": "$sc", "fixture": "${FAKE_RAN_FIXTURE:-$fixture}", "params": {}, "profiled": false,
-  "reps": [ { "index": 0, "steps": [ $step, $step, $step, $step, $step, $step, $step, $step ],
+  "reps": [ { "index": 0, "steps": [ $step, $step, $step, $step, $step, $step, $step, $step $inputs ],
               "frames": { "steadyHz": $FAKE_HZ, "late": $FAKE_LATE, "hitchTimeRatioMsPerS": $FAKE_HITCH },
               "mainThread": { "cpuMs": $total, "longestMs": 40 }, "bodies": {},
               "checks": [ { "name": "landed", "pass": $landed, "detail": "" }, { "name": "isolation-still", "pass": $iso, "detail": "" } ],

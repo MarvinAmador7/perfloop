@@ -24,7 +24,7 @@ final class LooksTests: XCTestCase {
     // Each changed region with what to look at, and whose call it is.
     let lines = Looks.lines(part)
     XCTAssertEqual(lines.count, 2)
-    XCTAssertTrue(lines[0].contains("look footer differs 20.0 % [declared] · declared by the agent") && lines[0].hasSuffix("look at (snapshot footer): f.before.png f.after.png f.diff.png"), lines[0])
+    XCTAssertTrue(lines[0].contains("look footer differs 20.0 % [declared] · declared by the agent") && lines[0].hasSuffix("look at: f.after.png  f.diff.png  f.before.png"), lines[0])
     XCTAssertTrue(lines[1].contains("not declared: the owner reviews it"), lines[1])
     // A guard without regions (an older adapter, two looks that can't compare) keeps its own verdict.
     let old = GuardResult(name: "snapshot-diff", pass: false, detail: "x", review: true)

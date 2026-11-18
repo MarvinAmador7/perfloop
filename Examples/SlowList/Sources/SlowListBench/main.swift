@@ -16,8 +16,8 @@ bench.fixture("rows300", summary: "300 items: the second fixture a win must not 
 bench.knobs { [ListKnobs.rank] }
 // Regions: the ink guard's (each step's `ink:` must leave them drawn) are also the regions snapshots are compared by
 // (`snapdiff`: same, moved, differs per region; `--expect-look status` declares an intended change there), so a region
-// is named once. The rows, the AppKit status line (by its identifier), and the filter bar above them (a rect: SwiftUI's
-// views aren't NSViews, and its accessibility elements exist only once an assistive app asks).
+// is named once. The rows, the AppKit status line (by its identifier), and the filter bar above them (a rect: an
+// identifier on a SwiftUI view is found through SwiftUI's accessibility tree, which costs while it is on).
 @MainActor func listRegions(_ run: Run) -> [InkRegion] { [.find("rows") { run.scrollView() }, .identifier("status")] }
 bench.regions([.rect("filter", CGRect(x: 0, y: 0, width: 900, height: 38))])
 
@@ -57,6 +57,23 @@ bench.scenario("filter", summary: "Type a filter: the list narrows with each key
     await run.step("filter#\(i) '\(q)'", until: { run.lastEvent("list.count") == want }, ink: [.find("rows") { run.scrollView() }]) { model.filter = q }
   }
   run.check("narrowed", run.lastEvent("list.count") == model.visible.count, "the list shows \(run.lastEvent("list.count") ?? -1) of \(model.visible.count) items")
+}
+
+bench.scenario("find", summary: "Click a row, find with ⌘F, type a filter, clear it with ⌘K: real clicks and keys through the app's menu bar and field editor",
+               kind: .latency, guards: ["checks", "rows-drawn"]) { run in
+  let model = ListModel.sample(count: run.fixture.int("rows", 1000))
+  ListMenu.install(for: model)
+  try await run.show(view: ListContainerView(model: model), size: bench.windowSize)
+  // Each step: what fired (or didn't), what a click hit, where the keyboard went, and with --pictures, the window
+  // before and after. A row's identifier is SwiftUI's accessibility identifier: the click finds its element.
+  await run.click(identifier: "row-3", until: { model.selection == 3 })
+  run.check("selected", model.selection == 3, "selection \(model.selection.map(String.init) ?? "none") after clicking row 3")
+  await run.press("⌘F", expect: "Find…", expectFocus: .identifier("filter"), until: { run.focus().fieldEditor == true })
+  let want = model.items.filter { $0.title.localizedCaseInsensitiveContains("ember") }.count
+  await run.type("ember", ink: [.find("rows") { run.scrollView() }], expectFocus: .unchanged, until: { run.lastEvent("list.count") == want })
+  await run.press("⌘K", expect: "Clear Filter", until: { run.lastEvent("list.count") == model.items.count })
+  run.check("cleared", model.filter.isEmpty && run.lastEvent("list.count") == model.items.count,
+            "filter '\(model.filter)', the list shows \(run.lastEvent("list.count") ?? -1) of \(model.items.count)")
 }
 
 bench.gestures = SyntheticGestures.specs

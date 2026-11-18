@@ -51,6 +51,26 @@ final class MeasureLoopTests: FakeBenchCase {
     XCTAssertTrue(text.contains("worst stretch: 40 ms in step#3"), text)
   }
 
+  /// A PerfLoopHost bench's input steps: one rep's lines in the run, its pictures moved into the run's folder (the
+  /// other reps' deleted), paths relative to the store.
+  func testInputLinesAndOneRepsPicturesAreKept() throws {
+    try baseline()
+    let cand = try bench("cand", ["EXTRA": "toggle", "INPUT": "1"])
+    let m = try loop.runScenario(options(cand, "toggle", reps: 2))
+    let i = try XCTUnwrap(m.input)
+    XCTAssertEqual(i.rep, 1)
+    XCTAssertEqual(i.lines, ["press ⌘K → fired menu 'Search…'; focus: nothing → #palette.field",
+                             "close: focus: #palette.field → nothing (the step has no expectFocus: say where the keyboard should land)"])
+    XCTAssertEqual(i.pictures[0], ["runs/m0001/input/press-k.after.png", "runs/m0001/input/press-k.diff.png", "runs/m0001/input/press-k.before.png"])
+    XCTAssertEqual(i.pictures[1], [])
+    for p in i.pictures[0] { XCTAssertTrue(FileManager.default.fileExists(atPath: store.abs(p)), p) }
+    let dir = store.measureDir(m.id)
+    XCTAssertEqual(Self.pictures(dir).map { $0.deletingLastPathComponent().lastPathComponent }, ["input", "input", "input"], "the other rep's are deleted")
+    let text = Measure.text(m)
+    XCTAssertEqual(i.notes, [["the window wasn't key"], []])
+    XCTAssertTrue(text.contains("input (rep 1):\n  press ⌘K → fired menu 'Search…'; focus: nothing → #palette.field\n    note: the window wasn't key\n    look at: runs/m0001/input/press-k.after.png"), text)
+  }
+
   func testUntrustedRepsAreNamedNeverQuoted() throws {
     try baseline()
     setenv("FAKE_ENV_QUIET", "false", 1)

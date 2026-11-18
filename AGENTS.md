@@ -152,7 +152,10 @@ perfloop baseline S --bench PATH [--reference S2]   # first numbers + a referenc
 - **Never commit or publish `.trace` files**, stores, results with paths from someone's home, or anything with
   secrets. xctrace traces embed the recorded process's environment (tokens included). `exp new` refuses a patch that
   touches a `.trace` or a path the manifest lists in `privatePaths`.
-- **Never send synthetic input to the system** or click around the owner's Mac. Benches drive the app in-process.
+- **Never send synthetic input to the system** or click around the owner's Mac. Benches drive the app in-process:
+  in a PerfLoopHost bench, `run.press("⌘K")`, `run.type("query")`, `run.key(.escape)` and `run.click(view)` put real
+  events on the app's own queue and record what fired, what was hit and where the focus went (ADAPTER.md §6c); never
+  `CGEvent.post`, and never `NSApp.sendEvent` or a hand-made `NSEvent.keyEvent` for a shortcut (both route wrong).
 - **Never leave processes behind**: no wait loops, watchers or benches running when you stop (`ps` to check; note that
   `pgrep -f` matches itself).
 

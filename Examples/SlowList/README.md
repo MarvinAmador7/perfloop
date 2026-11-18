@@ -7,7 +7,7 @@ deliberately slow path, and its PerfLoop bench. It is the second app PerfLoop ru
 |---|---|
 | `Sources/SlowListKit/Model.swift` | a knob (`ListKnobs.rank`) where an idea varies, and `Mutations.record` on the state that drives bodies |
 | `Sources/SlowListKit/Views.swift` | `Probe.body("Row", id:)` in the bodies worth counting; the slow path; the fix (`SLOWLIST_ROW_VALUES`); a cheat (`SLOWLIST_CHEAT`); a look change (`SLOWLIST_LOOK`: the status line names the item); the details panel (a child window) |
-| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, four scenarios (one replays a trackpad gesture, one opens a child panel), ink regions each step must leave drawn (the rows, the status line), which are also the regions snapshots are compared by, a knob, a guard of its own, `bench.main()` |
+| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, five scenarios (one replays a trackpad gesture, one presses real keys and clicks through the menu bar, one opens a child panel), ink regions each step must leave drawn (the rows, the status line), which are also the regions snapshots are compared by, a knob, a guard of its own, `bench.main()` |
 | `Package.swift` | depends on PerfLoop like an outside app; the `PerfLoopStamp` plugin on the bench target |
 | `walkthrough.sh` | the loop end to end on this app |
 
@@ -35,6 +35,7 @@ $B describe                                  # the manifest the runner reads
 $B run select --reps 1                       # opens a window for ~3 s; prints where the time went
 PERFLOOP_KNOBS=rows.rank=index $B run select --reps 1
 $B run scroll --reps 1                       # a trackpad flick replayed into the list: how closely the content followed
+$B run find --reps 1 --pictures /tmp/find    # ⌘F, typing, ⌘K: the menu item each fired, the focus, the window before/after
 $B run details --set appearance=dark --reps 1   # the details panel over the list, in dark mode
 $B run scroll --set gesture=synthetic:drag-down --set inject-block-ms=60 --reps 1   # the meter's self-check: stalls
 $B record-gesture scroll --name my-swipe     # your own swipe over the list, for --set gesture=FILE
@@ -118,7 +119,7 @@ perfloop run bench-champ --scenario details --set appearance=dark --reps 1 …  
 
 | Run | Snapshot against its look's baseline |
 |---|---|
-| look build, nothing declared | `REVIEW · status resized (92×14 → 158×14 pt); same: filter, rows, details, rest`, the status line's before and after crops on a `look at (snapshot status):` line; next: the owner's call |
+| look build, nothing declared | `REVIEW · status resized (92×14 → 158×14 pt); same: filter, rows, details, rest`, the status line's before and after crops on a `look at:` line; next: the owner's call |
 | look build, `--expect-look status` | `changed where declared · status resized … [declared]`; exit 0; next: put the region's pictures in the PR for the reviewer |
 | look build, dark, `--expect-look status` | the same against the dark baseline (`baselines/details~dark/reference.png`) |
 | champion build, dark | `same · the same in every region (filter, rows, status, details, rest)` |

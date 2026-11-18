@@ -30,6 +30,8 @@ public struct RegionLook: Codable, Sendable, Equatable {
 
   public var changed: Bool { look != "same" }
   public var pictures: [String] { [before, after, diff].compactMap { $0 } }
+  /// The pictures in the order an input step's `look at:` line gives them: after, diff, before.
+  public var lookAt: [String] { [after, diff, before].compactMap { $0 } }
 
   /// "footer differs 3.2 %", "list moved 60,0 pt", "details missing in the candidate's picture".
   public var line: String {
@@ -164,7 +166,7 @@ public enum Looks {
   public static func lines(_ g: GuardResult, indent: String = "    ") -> [String] {
     (g.looks ?? []).filter(\.changed).map { l in
       let who = l.expected == true ? "declared by the agent: the PR's reviewer accepts it" : "not declared: the owner reviews it"
-      return "\(indent)look \(l.line) · \(who)" + (l.pictures.isEmpty ? "" : " · look at (snapshot \(l.name)): " + l.pictures.joined(separator: " "))
+      return "\(indent)look \(l.line) · \(who)" + (l.pictures.isEmpty ? "" : " · look at: " + l.lookAt.joined(separator: "  "))
     }
   }
 

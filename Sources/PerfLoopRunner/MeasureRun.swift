@@ -156,8 +156,10 @@ extension Loop {
                                       metric: rr.metric, env: [:], dir: dir, earlier: rr.reps))
         reference = rr
       }
+      // A PerfLoopHost bench writes its input steps' pictures under PERFLOOP_PICTURES (one rep's are kept, below).
+      let env = guardEnv(g, dir: dir.appendingPathComponent("r\(i + 1)")).merging(["PERFLOOP_PICTURES": dir.appendingPathComponent("r\(i + 1)/pictures").path]) { $1 }
       var rep = try measureRep(id, index: i, name: "r\(i + 1)", entry: t.entry, scenario: sc, fixture: fx, params: o.params, knobs: knobs, metric: metric,
-                               env: guardEnv(g, dir: dir.appendingPathComponent("r\(i + 1)")), dir: dir, earlier: reps)
+                               env: env, dir: dir, earlier: reps)
       if ref != nil { rep.order = refFirst ? "after" : "before" }
       reps.append(rep)
       if !refFirst, let r = ref, var rr = reference {
@@ -182,8 +184,9 @@ extension Loop {
         x.snapshot = compareSnapshot(shot, c, scenario: sc, params: g.params, build: t.entry, champion: cEntry, dir: dir, expected: o.expectLook)
       }
     }
+    x.input = keepInput(reps, dir: dir)
     // Pictures are a few MB each: the reps' are deleted; what a person has to look at is in the run's own folder.
-    for p in Self.pictures(under: dir) { try? FileManager.default.removeItem(at: p) }
+    for p in Self.pictures(under: dir) where !p.path.hasPrefix(dir.appendingPathComponent("input").path + "/") { try? FileManager.default.removeItem(at: p) }
 
     x.next = measureNext(x, recorded: record, championHas: cEntry?.manifest?.scenario(sc) != nil || (cEntry != nil && cEntry?.manifest == nil))
     try store.save(x)
@@ -195,6 +198,29 @@ extension Loop {
     try store.ledger.append(LedgerEntry(experiment: id, state: o.kind == "baseline" ? "baseline" : "measure", objective: x.summary.median.map { .init(before: nil, after: $0) }, build: t.entry.build.hash, by: by,
                                         note: note, runner: x.runner))
     return x
+  }
+
+  /// The input lines of the first trusted rep (else the first that ran), with its pictures moved to the run's
+  /// `input/` folder (the other reps' are deleted with their pictures).
+  func keepInput(_ reps: [MeasureRep], dir: URL) -> MeasureInput? {
+    let fm = FileManager.default
+    for r in reps.filter(\.trusted) + reps.filter({ !$0.trusted && $0.failure == nil }) {
+      guard let rel = r.result, let v = try? PLJSON.decode(JSONValue.self, from: Data(contentsOf: URL(fileURLWithPath: store.abs(rel)))),
+            let rep = v["reps"]?[0], var input = MeasureInput.read(rep: rep, index: r.index + 1) else { continue }
+      let out = dir.appendingPathComponent("input")
+      input.pictures = input.pictures.map { ps in
+        ps.compactMap { p in
+          guard fm.fileExists(atPath: p) else { return nil }
+          try? fm.createDirectory(at: out, withIntermediateDirectories: true)
+          let dst = out.appendingPathComponent(URL(fileURLWithPath: p).lastPathComponent)
+          try? fm.removeItem(at: dst)
+          guard (try? fm.moveItem(atPath: p, toPath: dst.path)) != nil else { return nil }
+          return store.rel(dst)
+        }
+      }
+      return input
+    }
+    return nil
   }
 
   /// One rep, redone while the runner aborts it on input, and once more when it failed or was untrusted and a redo

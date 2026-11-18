@@ -83,6 +83,22 @@ perfloop exp new "Cache row ranks to remove repeated sorting during selection" \
 
 Use the returned experiment ID in `perfloop explain exp/ID`. If the verdict is `promising`, run `perfloop exp full ID`. If the screen says `inconclusive` (three pairs couldn't tell: mixed signs, or noise wider than the gain), add pairs with `perfloop exp screen ID --more 3` or run the full; `rejected` is kept for slower in every pair, a failed guard, or a gain that can't reach 5 %. If the full comparison says `won`, run `perfloop exp promote ID` to update the champion. Once that PR is merged, run `perfloop champion merged SHA` from the app's checkout. It checks that SHA is on main (`origin/main`, else `main`, or `--main REF`) and contains the champion's build commit, and refuses otherwise. A squash-merged or rebased PR never passes, because its build commit isn't on main: the owner then sets a build of main as the champion (`champion set BUILD --merged`). A champion built with uncommitted changes can't be checked against main either, so marking it merged is the owner's, through the same gate as `champion set`, and recorded (`mergedBy` in `champion.json`). [Bench contract and result schemas](ADAPTER.md)
 
+### Drive real input and check focus
+
+A PerfLoopHost scenario presses keys, types and clicks through the app's own event queue, as a hand would reach it:
+menus, key equivalents, the responder chain, field editors. Each step records what happened, in one line per action,
+and the focus before and after.
+
+```swift
+await run.press("⌘F", expect: "Find…", expectFocus: .identifier("filter"))  // fails the check when another item fires
+await run.type("ember", until: { run.lastEvent("list.count") == 12 })
+await run.click(identifier: "row-7")                                        // the view hit there, and what took the click
+```
+
+`perfloop run` prints them (`press ⌘F → fired menu 'Find…' (List › Find…); focus: nothing → NSTextField #filter
+"Filter" (field editor)`) and, for a step that changed the window, the before and after pictures to look at. Nothing is
+sent to the system. See [ADAPTER.md](ADAPTER.md) §6c.
+
 ### Verify that a feature costs nothing
 
 A feature branch asks a different question: does the change cost anything? Add `--expect same`.
