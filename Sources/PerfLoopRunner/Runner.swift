@@ -86,15 +86,17 @@ public enum Runners {
       return r
     case .vm(let tool, let name):
       let r = try VMRunner(tool: tool, name: name, store: store)
+      // The idle gate reads the host, this Mac, as the local runner's does, with its defaults.
+      if !o.force { r.gate = IdleGate(threshold: o.idle ?? 120, busyApps: o.busyApps ?? IdleGate.defaultBusyApps) }
       r.quiet = o.quiet
-      if let f = o.idleFrom { r.load = FileIdleSource(path: f) }
+      if let f = o.idleFrom { let src = FileIdleSource(path: f); r.idle = src; r.load = src }
       return r
     }
   }
 }
 
 public struct RunnerOptions {
-  /// Idle threshold, seconds (local: 120 unless `force`; ssh: gated only when given).
+  /// Idle threshold, seconds (local and vm, on this Mac: 120 unless `force`; ssh, on the remote Mac: gated only when given).
   public var idle: Double?
   /// No idle gate: a bench nobody minds.
   public var force = false

@@ -177,6 +177,7 @@ final class RunnerTests: FakeBenchCase {
     let v = try XCTUnwrap(try Runners.make("vm:tart/pl", store: store) as? VMRunner)
     v.ssh = Self.fixtures.appendingPathComponent("fake-ssh.sh").path; v.rsync = Self.fixtures.appendingPathComponent("fake-rsync.sh").path; v.wake = false; v.settleS = 0; v.bootTimeout = 5
     v.load = ScriptedLoadSource { LoadReading(busyPct: 5) }               // the host's load, never this Mac's real one
+    v.idle = ScriptedIdleSource { IdleReading(idle: 1000, locked: false) }  // and its idle time
     XCTAssertEqual(v.name, "vm:tart/pl")
     let lines = try v.check()
     XCTAssertTrue(lines[0].hasPrefix("vm:tart/pl: ") && lines[0].contains("FakeMac1,1"), "\(lines)"); XCTAssertTrue(lines.last!.contains("booted by this check"))
@@ -271,6 +272,54 @@ final class RunnerTests: FakeBenchCase {
     XCTAssertTrue(x.screen!.pairs.allSatisfy { $0.b.quiet == false && $0.b.busyPct == 70 })
     XCTAssertTrue(waits.contains { $0.contains("for a quiet machine on this Mac (vm:tart/pl's host): 70 % of the cores busy") }, "\(waits)")
     XCTAssertFalse(sshCalls("ssh ").contains { $0.contains("iostat") }, "the guest's load isn't the gate's")
+  }
+
+  /// A VM's idle gate reads the host, this Mac, as the local runner's does and with its defaults: a rep waits until
+  /// nobody has touched this Mac for the threshold and is redone when input arrives. This Mac's screen lock doesn't hold
+  /// it back: the guest has its own display.
+  func testTheVMIdleGateReadsTheHost() throws {
+    guard FileManager.default.isExecutableFile(atPath: "/usr/bin/ssh-keygen") else { throw XCTSkip("no ssh-keygen here") }
+    let state = tmp.appendingPathComponent("vm-state")
+    setenv("PERFLOOP_TART", Self.fixtures.appendingPathComponent("fake-tart.sh").path, 1); setenv("FAKE_TART_VM", "pl", 1); setenv("FAKE_TART_STATE", state.path, 1)
+    defer { for k in ["PERFLOOP_TART", "FAKE_TART_VM", "FAKE_TART_STATE"] { unsetenv(k) } }
+    // The local runner's flags and defaults: on at 120 s unless --force; --idle and --busy-apps as given.
+    func vm(_ o: RunnerOptions = RunnerOptions()) throws -> VMRunner { try XCTUnwrap(try Runners.make("vm:tart/pl", store: store, options: o) as? VMRunner) }
+    XCTAssertEqual(try vm().gate, IdleGate())
+    var o = RunnerOptions(); o.force = true
+    XCTAssertNil(try vm(o).gate)
+    o = RunnerOptions(); o.idle = 30; o.busyApps = ["zoom.us"]
+    XCTAssertEqual(try vm(o).gate, IdleGate(threshold: 30, busyApps: ["zoom.us"]))
+    XCTAssertTrue(try vm().idle is HIDIdleSource, "this Mac's HIDIdleTime")
+
+    try baseline(["SLEEP": "1"])
+    let e = try candidate(values: ["SLEEP": "1"])
+    let v = try vm()
+    v.ssh = Self.fixtures.appendingPathComponent("fake-ssh.sh").path; v.rsync = Self.fixtures.appendingPathComponent("fake-rsync.sh").path; v.wake = false; v.settleS = 0; v.bootTimeout = 5
+    v.load = ScriptedLoadSource { LoadReading(busyPct: 5) }
+    v.gate = IdleGate(threshold: 0.6); v.poll = 0.05; v.waitPoll = 0.05
+    // This Mac's screen is locked (it doesn't matter to the guest's window).
+    let idle = FakeIdle(); idle.locked = true
+    // Input once during the first rep that runs: at the gate's second reading after it said go (the first is the rep's
+    // start, once the window is up), so the rep is surely running.
+    var armed = 0
+    v.idle = ScriptedIdleSource {
+      if armed > 0 { armed += 1; if armed == 3 { idle.touch(); armed = -1 } }
+      return idle.source.read()
+    }
+    var waits: [String] = []
+    // Someone is typing on this Mac until the runner says it waits for them; they leave then (no timing involved).
+    v.onWait = { w in waits.append(w); if waits.count == 1 { idle.touch() } }
+    v.log = { line in if line.contains("starting the rep"), armed == 0 { armed = 1 } }
+    XCTAssertTrue(try v.check().contains { $0.hasPrefix("idle gate, on this Mac (vm:tart/pl's host): idle ") }, "runner check says what the gate reads")
+    idle.since = Date().addingTimeInterval(3600)
+    loop.runner = v
+    let x = try loop.screen(e.id)
+    v.close()
+    XCTAssertEqual(x.state, .promising, "\(x.screen?.reasons ?? [])")
+    XCTAssertTrue(waits.first?.hasPrefix("waiting on this Mac (vm:tart/pl's host): last input ") == true, "\(waits)")
+    XCTAssertFalse(waits.contains { $0.contains("locked") }, "this Mac's screen lock isn't the gate's: \(waits)")
+    XCTAssertTrue(waits.contains { $0.hasPrefix("interrupted on this Mac (vm:tart/pl's host): input during the rep") }, "\(waits)")
+    XCTAssertEqual(x.screen?.pairs.compactMap(\.interruptions).reduce(0, +), 1)
   }
 
   func testDirectLaunchAndRunVia() throws {

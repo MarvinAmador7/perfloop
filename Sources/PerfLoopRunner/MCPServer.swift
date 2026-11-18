@@ -64,7 +64,7 @@ public final class MCPServer {
 
   /// Every tool, in the order an agent meets them.
   lazy var tools: [Tool] = [
-    Tool(name: "status", description: "The champion, open experiments and what each needs next, and a `stop:` line when the stopping rules say the session is over. Start here.",
+    Tool(name: "status", description: "The champion, open experiments and what each needs next, how much of the session's 2 h time budget is spent and left (`time budget:`; the clock starts at the first optimisation experiment, expect-same checks don't count), and a `stop:` line when the stopping rules say the session is over. Start here.",
          properties: ["id": Self.prop("string", "An experiment id: its explain instead")], required: [], kind: .now) { a in
       try ["exp", "status"] + Self.opt(a, "id", Self.id) },
     Tool(name: "explain", description: "An experiment's explain.txt: verdict, numbers, where the time went (stacks, causes), hypotheses, and the next command.",

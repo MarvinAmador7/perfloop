@@ -40,11 +40,14 @@ public final class SSHRunner: Runner {
   public var remoteEnv: [String: String] = [:]
   /// Gate reps on the remote Mac's own idle time too (`--idle` on an ssh runner; off by default: it's a spare Mac).
   public var gate: IdleGate?
+  /// Where the idle gate reads instead of the remote Mac (the VM runner: its host, this Mac, where someone at the
+  /// keyboard and the VM contend). Its screen lock isn't the gate's then: the guest's window doesn't sit behind it.
+  public var idle: IdleSource?
   /// The quiet gate before each rep (on by default from the CLI, as locally). It reads the remote Mac, where the reps
   /// run (`remoteLoad`), unless `load` names another machine (the VM runner: its host). nil: no gate.
   public var quiet: QuietGate?
   public var load: LoadSource?
-  /// The machine the quiet gate reads, as its messages name it (default: the host).
+  /// The machine the quiet gate (and an `idle` source) reads, as its messages name it (default: the host).
   var quietPlace: String?
   public var quietPoll = 0.5
   var quietTimedOut = false
@@ -272,8 +275,9 @@ public final class SSHRunner: Runner {
   public func run(_ exe: String, _ args: [String], env: [String: String], workDir: URL) throws -> Adapter.Output {
     try connect()
     // A window behind the lock screen is occluded and never active: the rep would be untrusted. Wait for the screen to
-    // be unlocked (and, with --idle, for the Mac to be idle).
-    if let gate { try waitForIdle(gate) } else if launch == .gui { try waitForUnlock() }
+    // be unlocked (and, with --idle, for the Mac to be idle; a VM's guest for its own unlock, then for its host's idle).
+    if let gate, idle == nil { try waitForIdle(gate) } else if launch == .gui { try waitForUnlock() }
+    if let gate, idle != nil { try waitForIdle(gate) }
     if let d = deadline, Date() >= d { throw RunnerStop.deadline(d) }
     // The quiet gate reads the machine the reps run on (or the VM's host), never this one.
     var machine: MachineState?
@@ -320,13 +324,13 @@ public final class SSHRunner: Runner {
       inp.fileHandleForWriting.write(Data(rep.utf8)); try? inp.fileHandleForWriting.close()
     }
     if let gate {
-      var last = try remoteIdle()
+      var last = try gateIdle()
       while child.running {
         Thread.sleep(forTimeInterval: poll)
         guard child.running else { break }
-        let now = (try? remoteIdle()) ?? IdleReading(idle: nil)
+        let now = (try? gateIdle()) ?? IdleReading(idle: nil)
         if let w = gate.interrupted(previous: last, now: now) {
-          log("\(name): interrupted: \(w); the rep is killed and redone"); onWait("interrupted on \(host): \(w)")
+          log("\(name): interrupted: \(w); the rep is killed and redone"); onWait("interrupted on \(idlePlace): \(w)")
           try? remoteKill(ctl)
           child.kill()
           _ = child.finish()
@@ -391,13 +395,23 @@ public final class SSHRunner: Runner {
     if said { log("\(host): unlocked: starting the rep") }
   }
 
+  /// What the idle gate reads: the remote Mac, or `idle` (a VM's host) without its screen lock.
+  func gateIdle() throws -> IdleReading {
+    guard let idle else { return try remoteIdle() }
+    var r = idle.read(); r.locked = nil
+    return r
+  }
+
+  /// The machine the idle gate reads, as its messages name it.
+  var idlePlace: String { idle == nil ? host : quietPlace ?? "this Mac" }
+
   func waitForIdle(_ gate: IdleGate) throws {
     var lastKind: String?
     while true {
-      let r = try remoteIdle()
-      guard let w = gate.wait(r) else { return }
+      let r = try gateIdle()
+      guard let w = gate.wait(r) else { if lastKind != nil { log("\(idlePlace): idle \(Int(r.idle ?? 0)) s ≥ \(Int(gate.threshold)) s: starting the rep") }; return }
       if w.kind != lastKind {
-        let t = "waiting on \(host): " + (w == .locked ? "its screen is locked: a window behind the lock screen is never active (unlock it, or turn off the screen lock there)" : w.text(threshold: gate.threshold))
+        let t = "waiting on \(idlePlace): " + (w == .locked ? "its screen is locked: a window behind the lock screen is never active (unlock it, or turn off the screen lock there)" : w.text(threshold: gate.threshold))
         log(t); onWait(t); lastKind = w.kind
       }
       if let d = deadline, Date() >= d { throw RunnerStop.deadline(d) }

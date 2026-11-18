@@ -88,7 +88,15 @@ public final class SweepRun {
     let parametric = isParametric(own) ? own : isParametric(m?.defaultFixture) ? m?.defaultFixture : fixtures.first { $0["parametric"]?.object?.isEmpty == false }?["name"]?.string
     let wantsFixtureParam = parsed.contains { p in p.name.hasPrefix("fixture:") || (m?.knobs.contains { $0.name == p.name } != true && fixtures.contains { $0["parametric"]?[p.name] != nil }) }
     guard let fixture = o.fixture ?? (wantsFixtureParam ? parametric : nil) ?? own ?? fixtures.first?["name"]?.string else { throw PLError.usage("pass --fixture: the bench's manifest names none") }
-    if let m, !m.fixtures.isEmpty, entry(fixture) == nil { throw PLError.usage("unknown fixture '\(fixture)'; the bench has \(m.fixtureNames.joined(separator: ", "))") }
+    // Only the manifest's fixtures, never an adapter's file: (or other scheme:) form: a sweep is a record anyone can run
+    // again from the bench alone (the owner's decision).
+    if let m, !m.fixtures.isEmpty, entry(fixture) == nil {
+      if let s = Manifest.fixtureScheme(fixture) {
+        throw PLError.usage("sweep takes only the fixtures the bench's manifest lists (\(m.fixtureNames.joined(separator: ", "))), so a sweep can be run again from the bench alone: not a \(s): fixture. "
+                            + "Sweep a listed fixture, or ask the owner to add yours to the bench's fixtures (a change to the bench is theirs)")
+      }
+      throw PLError.usage("unknown fixture '\(fixture)'; the bench has \(m.fixtureNames.joined(separator: ", "))")
+    }
     let fp = params(fixture)
     for i in parsed.indices {
       var n = parsed[i].name

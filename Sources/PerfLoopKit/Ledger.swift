@@ -118,6 +118,9 @@ public struct Champion: Codable, Sendable, Equatable {
   public var knobs: [String: String]?
   /// Set by hand (`champion set`, the owner's): who confirmed it and how. nil for a champion that won its place.
   public var setBy: OwnerFlagUse?
+  /// Marked merged by the owner over a dirty build (`champion merged`, whose check can't see uncommitted changes): who
+  /// confirmed it and how. nil when the merge was checked in full.
+  public var mergedBy: OwnerFlagUse?
 
   public init(experiment: String, build: Build, merged: Bool, parents: [String] = [], mergedAncestor: String?, objectives: [String: Double] = [:], since: String = Clock.now()) {
     self.experiment = experiment; self.build = build; self.merged = merged; self.parents = parents; self.mergedAncestor = mergedAncestor

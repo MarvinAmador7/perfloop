@@ -394,6 +394,16 @@ public enum Stopping {
     return r
   }
 
+  /// How much of the time budget is spent and left (`exp status`): `budgetClock`'s reading against `timeBudgetS`.
+  public static func timeBudget(_ i: StopInput) -> TimeBudget {
+    let first = i.session.first { $0.expect != "same" && !notCandidates.contains($0.state) }
+    var t = TimeBudget(budgetS: Int(i.timeBudgetS))
+    guard let first, let c = budgetClock(i.session, now: i.now) else { return t }
+    t.startedAt = first.at; t.startedBy = first.experiment
+    t.spentS = Int(c.spentS); t.leftS = max(0, Int(i.timeBudgetS - c.spentS)); t.notCountedS = Int(c.featureS)
+    return t
+  }
+
   /// Lines that aren't an optimisation candidate's: the session's start, an owner's champion lines (set, merged),
   /// `perfloop run`'s and `perfloop baseline`'s measurements.
   static let notCandidates: Set<String> = ["session", ExpState.promoted.rawValue, "merged", "measure", "baseline"]
@@ -412,5 +422,30 @@ public enum Stopping {
       feature += max(0, b.timeIntervalSince(max(a, start)))
     }
     return (max(0, now.timeIntervalSince(start) - feature), feature)
+  }
+}
+
+/// The session's time budget at a glance (`exp status`, its `--json` and the MCP `status` tool): the stopping rule's
+/// clock (`Stopping.budgetClock`), which starts at the session's first optimisation experiment and doesn't count the
+/// time expect-same stages run. Seconds, rounded down.
+public struct TimeBudget: Codable, Sendable, Equatable {
+  public var budgetS: Int
+  /// When the clock started (the first optimisation experiment's first ledger line) and that experiment; nil: not yet.
+  public var startedAt: String?
+  public var startedBy: String?
+  public var spentS = 0
+  public var leftS: Int
+  /// Expect-same stages since the clock started, not counted in `spentS`.
+  public var notCountedS = 0
+  public init(budgetS: Int) { self.budgetS = budgetS; leftS = budgetS }
+
+  /// `time budget: 34 of 120 min spent, 86 min left (…)`.
+  public var line: String {
+    let b = budgetS / 60
+    guard startedAt != nil else {
+      return "time budget: \(b) min, not started: the clock starts at this session's first optimisation experiment (expect-same checks don't count)"
+    }
+    let skipped = notCountedS >= 60 ? "; \(notCountedS / 60) min of expect-same stages not counted" : ""
+    return "time budget: \(spentS / 60) of \(b) min spent, \(max(0, b - spentS / 60)) min left (since exp \(startedBy ?? "?"), the first optimisation experiment, at \(startedAt!)\(skipped))"
   }
 }

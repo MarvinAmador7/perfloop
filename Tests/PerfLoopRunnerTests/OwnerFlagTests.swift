@@ -256,7 +256,7 @@ final class OwnerFlagTests: FakeBenchCase {
     // A commit on main that doesn't contain the build: not the PR's merge.
     m = refusal { try self.loop.markMerged(commit: firstMain) }
     XCTAssertTrue(m.contains("doesn't contain champion"), m); XCTAssertTrue(m.contains("build commit \(built.prefix(12))"), m)
-    XCTAssertTrue(m.contains("squashed or rebased"), m); XCTAssertTrue(m.contains("perfloop champion set BUILD --merged"), m)
+    XCTAssertTrue(m.contains("If the PR was squash-merged or rebased, the champion's build commit is not on main and never will be, so champion merged keeps refusing it: ask the owner to set the champion from a build of main (perfloop champion set BUILD --merged)"), m)
     XCTAssertEqual(store.champion()?.merged, false, "a refusal changes nothing")
     XCTAssertFalse(store.ledger.entries().contains { $0.state == "merged" })
 
@@ -282,6 +282,70 @@ final class OwnerFlagTests: FakeBenchCase {
     // A champion whose build records no commit can't be checked.
     try championFrom("")
     XCTAssertTrue(refusal { try self.loop.markMerged(commit: merge) }.contains("records no commit"))
+  }
+
+  /// A squash-merged (or rebased) PR: main has the change, not the build commit. champion merged refuses, every time, and
+  /// says the way on is the owner's champion set on a build of main.
+  func testASquashMergedChampionIsRefusedWithTheOwnersWayOn() throws {
+    let built = try appRepo()
+    try championFrom(built)
+    try git("checkout", "-q", "main"); try git("commit", "-q", "--allow-empty", "-m", "the fix (squashed)")
+    let squash = try git("rev-parse", "HEAD")
+    var m = refusal { try self.loop.markMerged(commit: squash) }
+    XCTAssertTrue(m.contains("doesn't contain champion"), m)
+    XCTAssertTrue(m.hasSuffix(Loop.squashed), m)
+    // The PR's branch deleted after the squash: the build commit isn't in the checkout at all. The same way on.
+    try git("branch", "-q", "-D", "work"); try git("reflog", "expire", "--expire=now", "--all"); try git("gc", "-q", "--prune=now")
+    m = refusal { try self.loop.markMerged(commit: squash) }
+    XCTAssertTrue(m.contains("isn't in this checkout"), m); XCTAssertTrue(m.hasSuffix(Loop.squashed), m)
+    XCTAssertEqual(store.champion()?.merged, false)
+  }
+
+  /// A dirty champion's uncommitted changes can't be checked against main: champion merged is the owner's for it,
+  /// through the same gate as champion set, and the use is recorded like an owner flag's.
+  func testADirtyChampionIsMarkedMergedOnlyByTheOwner() throws {
+    let built = try appRepo()
+    let e = try store.add(try bench("dirty", ["CPU": "40", "COMMIT": built, "DIRTY": "true"]))
+    try loop.setChampion(build: e.build.hash!, merged: false, scenario: "step", fixture: "crew17")
+    let merge = try mergeWork()
+    // The agent (no owner): refused before anything is checked, with what to do instead.
+    var m = refusal { try self.loop.markMerged(commit: merge) }
+    XCTAssertTrue(m.contains("has uncommitted changes, and those can't be checked against main (only its commit can)"), m)
+    XCTAssertTrue(m.contains("ask the owner to set a clean build of main as the champion (build main with nothing uncommitted, then perfloop champion set BUILD --merged)"), m)
+    XCTAssertEqual(store.champion()?.merged, false); XCTAssertFalse(store.ledger.entries().contains { $0.state == "merged" })
+    // The CLI's gate says the same, for an agent's shell (no terminal, no PERFLOOP_OWNER) …
+    let c = try XCTUnwrap(store.champion())
+    XCTAssertThrowsError(try gate().0.check(command: "champion merged", because: Loop.dirtyMerge(c))) { e in
+      let m = "\(e)"
+      XCTAssertTrue(m.hasPrefix("champion \(c.experiment)'s build [") && m.contains("marking it merged is the owner's say. Nothing shows the owner is running this"), m)
+      XCTAssertTrue(m.contains("Instead: ask the owner to set a clean build of main as the champion"), m)
+    }
+    // … and asks at a terminal.
+    let (yes, asked) = gate(terminal: true, answer: "yes")
+    loop.owner = try yes.check(command: "champion merged", because: Loop.dirtyMerge(c))
+    XCTAssertTrue(asked()[0].contains("has uncommitted changes"), asked()[0])
+    // The owner confirmed: still checked against main, then recorded.
+    m = refusal { try self.loop.markMerged(commit: "0123456789abcdef") }
+    XCTAssertTrue(m.contains("isn't a commit in this checkout"), m); XCTAssertEqual(store.champion()?.merged, false)
+    let (after, v) = try loop.markMerged(commit: merge)
+    XCTAssertTrue(after.merged)
+    XCTAssertTrue(v.checked.hasSuffix("the build was dirty: its uncommitted changes weren't checked (the owner's say)"), v.checked)
+    XCTAssertEqual(after.mergedBy?.flag, "champion merged"); XCTAssertEqual(after.mergedBy?.via, "tty"); XCTAssertEqual(store.champion()?.mergedBy, after.mergedBy)
+    XCTAssertTrue(after.mergedBy!.effect.contains("though its build was dirty"), after.mergedBy!.effect)
+    let l = try XCTUnwrap(store.ledger.entries().last)
+    XCTAssertEqual(l.state, "merged"); XCTAssertEqual(l.by, "owner"); XCTAssertEqual(l.ownerFlags, ["champion merged"]); XCTAssertEqual(l.ownerVia, "tty")
+    XCTAssertTrue(l.text.contains("OWNER FLAG champion merged (confirmed at a terminal)"), l.text)
+    let x = try store.experiment(after.experiment)
+    XCTAssertEqual(x.ownerFlags?.last?.flag, "champion merged"); XCTAssertEqual(x.forced, true)
+    XCTAssertTrue(loop.status().contains("OWNER FLAG champion merged"), loop.status())
+    // A clean champion needs no owner: the existing check is all (testChampionMergedIsCheckedAgainstMainAndTheBuildCommit).
+    XCTAssertNil(try championFromClean(built).mergedBy)
+  }
+
+  func championFromClean(_ built: String) throws -> Champion {
+    loop.owner = nil
+    try championFrom(built)
+    return try loop.markMerged(commit: try git("rev-parse", "main")).champion
   }
 
   func testNoMCPToolSetsOrMergesTheChampion() throws {

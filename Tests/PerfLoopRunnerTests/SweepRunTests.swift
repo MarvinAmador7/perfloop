@@ -42,6 +42,11 @@ final class SweepRunTests: XCTestCase {
     XCTAssertThrowsError(try r.plan(exe: Self.script, manifest: manifest, options(["reel.slide=ca,spring"]), home: tmp))    // not a choice
     XCTAssertThrowsError(try r.plan(exe: Self.script, manifest: manifest, options(["steps=8"]), home: tmp))                 // nothing swept
     XCTAssertNoThrow(try r.plan(exe: Self.script, manifest: manifest, options(["param:colour=1,2"]), home: tmp))
+    // Only listed fixtures (reproducibility): an adapter's file: form is refused with the way on.
+    var o = options(["agents=4..8/4"]); o.fixture = "file:/tmp/crew.json"
+    XCTAssertThrowsError(try r.plan(exe: Self.script, manifest: manifest, o, home: tmp)) { e in
+      XCTAssertTrue("\(e)".hasPrefix("sweep takes only the fixtures the bench's manifest lists ("), "\(e)"); XCTAssertTrue("\(e)".contains("not a file: fixture"), "\(e)")
+    }
   }
 
   func testDryRunPrintsTheGridAndAnEstimateWithoutRunning() throws {
