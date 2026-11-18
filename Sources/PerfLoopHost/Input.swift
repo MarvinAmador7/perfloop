@@ -500,13 +500,23 @@ extension Run {
   @discardableResult
   public func expectFocus(_ target: FocusTarget, _ name: String? = nil) -> Bool {
     let f = focus()
-    let ok = target.matches(f, before: f, view: Focus.view(NSApp.keyWindow))
+    let ok = focusMatches(target, f, before: f)
     check(name ?? "focus \(target)", ok, ok ? "focus: \(f.text)" : "expected \(target), focus: \(f.text)")
     return ok
   }
 
   /// What has the keyboard now (`FocusRecord`).
   public func focus() -> FocusRecord { Focus.record(bench: window) }
+
+  /// Whether the focus is `target`. An identifier no view carries (SwiftUI puts `.accessibilityIdentifier` on its
+  /// accessibility element, not on the AppKit view it hosts) matches when that element's frame holds the focused view.
+  func focusMatches(_ target: FocusTarget, _ after: FocusRecord, before: FocusRecord) -> Bool {
+    let v = Focus.view(NSApp.keyWindow)
+    if target.matches(after, before: before, view: v) { return true }
+    guard case .identifier(let id) = target.kind, let view = v, let w = view.window, let (ew, frame) = element(identifier: id), ew === w else { return false }
+    let r = view.convert(view.bounds, to: nil)
+    return frame.insetBy(dx: -2, dy: -2).contains(CGPoint(x: r.midX, y: r.midY))
+  }
 
   /// The view with this identifier (`NSView.identifier` or its accessibility identifier) in the bench window and the
   /// windows it owns.

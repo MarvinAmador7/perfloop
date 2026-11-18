@@ -91,6 +91,8 @@ struct RowContent: View {
     .frame(height: 44)
     .background(selected ? Color.accentColor.opacity(0.25) : Color.clear)
     .contentShape(Rectangle())
+    .accessibilityElement(children: .combine)
+    .accessibilityIdentifier("row-\(item.id)")
   }
 }
 

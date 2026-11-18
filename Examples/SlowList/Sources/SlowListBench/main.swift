@@ -37,12 +37,15 @@ bench.scenario("filter", summary: "Type a filter: the list narrows with each key
   run.check("narrowed", run.lastEvent("list.count") == model.visible.count, "the list shows \(run.lastEvent("list.count") ?? -1) of \(model.visible.count) items")
 }
 
-bench.scenario("find", summary: "Find with ⌘F, type a filter, clear it with ⌘K: real keys through the app's menu bar and the field editor",
+bench.scenario("find", summary: "Click a row, find with ⌘F, type a filter, clear it with ⌘K: real clicks and keys through the app's menu bar and field editor",
                kind: .latency, guards: ["checks", "rows-drawn"]) { run in
   let model = ListModel.sample(count: run.fixture.int("rows", 1000))
   ListMenu.install(for: model)
   try await run.show(view: ListContainerView(model: model), size: bench.windowSize)
-  // Each step: what fired (or didn't), where the keyboard went, and with --pictures, the window before and after.
+  // Each step: what fired (or didn't), what a click hit, where the keyboard went, and with --pictures, the window
+  // before and after. A row's identifier is SwiftUI's accessibility identifier: the click finds its element.
+  await run.click(identifier: "row-3", until: { model.selection == 3 })
+  run.check("selected", model.selection == 3, "selection \(model.selection.map(String.init) ?? "none") after clicking row 3")
   await run.press("⌘F", expect: "Find…", expectFocus: .identifier("filter"), until: { run.focus().fieldEditor == true })
   let want = model.items.filter { $0.title.localizedCaseInsensitiveContains("ember") }.count
   await run.type("ember", expectFocus: .unchanged, until: { run.lastEvent("list.count") == want })

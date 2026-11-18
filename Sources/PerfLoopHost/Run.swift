@@ -173,7 +173,7 @@ import PerfLoopProbe
                                    notes: stepNotes, causes: nonEmpty(recorder.causes.causes(from: at, to: end)))
     var fc = FocusChange(before: focusBefore, after: focus())
     if let e = expectFocus {
-      let ok = e.matches(fc.after, before: fc.before, view: Focus.view(NSApp.keyWindow))
+      let ok = focusMatches(e, fc.after, before: fc.before)
       fc.expected = e.description; fc.matched = ok
       check("focus \(name)", ok, ok ? fc.text : "expected \(e), \(fc.text)")
     } else if fc.changed && !input {
