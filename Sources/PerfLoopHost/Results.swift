@@ -123,6 +123,10 @@ public struct StepRecord: Codable, Sendable, Equatable {
   public var causes: [Cause]?
   /// A replayed gesture's: how closely the content followed the fingers (`run.swipe`, C9).
   public var smoothness: Smoothness?
+  /// What had the keyboard before the action and after the step settled (PerfLoopHost records it for every step).
+  public var focus: FocusChange?
+  /// `run.press` / `type` / `key` / `click`: what the input did (the menu item fired, the view hit, what took it).
+  public var input: InputRecord?
 }
 
 /// Whether the window was where SwiftUI and AppKit draw promptly: active app, key, visible, not occluded. A rep in any

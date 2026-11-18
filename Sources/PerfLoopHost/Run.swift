@@ -22,7 +22,7 @@ import PerfLoopProbe
   /// The scenario's parameters: its defaults, then `--set k=v`.
   public let params: [String: String]
   public let rep: Int
-  public private(set) var window: NSWindow?
+  public internal(set) var window: NSWindow?
   let recorder: Recorder
   let activate: Bool
   let sampler: MainThreadSampler?
@@ -38,6 +38,11 @@ import PerfLoopProbe
   var recordRequest: RecordRequest?
   var recorded: [(String, PerfLoopProbe.Gesture)] = []
   var recordFailures: [String] = []
+  /// `--pictures DIR` (`PERFLOOP_PICTURES`): where input steps write the window before and after, when it changed.
+  var picturesDir: String?
+  var keyMapCache: KeyMap?
+  /// An identifier lookup turned SwiftUI's accessibility tree on in this rep (`element(identifier:)`).
+  var accessibilityTreeOn = false
   /// The ink guard: every region judged in this rep, the floor when a region names none (`ink.min`), and where the
   /// crops go (`<artifacts>/ink`).
   var inkResults: [InkRegionResult] = []
@@ -131,14 +136,22 @@ import PerfLoopProbe
   /// `ink`: regions that must show drawn content once the step has come to rest (the ink guard). They are judged after
   /// the step, in run-loop turns of their own whose time, frames and stretches are left out of every number, and the
   /// rep's `guards[]` gets one `ink` result with a crop of each region (`<artifacts>/ink/`).
+  ///
+  /// The step records the focus before the action and after it settled (`steps[].focus`). `expectFocus`: where the
+  /// keyboard must be then, else the check `focus <step>` fails; without it, a step whose focus moved says so in its
+  /// notes (a palette that closed and left the keyboard nowhere is a classic bug).
   @discardableResult
-  public func step(_ name: String, timeoutMs: Double = 5000, quietMs: Double = 100, until: (() -> Bool)? = nil, ink: [InkRegion] = [], _ action: () -> Void) async -> StepRecord {
-    let r = await measuredStep(name, timeoutMs: timeoutMs, quietMs: quietMs, until: until, action)
+  public func step(_ name: String, timeoutMs: Double = 5000, quietMs: Double = 100, until: (() -> Bool)? = nil, ink: [InkRegion] = [], expectFocus: FocusTarget? = nil,
+                   _ action: () -> Void) async -> StepRecord {
+    let r = await measuredStep(name, timeoutMs: timeoutMs, quietMs: quietMs, until: until, expectFocus: expectFocus, action)
     if !ink.isEmpty { await self.ink(ink, after: name) }
     return r
   }
 
-  func measuredStep(_ name: String, timeoutMs: Double, quietMs: Double, until: (() -> Bool)?, _ action: () -> Void) async -> StepRecord {
+  /// `input`: an input step, whose line reports the focus itself (no note when it moves).
+  func measuredStep(_ name: String, timeoutMs: Double, quietMs: Double, until: (() -> Bool)?, expectFocus: FocusTarget? = nil, input: Bool = false,
+                    _ action: () -> Void) async -> StepRecord {
+    let focusBefore = focus()
     let at = now
     // The `step` signpost a profile's per-step call trees are cut on (cheap when nothing records it).
     let sp = StepSignposts.poster, spID = sp.makeSignpostID()
@@ -170,8 +183,17 @@ import PerfLoopProbe
     let settle = max(0, recorder.lastBusyEnd - at)
     if until == nil { latency = settle }
     let ins: Int? = { guard let a = ins0, let b = ins1, b > a else { return nil }; return Int(b - a) }()
-    let r = recorder.timeline.step(name: name, at: at, end: end, latencyMs: latency, settleMs: settle, settled: settled, cpuMs: cpu1 - cpu0, instructions: ins,
+    var r = recorder.timeline.step(name: name, at: at, end: end, latencyMs: latency, settleMs: settle, settled: settled, cpuMs: cpu1 - cpu0, instructions: ins,
                                    notes: stepNotes, causes: nonEmpty(recorder.causes.causes(from: at, to: end)))
+    var fc = FocusChange(before: focusBefore, after: focus())
+    if let e = expectFocus {
+      let ok = await focusMatches(e, fc.after, before: fc.before)
+      fc.expected = e.description; fc.matched = ok
+      check("focus \(name)", ok, ok ? fc.text : "expected \(e), \(fc.text)")
+    } else if fc.changed && !input {
+      r.notes.append("\(fc.text) (the step has no expectFocus: say where the keyboard should land)")
+    }
+    r.focus = fc
     steps.append(r)
     return r
   }

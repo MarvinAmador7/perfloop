@@ -256,6 +256,40 @@ window and records a hand's gestures over it (a local event monitor: deltas, pha
 `${PERFLOOP_HOME:-~/.perfloop}/APP/gestures/NAME.json`, where `perfloop gestures list` looks; it refuses a path inside a
 git checkout. `gestures [--json]` lists the built-in ones.
 
+## 6c. Input and focus (optional)
+
+A step that presses keys or clicks can say what the input did, so a reader (and `perfloop run`) can tell "the shortcut
+fired the wrong item" from "the feature is broken". Two optional fields per step in the `run` result (SCHEMAS.md §3):
+
+- `steps[].input`: `{ kind: press|type|key|click, outcome, line, … }`. `outcome` is `fired` (the menu item expected, or
+  any), `fired-other`, `not-fired` (with `taken`: `key-equivalent`, `responder` or `unhandled`), `delivered` (keys and
+  text with no menu item), `hit` / `missed` (a click that landed on another view than the one asked for) / `nothing`,
+  or `undelivered`. `line` is the one line a person reads: `press ⌘K → fired menu 'Search…' (File › Search…); focus:
+  nothing (the bench window is key) → NSTextField #palette.field "Search" (field editor)`. `pictures` (optional):
+  `{ before, after, diff, changedPct, changedRect }`, absolute paths to PNGs of the window around a step that changed
+  it, under `$PERFLOOP_PICTURES` (which `perfloop run` and `baseline` set per rep; they keep one rep's pictures in the
+  run's `input/` folder and print `look at:` lines).
+- `steps[].focus`: `{ before, after, expected?, matched? }`, each a focus record `{ keyWindow, mainWindow,
+  firstResponder, fieldEditor, editing, inside }`. A step whose focus moved with no expectation says so in its
+  `notes` (`focus: … → … (the step has no expectFocus …)`), and `perfloop run` prints that note.
+
+A check the input implies (the shortcut fired the item expected, the click hit the view asked for, the focus landed
+where expected) goes in `checks[]` like any other.
+
+PerfLoopHost does all of it: `run.press("⇧⌘D", expect: "Split Down")`, `run.key(.escape)`, `run.type("query")`,
+`run.click(view)` / `click(identifier:)` / `click(at:)`, `expectFocus:` (and `ink:`, as on `run.step`) on any of them and on `run.step`, and
+`run.expectFocus(.identifier("palette.field"))`. The events are made from the virtual key and modifiers (a CGEvent that
+is never posted, made into an NSEvent, so AppKit takes the characters from the current keyboard layout and matches
+⇧⌘D to ⇧⌘D, which a hand-made `NSEvent.keyEvent` doesn't: the study's misrouted ⇧⌘D), the modifiers pressed and
+released around the key as a hand does, and put on the app's own queue with `NSApp.postEvent` (not `sendEvent`, which
+skips the queue and leaves `NSApp.currentEvent` stale). Nothing is posted to the system. A SwiftUI view's
+`.accessibilityIdentifier` lives on its accessibility element, not on an NSView: `click(identifier:)` and an identifier
+`expectFocus` find it there, turning on SwiftUI's accessibility tree (`AXEnhancedUserInterface`, as VoiceOver does) for
+the lookup; SwiftUI may then keep the tree up to date for the rest of the rep, which the step says, so a scenario
+measured for speed clicks a view or a point instead. It proves routing through
+the app (key equivalents, menus, the responder chain, field editors, gesture recognizers), not the HID path, input
+methods or accessibility clients. A bench of your own can do the same; the fields are what the runner reads.
+
 ## 6b. The window lock
 
 Two windows on one Mac spoil each other's numbers. A bench verb that opens a window when someone runs it directly (`run`,
@@ -279,8 +313,8 @@ adapter that can't can be wrapped instead: `perfloop lock -- BENCH ab …`.
 |---|---|---|---|
 | `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `fixtureSchemes`, `profileEnv`, `harness` added 2026-11 |
 | `perfloop.build` | 1 | adapter (`tool.build`), store (`build.json`) | stable |
-| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11), `guards[].inkRegions` and `worstStretches[].benchSamples`/`topBench` (2026-11) |
-| `perfloop.measure`, `perfloop.baseline` | 1 | runner (`runs/<id>/run.json`, `baselines/<scenario>/baseline.json`) | new (2026-11); a pair's `Side` gained `fixture` (what the rep ran) |
+| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11), `guards[].inkRegions` and `worstStretches[].benchSamples`/`topBench` (2026-11), `steps[].input` and `steps[].focus` (§6c, 2026-11) |
+| `perfloop.measure`, `perfloop.baseline` | 1 | runner (`runs/<id>/run.json`, `baselines/<scenario>/baseline.json`) | new (2026-11); a pair's `Side` gained `fixture` (what the rep ran); `input` (one rep's input lines and pictures, §6c) |
 | `perfloop.snapdiff` | 1 (reads `deskbench.snapdiff/1`) | adapter `snapdiff` | stable |
 | `perfloop.experiment`, `perfloop.ledger`, `perfloop.champion` | 1 | runner (store) | stable since Phase 2 |
 | `perfloop.sweep`, `perfloop.queue`, `perfloop.gesture`, `perfloop.gestures` | 1 | runner / probe | stable since Phase 3–4; `perfloop.sweep` gained `walls` (2026-11) |

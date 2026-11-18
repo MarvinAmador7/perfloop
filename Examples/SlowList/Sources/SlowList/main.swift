@@ -8,7 +8,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ n: Notification) {
     let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
     w.title = "SlowList"
-    w.contentView = MainActor.assumeIsolated { ListContainerView(model: ListModel.sample(count: 1000)) }
+    w.contentView = MainActor.assumeIsolated {
+      let model = ListModel.sample(count: 1000)
+      ListMenu.install(for: model)
+      return ListContainerView(model: model)
+    }
     w.center(); w.makeKeyAndOrderFront(nil)
     window = w
     NSApp.activate(ignoringOtherApps: true)
