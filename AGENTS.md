@@ -116,9 +116,16 @@ perfloop baseline S --bench PATH [--reference S2]   # first numbers + a referenc
   feature from a slow Mac ("this Mac runs 12 % slower than at the champion's full"). Use one whenever the Mac is shared.
 - **A check must pass in every trusted rep.** One that passes in some is `flaky 2/3`, and a failure (exit 3 for `run`,
   a veto in `exp`): it races something, usually the first commit after a structural change. Fix the check (ADAPTER.md
-  §3b: `until:`, `wait`, `settle`), never rerun until it passes.
+  §3b: `until:`, `wait`, `settle`), never rerun until it passes. A check or guard the champion fails too in the same
+  pairs vetoes nothing (`… fails on the champion too …: it can't judge this candidate`): it is the bench's to fix, so
+  tell the owner in your PR instead of working around it.
 - **Look at the pictures.** The built-in ink guard (a scenario's `run.step(…, ink: [regions])`) leaves a crop of every
   region it judged; `run` and `explain` print `look at (ink…): PATH`. Open them: a region can pass with the wrong content.
+- **Find targets by view, point or rect in timed scenarios.** In a scenario of your own, name ink and look regions by a
+  view (`.view`, `.find { … }`) or a rect, and click a view or a point (`run.click(view)`, `run.click(at:)`). A SwiftUI
+  `.accessibilityIdentifier` (`click(identifier:)`, `.identifier` regions, `expectFocus(.identifier(…))`) is found
+  through SwiftUI's accessibility tree, which the lookup turns on and every later step of the rep pays for, and a region
+  by identifier may be `missing`: keep identifiers for scenarios that check behaviour, not speed (ADAPTER.md §3b).
 - **The bench measuring itself** shows as `warning: N % of the worst stretch … is the bench's own code`: move the check
   out of the step (`await run.check(name) { … }` or the ink guard run off the clock) before reading the step's numbers.
 - **Untrusted reps are named, never quoted.** A `run` whose reps were all untrusted prints `UNTRUSTED` and no number;

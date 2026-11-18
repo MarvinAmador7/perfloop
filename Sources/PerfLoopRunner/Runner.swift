@@ -200,7 +200,9 @@ public final class LocalRunner: Runner {
       held?(); held = nil
     }
     defer { held?() }
-    let child = try Child(exe, args, env: env.merging(WindowLock.childEnv) { a, _ in a }, inherit: inherit)
+    // The adapter inherits this process's environment without the per-call variables (Adapter.perCall).
+    let own = env.merging(WindowLock.childEnv) { a, _ in a }
+    let child = try Child(exe, args, env: inherit ? Adapter.inherited.merging(own) { $1 } : own, inherit: false)
     var why: String?
     while child.running {
       Thread.sleep(forTimeInterval: gate == nil ? max(poll, 1) : poll)

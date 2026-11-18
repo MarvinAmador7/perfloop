@@ -65,7 +65,9 @@ bench.scenario("find", summary: "Click a row, find with ⌘F, type a filter, cle
   ListMenu.install(for: model)
   try await run.show(view: ListContainerView(model: model), size: bench.windowSize)
   // Each step: what fired (or didn't), what a click hit, where the keyboard went, and with --pictures, the window
-  // before and after. A row's identifier is SwiftUI's accessibility identifier: the click finds its element.
+  // before and after. A row's identifier is SwiftUI's accessibility identifier: the click finds its element, which
+  // turns SwiftUI's accessibility tree on for the rest of the rep. Fine here (this scenario checks behaviour); a timed
+  // scenario clicks a view or a point instead (run.click(view), run.click(at:)).
   await run.click(identifier: "row-3", until: { model.selection == 3 })
   run.check("selected", model.selection == 3, "selection \(model.selection.map(String.init) ?? "none") after clicking row 3")
   await run.press("⌘F", expect: "Find…", expectFocus: .identifier("filter"), until: { run.focus().fieldEditor == true })

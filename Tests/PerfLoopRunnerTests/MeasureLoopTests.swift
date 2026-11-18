@@ -71,6 +71,35 @@ final class MeasureLoopTests: FakeBenchCase {
     XCTAssertTrue(text.contains("input (rep 1):\n  press ⌘K → fired menu 'Search…'; focus: nothing → #palette.field\n    note: the window wasn't key\n    look at: runs/m0001/input/press-k.after.png"), text)
   }
 
+  /// Input pictures are `run`'s and `baseline`'s only (owner decision, 18 November 2026): a measuring pair (an
+  /// experiment through the adapter's `ab` or through `run`) and a `--reference` rep take none, even when perfloop's
+  /// own environment has PERFLOOP_PICTURES (a shell or an MCP client that exported it); `run` gives each rep its own.
+  func testInputPicturesAreRunsAndBaselinesOnly() throws {
+    let stray = tmp.appendingPathComponent("stray-pictures")
+    setenv("PERFLOOP_PICTURES", stray.path, 1)
+    defer { unsetenv("PERFLOOP_PICTURES") }
+    try baseline(["INPUT": "1"])
+    for via in ["ab", "run"] {
+      var o = Loop.NewOptions(hypothesis: "the palette through \(via)"); o.bench = try bench("cand-\(via)", ["CPU": "38", "INPUT": "1"]); o.via = via
+      let e = try loop.new(o)
+      XCTAssertNotNil(e.screen, "screened through \(via)")
+      _ = try? loop.full(e.id)
+    }
+    XCTAssertFalse(adapterCalls("run").isEmpty); XCTAssertFalse(adapterCalls("ab").isEmpty)
+    XCTAssertEqual(adapterCalls("pictures"), [], "no measuring pair takes pictures")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: stray.path))
+
+    let before = adapterCalls("run").count
+    var o = options(try bench("cand-run2", ["INPUT": "1"]), "step", reps: 2); o.reference = "step"
+    let m = try loop.runScenario(o)
+    XCTAssertEqual(adapterCalls("run").count - before, 4, "two reps, each beside a reference rep")
+    let dir = store.measureDir(m.id).path
+    XCTAssertEqual(adapterCalls("pictures"), ["pictures run step \(dir)/r1/pictures", "pictures run step \(dir)/r2/pictures"],
+                   "the measured reps only, each in its own folder; the reference reps take none")
+    XCTAssertEqual(m.input?.pictures.first?.count, 3)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: stray.path))
+  }
+
   func testUntrustedRepsAreNamedNeverQuoted() throws {
     try baseline()
     setenv("FAKE_ENV_QUIET", "false", 1)

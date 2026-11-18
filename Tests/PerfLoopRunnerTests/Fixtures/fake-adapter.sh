@@ -134,6 +134,7 @@ ab)
     esac
   done
   log "ab $sc $fixture guards=$PERFLOOP_GUARDS params=$PERFLOOP_GUARD_PARAMS A=$a B=$b"
+  if [ -n "$PERFLOOP_PICTURES" ]; then log "pictures ab $sc $PERFLOOP_PICTURES"; fi
   if [ "$(val "$b" FAKE_AB_FAIL)" = 1 ] || [ "$(val "$a" FAKE_AB_FAIL)" = 1 ]; then echo "ab: child crashed" >&2; exit 2; fi
   # FAKE_REMOTE_TOUCH (the remote idle test): on the first rep only, once the runner has read the idle time since this
   # rep started, "someone touches the Mac": the fake ioreg's next reading is 0 s. No timing involved.
@@ -176,6 +177,7 @@ run)
   sc=$1; shift; fixture=crew17
   while [ $# -gt 0 ]; do case "$1" in --fixture) fixture=$2; shift 2 ;; --reps|--set|--quiet-check) shift 2 ;; *) shift ;; esac; done
   log "run $sc $fixture knobs=$PERFLOOP_KNOBS guards=$PERFLOOP_GUARDS $self"
+  if [ -n "$PERFLOOP_PICTURES" ]; then log "pictures run $sc $PERFLOOP_PICTURES"; fi
   c=$(cpu_of "$self" "$fixture" "$PERFLOOP_KNOBS" "$$")
   total=$(awk -v c="$c" 'BEGIN { printf "%.1f", c * 8 }')
   lat=$(awk -v c="$c" 'BEGIN { printf "%.2f", c * 3 }')

@@ -90,6 +90,7 @@ The environment it runs with:
 | `PERFLOOP_GUARDS` | the guards to judge after each rep, comma separated (never `checks`: those always run) |
 | `PERFLOOP_GUARD_PARAMS` | `k=v,…` from the champion's manifest (and only the owner's override) |
 | `PERFLOOP_ARTIFACTS` | the directory guard files go to (snapshots, the ink guard's crops under `ink/`); always set by the runner |
+| `PERFLOOP_PICTURES` | where input steps write the window before and after (§6c): set per rep by `perfloop run` and `baseline` only, never for an experiment's pairs, `--reference` reps or `profile` (perfloop doesn't pass on its own environment's) |
 
 The result (`perfloop.result/2`; `deskbench.result/1` is read the same way). The runner looks fields up by path, so
 extra fields are fine and missing optional ones fall back. What it reads, per rep (`reps[]`):
@@ -131,7 +132,8 @@ rep's result is reported and never counts, pass or fail. `run` and `baseline` fa
 in every trusted rep, and print it as `drawn flaky 2/3` or `drawn ✗ 0/3`; a screen, a full and an expect-same stage veto
 a check the candidate failed in a pair where the champion passed it, one line per check with the candidate's count
 (`drawn failed on the candidate in pair 2 (passed on the champion) · the candidate passed 2/3 (flaky: a failure)`). A
-check the champion fails in the same pairs judges nothing and the stage says so: it is the bench's to fix.
+check the champion fails in the same pairs judges nothing and vetoes nothing, and the stage says so (`… fails on the
+champion too …: it can't judge this candidate`): it is the bench's to fix (tell the owner; never rerun until it passes).
 
 ## 3a. What `perfloop run` and `perfloop baseline` use
 
@@ -160,9 +162,21 @@ and checks honest after a structural change (a sidebar, a palette, a split). `pe
 | `run.step(name, until: { … }) { action }` | When the change takes more than one commit to show (SwiftUI puts a new view in the window a frame or two after the state change), the step's latency is the action → the first frame after `until` held, and the step settles after that. Use it whenever "the first frame" might not be the one that shows the change |
 | `await run.wait(timeoutMs:) { … }` | Before a check, outside a step: wait (on every frame, probe event and stretch) until the view tree has what the check reads. A check right after a step can race the first commit and pass one rep, fail the next (`flaky`) |
 | `await run.settle()` | Wait for the window to come to rest (no main-thread stretch over 2 ms for 100 ms) before something that needs a still frame: a snapshot, a check of positions |
-| `run.step(…, ink: [regions])` | The **ink guard**: regions (`.view`, `.identifier`, `.rect` in points from the content's top-left, `.find { view }`) that must show drawn content once the step has come to rest. Each is drawn by its views (`cacheDisplay`) and fails when blank, all background (under `ink.min`, 0.5 % of its pixels unlike its most common colour), zero-size, outside the window or not found; every region leaves a PNG crop in `$PERFLOOP_ARTIFACTS/ink/`, pass or fail, and the rep's `guards[]` gets one `ink` record with them. `await run.ink(regions, after: "label")` judges at another moment |
+| `run.step(…, ink: [regions])` | The **ink guard**: regions (`.view`, `.find { view }`, `.rect` in points from the content's top-left, `.identifier`; prefer the first three, below) that must show drawn content once the step has come to rest. Each is drawn by its views (`cacheDisplay`) and fails when blank, all background (under `ink.min`, 0.5 % of its pixels unlike its most common colour), zero-size, outside the window or not found; every region leaves a PNG crop in `$PERFLOOP_ARTIFACTS/ink/`, pass or fail, and the rep's `guards[]` gets one `ink` record with them. `await run.ink(regions, after: "label")` judges at another moment |
 | `await run.check(name) { (pass, detail) }` | A check that costs something (pixels, a walk of the view tree): its work runs off the clock |
 | `run.windowState()`, snapshots, `profile` | the trust fields (§3), `snapshot-diff` (§5), the profiler (§6) |
+
+**Views, points and rects first; identifiers for functional scenarios.** An `.identifier` region, `click(identifier:)`
+and `expectFocus(.identifier(…))` look for an `NSView.identifier` first. A SwiftUI `.accessibilityIdentifier` is not on
+an NSView: it is found through SwiftUI's accessibility tree, which SwiftUI builds only for an assistive client, so the
+lookup turns it on (`AXEnhancedUserInterface`, as VoiceOver does) and SwiftUI may keep it up to date for the rest of the
+rep, which every later step pays for (an input step says so in its notes). A region by identifier may also be `missing` in a
+picture where the element isn't found. So name ink and look regions by a view (`.view`, `.find { … }`) or a rect, and
+in a scenario measured for speed click a view or a point (`run.click(view)`, `run.click(at:)`); keep `click(identifier:)`
+for functional scenarios whose numbers nobody reads for speed. Examples/SlowList is the pattern to copy: its timed
+scenarios (`select`, `details`, `filter`, `scroll`) find nothing by a SwiftUI identifier (the status line's identifier
+is an AppKit view's, the filter bar is a rect); only `find`, which checks that real clicks and keys land, clicks a row by
+its identifier.
 
 **Off the clock.** The ink guard and `await run.check` run in run-loop turns of their own: after the stretch the step
 ended in has closed, and then they let their own close before the scenario goes on, and their stretches, the frames they
@@ -233,7 +247,7 @@ PerfLoopHost does all of this; an adapter of its own (capcomd's deskbench) gets 
 
 | What | PerfLoopHost | A protocol-1 adapter must |
 |---|---|---|
-| Regions | one region model for the ink guard and the looks (§3b's `InkRegion`: `.view`, `.identifier`, `.rect` in points from the content's top-left, `.find`): every region a step names for the ink guard is a snapshot region too; add others with `bench.regions([…])` or `run.regions([…])`; a visible child window is a region by its `identifier` or title | write `X.layout.json` beside each capture with the regions' rects, and answer `snapdiff` with `looks[]` (§5) |
+| Regions | one region model for the ink guard and the looks (§3b's `InkRegion`: `.view`, `.find`, `.rect` in points from the content's top-left, `.identifier`, views and rects first: §3b): every region a step names for the ink guard is a snapshot region too; add others with `bench.regions([…])` or `run.regions([…])`; a visible child window is a region by its `identifier` or title | write `X.layout.json` beside each capture with the regions' rects, and answer `snapdiff` with `looks[]` (§5) |
 | Child windows (v7) | each visible child window and sheet of the bench window, at any depth, is drawn into the snapshot where it is on screen (its content over its background colour) and listed in `childWindows`; keep a panel up past the scenario's end with `run.atClose { panel.close() }` | draw `window.childWindows` and `sheets` into its `cacheDisplay` picture at their screen offsets |
 | Appearance (v11) | `--set appearance=light\|dark\|system` (light by default) sets the bench window's and `NSApp.appearance`, so panels, popovers and sheets follow; the result says `appearance`, the snapshot's file and layout carry it | set its windows' appearance from the parameter, list `appearances` in the manifest, write it into the layout |
 | Text size (v11) | `--set textSize=NAME`, refused unless the bench lists `bench.textSizes`; the scenario reads `run.textSize` and applies it through the app's own setting (macOS has no system text size an app follows) | the same, listing `textSizes` |
@@ -301,8 +315,9 @@ fired the wrong item" from "the feature is broken". Two optional fields per step
   or `undelivered`. `line` is the one line a person reads: `press ⌘K → fired menu 'Search…' (File › Search…); focus:
   nothing (the bench window is key) → NSTextField #palette.field "Search" (field editor)`. `pictures` (optional):
   `{ before, after, diff, changedPct, changedRect }`, absolute paths to PNGs of the window around a step that changed
-  it, under `$PERFLOOP_PICTURES` (which `perfloop run` and `baseline` set per rep; they keep one rep's pictures in the
-  run's `input/` folder and print `look at:` lines).
+  it, under `$PERFLOOP_PICTURES` (which `perfloop run` and `baseline` set per rep, and nothing else does: an
+  experiment's pairs and a profile measure without pictures; they keep one rep's pictures in the run's `input/` folder
+  and print `look at:` lines).
 - `steps[].focus`: `{ before, after, expected?, matched? }`, each a focus record `{ keyWindow, mainWindow,
   firstResponder, fieldEditor, editing, inside }`. A step whose focus moved with no expectation says so in its
   `notes` (`focus: … → … (the step has no expectFocus …)`), and `perfloop run` prints that note.
@@ -320,7 +335,10 @@ skips the queue and leaves `NSApp.currentEvent` stale). Nothing is posted to the
 `.accessibilityIdentifier` lives on its accessibility element, not on an NSView: `click(identifier:)` and an identifier
 `expectFocus` find it there, turning on SwiftUI's accessibility tree (`AXEnhancedUserInterface`, as VoiceOver does) for
 the lookup; SwiftUI may then keep the tree up to date for the rest of the rep, which the step says, so a scenario
-measured for speed clicks a view or a point instead. It proves routing through
+measured for speed clicks a view or a point instead (§3b). To say what took an event, PerfLoopHost wraps
+`NSResponder.mouseDown`/`keyDown` and `NSWindow.performKeyEquivalent` in the bench process, once, on the first input step:
+each wrapper notes the call while a step's input is in flight and runs AppKit's own implementation, so no event's route
+changes. It proves routing through
 the app (key equivalents, menus, the responder chain, field editors, gesture recognizers), not the HID path, input
 methods or accessibility clients. A bench of your own can do the same; the fields are what the runner reads.
 

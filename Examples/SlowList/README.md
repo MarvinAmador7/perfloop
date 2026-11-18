@@ -11,6 +11,15 @@ deliberately slow path, and its PerfLoop bench. It is the second app PerfLoop ru
 | `Package.swift` | depends on PerfLoop like an outside app; the `PerfLoopStamp` plugin on the bench target |
 | `walkthrough.sh` | the loop end to end on this app |
 
+**Timed scenarios find their targets by view, point or rect; only `find` uses identifiers.** `select`, `details`,
+`filter` and `scroll` are measured for speed: their regions are views (`rows`, the scroll view; `details`, the panel's
+content), an AppKit view's `identifier` (`status`) and a rect (`filter`), and they click nothing by identifier. A SwiftUI
+`.accessibilityIdentifier` (each row's `row-N`, the filter field's `filter`) is found through SwiftUI's accessibility
+tree, which the lookup turns on (`AXEnhancedUserInterface`) and every later step of the rep pays for. `find` checks that
+real clicks and keys land (the menu item fired, the row hit, the field editor focused), so it clicks `row-3` and expects
+focus in `filter` by identifier; its numbers aren't read for speed. Copy that split: in a timed scenario click a view or a
+point (`run.click(view)`, `run.click(at:)`), and keep `click(identifier:)` for functional ones (ADAPTER.md §3b).
+
 ## The slow path
 
 Every row's body reads the selection and computes its rank by sorting the whole list with localized comparisons. A

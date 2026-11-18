@@ -92,12 +92,16 @@ and the focus before and after.
 ```swift
 await run.press("⌘F", expect: "Find…", expectFocus: .identifier("filter"))  // fails the check when another item fires
 await run.type("ember", until: { run.lastEvent("list.count") == 12 })
-await run.click(identifier: "row-7")                                        // the view hit there, and what took the click
+await run.click(sidebarToggle)                                              // the view hit there, and what took the click
+await run.click(identifier: "row-7")                                        // a SwiftUI element: functional scenarios only
 ```
 
 `perfloop run` prints them (`press ⌘F → fired menu 'Find…' (List › Find…); focus: nothing → NSTextField #filter
 "Filter" (field editor)`) and, for a step that changed the window, the before and after pictures to look at. Nothing is
-sent to the system. See [ADAPTER.md](ADAPTER.md) §6c.
+sent to the system. Where the numbers matter, click, expect focus and name regions by a view, a point
+(`run.click(at:)`) or a rect: a SwiftUI `.accessibilityIdentifier` is found through SwiftUI's accessibility tree, which
+the lookup turns on and the rest of the rep pays for, so keep identifiers for scenarios that check behaviour, not speed. Input pictures are taken
+by `perfloop run` and `baseline` only, never while an experiment measures. See [ADAPTER.md](ADAPTER.md) §3b and §6c.
 
 ### Verify that a feature costs nothing
 

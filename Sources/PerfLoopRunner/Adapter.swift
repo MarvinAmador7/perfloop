@@ -19,12 +19,20 @@ public struct Adapter {
     public var json: JSONValue? { PLJSON.firstObject(in: stdout) }
   }
 
+  /// Variables the runner sets for one call and never passes on from its own environment: `PERFLOOP_PICTURES` (input
+  /// pictures are `perfloop run`'s and `baseline`'s, each rep's own folder; a measuring pair or a profile takes none,
+  /// even when the shell or MCP client that started perfloop exported it).
+  public static let perCall: Set<String> = ["PERFLOOP_PICTURES"]
+  /// This process's environment as an adapter inherits it: without `perCall`.
+  public static var inherited: [String: String] { ProcessInfo.processInfo.environment.filter { !perCall.contains($0.key) } }
+
   /// Runs the child to completion. stdout is captured; stderr goes to ours (`ab: A rep 1/1` progress) unless
-  /// `quiet`. `env` is added to this process's environment, or with `inherit` false is the child's whole environment.
+  /// `quiet`. `env` is added to this process's environment (`inherited`), or with `inherit` false is the child's whole
+  /// environment.
   public static func spawn(_ exe: String, _ args: [String], env: [String: String] = [:], cwd: String? = nil, quiet: Bool = false, inherit: Bool = true) throws -> Output {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: exe); p.arguments = args
-    var e = inherit ? ProcessInfo.processInfo.environment : [:]; for (k, v) in env { e[k] = v }; p.environment = e
+    var e = inherit ? inherited : [:]; for (k, v) in env { e[k] = v }; p.environment = e
     if let c = cwd { p.currentDirectoryURL = URL(fileURLWithPath: c) }
     let out = Pipe(); p.standardOutput = out
     p.standardError = quiet ? FileHandle.nullDevice : FileHandle.standardError
