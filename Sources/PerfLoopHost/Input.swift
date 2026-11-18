@@ -279,13 +279,15 @@ final class ChainEnd: NSResponder {
   }
 
   /// Waits up to `timeoutMs` for the marker. Outside NSApp's run loop (a test) it dispatches the queue itself, as the
-  /// run loop would.
+  /// run loop would. A control's tracking loop may discard what follows its mouse-up, the marker with it: a marker no
+  /// longer on the queue means everything before it was handled too.
   func waitDelivered(timeoutMs: Double) async {
     let until = Date().addingTimeInterval(timeoutMs / 1000)
     while !delivered, Date() < until {
       if !NSApp.isRunning {
         while !delivered, let e = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) { NSApp.sendEvent(e) }
       }
+      if !delivered, NSApp.nextEvent(matching: .applicationDefined, until: .distantPast, inMode: .default, dequeue: false) == nil { delivered = true }
       if !delivered { try? await Task.sleep(nanoseconds: 5_000_000) }
     }
   }
