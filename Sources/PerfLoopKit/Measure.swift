@@ -85,9 +85,11 @@ public struct MeasureSummary: Codable, Sendable, Equatable {
   public var untrusted: String?
   /// Every untrusted rep had its window wrong the same way: the build does that, a rerun can't help.
   public var deterministic: String?
-  /// Checks and guards that failed in a trusted rep (the feature's own checks).
+  /// Checks and guards that didn't pass in every trusted rep (the feature's own checks): failed, or flaky.
   public var checksFailed: [String] = []
   public var guardsFailed: [String] = []
+  /// Every check and guard counted over the trusted reps (`landed ✓ 3/3`, `drawn flaky 2/3`); nil before any.
+  public var checks: [CheckTally]?
   public init() {}
 }
 
@@ -173,10 +175,11 @@ public enum Measure {
     if !l.isEmpty { s.longestStretchMs = Stats.round(Stats.median(l), 2) }
     s.untrusted = untrustedSummary(reps)
     s.deterministic = deterministic(reps)
-    for r in ok {
-      for c in r.side.checksFailed where !s.checksFailed.contains(c) { s.checksFailed.append(c) }
-      for g in r.side.guards ?? [] where !g.pass && g.name != GuardNames.snapshotDiff && !s.guardsFailed.contains(g.name) { s.guardsFailed.append(g.name) }
-    }
+    // Per trusted rep: a check that passed in only some of them is flaky, and fails the run like one that never passed.
+    let t = Acceptance.tally(ok.map(\.side))
+    s.checks = t.isEmpty ? nil : t
+    s.checksFailed = t.filter { $0.kind == "check" && !$0.pass }.map(\.name)
+    s.guardsFailed = t.filter { $0.kind == "guard" && !$0.pass }.map(\.name)
     return s
   }
 
@@ -262,13 +265,23 @@ public enum Measure {
       if let h = s.hitchTimeRatioMsPerS { f.append("hitch \(Explain.fmt(h)) ms/s") }
       if let l = s.longestStretchMs { f.append("longest stretch \(Explain.fmt(l)) ms") }
       if !f.isEmpty { o.append("  frames: " + f.joined(separator: ", ")) }
-      o.append(s.checksFailed.isEmpty && s.guardsFailed.isEmpty ? "  checks: all passed" : "  FAILED: " + (s.checksFailed.map { "check \($0)" } + s.guardsFailed.map { "guard \($0)" }).joined(separator: ", "))
+      let t = s.checks ?? []
+      if s.checksFailed.isEmpty && s.guardsFailed.isEmpty {
+        o.append("  checks: all passed" + (t.isEmpty ? "" : " in every trusted rep: " + t.map(\.text).joined(separator: ", ")))
+      } else {
+        let bad = t.filter { !$0.pass }
+        o.append("  FAILED: " + bad.map { "\($0.kind) \($0.text)" }.joined(separator: ", ")
+                 + (bad.contains { $0.status == "flaky" } ? " (flaky: it passed in some trusted reps, not all; a failure)" : "")
+                 + (t.contains { $0.pass } ? "; passed: " + t.filter(\.pass).map(\.text).joined(separator: ", ") : ""))
+      }
       if let w = m.reps.filter(\.trusted).compactMap(\.side.worstStretch).max(by: { $0.durationMs < $1.durationMs }) {
         o.append("  worst stretch: \(Explain.fmt(w.durationMs)) ms" + (w.step.map { " in \($0)" } ?? ""))
         if !w.topOurs.isEmpty { o.append("    ours: " + w.topOurs.joined(separator: "; ")) }
         if !w.topFramework.isEmpty { o.append("    framework: " + w.topFramework.joined(separator: "; ")) }
         if let c = w.causes { o.append("    causes: " + c) }
       }
+      o += Explain.benchWarnings(m.reps.filter(\.trusted).map(\.side)).map { "  " + $0 }
+      o += lookAt(m.reps.filter(\.trusted).map(\.side))
     }
     if let d = s.deterministic { o.append("  · " + d) }
     let ran = m.reps.filter { $0.failure == nil }
@@ -300,6 +313,16 @@ public enum Measure {
     return o.joined(separator: "\n") + "\n"
   }
 
+  /// The ink guard's pictures (every region it judged, pass or fail), failing ones first: `look at: …`.
+  public static func lookAt(_ sides: [Side]) -> [String] {
+    let ink = sides.compactMap { $0.guards?.first { $0.name == GuardNames.ink } }
+    let bad = ink.filter { !$0.pass }.flatMap(\.artifacts), good = ink.filter(\.pass).flatMap(\.artifacts)
+    var o: [String] = []
+    if !bad.isEmpty { o.append("  look at (ink failed): " + bad.prefix(6).joined(separator: " ")) }
+    if !good.isEmpty { o.append("  look at (ink): " + good.prefix(bad.isEmpty ? 6 : 3).joined(separator: " ") + (good.count > 6 ? " (+\(good.count - 6) more)" : "")) }
+    return o
+  }
+
   static func fixtureNote(_ m: ScenarioRun) -> String {
     guard let e = m.expectedFixture, Manifest.fixtureBase(e) != Manifest.fixtureBase(m.fixture) else { return m.expectedFixture != nil ? " (the scenario's own fixture)" : "" }
     return " (the scenario's own is \(e))"
@@ -325,6 +348,7 @@ public enum Measure {
     if let f = r.failure { return head + "failed: " + f + redo }
     // An untrusted rep's value is shown so the record is whole, never as a number to quote.
     if let u = r.untrusted { return head + "UNTRUSTED (\(u)); its \(Explain.fmt(r.side.objective)) is not a number to quote" + redo }
-    return head + Explain.fmt(r.side.objective) + (r.side.checksFailed.isEmpty ? "" : " · checks failed: " + r.side.checksFailed.joined(separator: ", ")) + redo
+    let failed = r.side.checksFailed + (r.side.guards ?? []).filter { !$0.pass && $0.review != true && $0.name != GuardNames.snapshotDiff }.map { "\($0.name): \($0.detail)" }
+    return head + Explain.fmt(r.side.objective) + (failed.isEmpty ? "" : " · failed: " + failed.joined(separator: ", ")) + redo
   }
 }

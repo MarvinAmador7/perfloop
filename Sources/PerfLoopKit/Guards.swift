@@ -18,16 +18,19 @@ public struct GuardResult: Codable, Sendable, Equatable {
   public var limit: Double?
   /// A failure that asks the owner (needsReview) instead of vetoing outright.
   public var review: Bool?
+  /// The `ink` guard's regions, one per region and step it judged (VERIFICATION.md v3).
+  public var inkRegions: [InkRegionResult]?
   public init(name: String, pass: Bool, detail: String, artifacts: [String] = [], value: Double? = nil, limit: Double? = nil, review: Bool? = nil) {
     self.name = name; self.pass = pass; self.detail = detail; self.artifacts = artifacts; self.value = value; self.limit = limit; self.review = review
   }
-  enum CodingKeys: String, CodingKey { case name, pass, detail, artifacts, value, limit, review }
+  enum CodingKeys: String, CodingKey { case name, pass, detail, artifacts, value, limit, review, inkRegions }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     name = try c.decode(String.self, forKey: .name); pass = try c.decodeIfPresent(Bool.self, forKey: .pass) ?? false
     detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""; artifacts = (try? c.decodeIfPresent([String].self, forKey: .artifacts)) ?? []
     value = try? c.decodeIfPresent(Double.self, forKey: .value); limit = try? c.decodeIfPresent(Double.self, forKey: .limit)
     review = try? c.decodeIfPresent(Bool.self, forKey: .review)
+    inkRegions = try? c.decodeIfPresent([InkRegionResult].self, forKey: .inkRegions)
   }
   public init?(json v: JSONValue?) {
     guard let v, v.object != nil, let g = try? v.decode(GuardResult.self) else { return nil }
@@ -35,9 +38,36 @@ public struct GuardResult: Codable, Sendable, Equatable {
   }
 }
 
+/// One region the `ink` guard judged after a step: how much of it is drawn content, against its floor, and the crop
+/// it judged (a PNG an agent can look at, pass or fail).
+public struct InkRegionResult: Codable, Sendable, Equatable {
+  public var region: String
+  /// The step it was judged after (`select#0`), or where the scenario asked (`run.ink(…, after:)`).
+  public var after: String
+  public var pass: Bool
+  /// The share of the region's pixels that differ from its own background (its most common colour), 0…1; nil when
+  /// nothing could be captured (no such view, zero size, outside the window).
+  public var ink: Double?
+  public var min: Double
+  /// Where it was, in points from the top-left of the window's content: x, y, width, height.
+  public var rect: [Double]?
+  public var detail: String
+  /// The crop it judged (the region as drawn), absolute, or store-relative once the runner has it.
+  public var picture: String?
+  public init(region: String, after: String, pass: Bool, ink: Double?, min: Double, rect: [Double]?, detail: String, picture: String?) {
+    self.region = region; self.after = after; self.pass = pass; self.ink = ink; self.min = min; self.rect = rect; self.detail = detail; self.picture = picture
+  }
+}
+
 public enum GuardNames {
   /// The scenario's own checks: one the candidate fails while the champion passes vetoes it.
   public static let checks = "checks"
+  /// PerfLoopHost's own guard (VERIFICATION.md v3): the regions a step names have drawn content.
+  public static let ink = "ink"
+  /// Guards that are PerfLoop's code, not a bench's: they judge whenever a side reports them, whether or not the
+  /// champion's manifest lists them (a scenario declares its ink regions in its steps), and an adapter is never asked
+  /// for them in `PERFLOOP_GUARDS`.
+  public static let builtIn: Set<String> = [ink]
   public static let builtWithin = "built-within"
   /// Pairwise: the runner compares the two sides' snapshots with the champion adapter's `snapdiff`.
   public static let snapshotDiff = "snapshot-diff"
@@ -52,7 +82,7 @@ public enum GuardNames {
   }
 
   /// Guards the adapter runs itself after a rep, to ask for in `PERFLOOP_GUARDS` (checks always run).
-  public static func adapterRun(_ guards: [String]) -> [String] { guards.filter { $0 != checks } }
+  public static func adapterRun(_ guards: [String]) -> [String] { guards.filter { $0 != checks && !builtIn.contains($0) } }
 
   /// `k=v,k=v` for `PERFLOOP_GUARD_PARAMS`, numbers as numbers.
   public static func params(_ p: [String: JSONValue]?) -> String {
@@ -67,14 +97,24 @@ extension Acceptance {
   /// Guard results the candidate fails while the champion passes them (or the champion doesn't run them: a pairwise
   /// guard), plus guards the champion reported that the candidate didn't (a candidate can't drop a guard). Reviews
   /// (`review: true`) are left to `guardReviews`.
-  public static func guardResultFailures(_ p: Pair, guards: [String]) -> [String] {
+  /// Built-in guards (`GuardNames.builtIn`) count whatever the manifest lists.
+  public static func guardResultFailures(_ p: Pair, guards: [String]) -> [String] { guardResultFailures([p], guards: guards) }
+
+  /// The same over pairs, one line per guard: the pairs it failed in (and the first one's detail), the candidate's
+  /// count when there are several (flaky is a failure), and the pairs that dropped it.
+  public static func guardResultFailures(_ ps: [Pair], guards: [String]) -> [String] {
+    func gated(_ n: String) -> Bool { guards.contains(n) || GuardNames.builtIn.contains(n) }
+    var names: [String] = []
+    for p in ps { for g in (p.b.guards ?? []) + (p.a.guards ?? []) where gated(g.name) && !names.contains(g.name) { names.append(g.name) } }
     var out: [String] = []
-    let a = p.a.guards ?? [], b = p.b.guards ?? []
-    for g in b where !g.pass && g.review != true && guards.contains(g.name) && !a.contains(where: { $0.name == g.name && !$0.pass }) {
-      out.append("\(g.name) failed on the candidate in pair \(p.index + 1): \(g.detail)")
-    }
-    for name in Set(a.map(\.name)) where guards.contains(name) && !b.contains(where: { $0.name == name }) {
-      out.append("\(name) not reported by the candidate in pair \(p.index + 1) (the champion's manifest asks for it)")
+    for n in names {
+      func res(_ s: Side) -> GuardResult? { s.guards?.first { $0.name == n } }
+      let failed = ps.filter { p in res(p.b).map { !$0.pass && $0.review != true } == true && res(p.a).map { !$0.pass } != true }
+      if let first = failed.first, let g = res(first.b) {
+        out.append("\(n) failed on the candidate in \(pairList(failed)): \(g.detail)" + candidateTally(ps.filter { res($0.b)?.pass == true }.count, ps.count))
+      }
+      let dropped = ps.filter { res($0.a) != nil && res($0.b) == nil }
+      if !dropped.isEmpty { out.append("\(n) not reported by the candidate in \(pairList(dropped)) (the champion's manifest asks for it)") }
     }
     return out
   }
@@ -82,7 +122,7 @@ extension Acceptance {
   /// Guards over their tolerance that ask the owner: a snapshot that differs from the champion's.
   public static func guardReviews(_ pairs: [Pair], guards: [String]) -> [String] {
     pairs.filter { $0.failure == nil }.flatMap { p in
-      (p.b.guards ?? []).filter { !$0.pass && $0.review == true && guards.contains($0.name) }.map { "\($0.name) in pair \(p.index + 1): \($0.detail)" }
+      (p.b.guards ?? []).filter { !$0.pass && $0.review == true && (guards.contains($0.name) || GuardNames.builtIn.contains($0.name)) }.map { "\($0.name) in pair \(p.index + 1): \($0.detail)" }
     }
   }
 }
@@ -120,7 +160,11 @@ extension Explain {
       let b = (p.b.guards ?? []).map { g in "\(g.name) \(g.pass ? "✓" : g.review == true ? "REVIEW" : "✗")\(g.value.map { " " + guardValue(g.name, $0) } ?? "")" }
       let aFailed = (p.a.guards ?? []).filter { !$0.pass }.map(\.name)
       o.append("  guards pair \(p.index + 1): " + b.joined(separator: ", ") + (aFailed.isEmpty ? "" : " (champion failed: \(aFailed.joined(separator: ", ")))"))
-      for g in p.b.guards ?? [] where !g.pass && !g.artifacts.isEmpty { o.append("    \(g.name) artifacts: " + g.artifacts.joined(separator: " ")) }
+      for g in p.b.guards ?? [] where !g.pass && !g.artifacts.isEmpty && g.name != GuardNames.ink { o.append("    \(g.name) artifacts: " + g.artifacts.joined(separator: " ")) }
+      // The ink guard's crops, pass or fail: what it judged, to look at (the first pair's when they passed).
+      if let g = p.b.guards?.first(where: { $0.name == GuardNames.ink }), !g.artifacts.isEmpty, !g.pass || p.index == s.pairs.first?.index {
+        o.append("    look at (ink\(g.pass ? "" : " failed")): " + g.artifacts.joined(separator: " "))
+      }
     }
     return o
   }
@@ -138,6 +182,6 @@ extension Explain {
   }
 
   static func guardValue(_ name: String, _ v: Double) -> String {
-    name == GuardNames.snapshotDiff ? "\(Stats.round(v * 100, 3)) %" : name == GuardNames.builtWithin ? "\(fmt(v)) ms" : fmt(v)
+    name == GuardNames.snapshotDiff ? "\(Stats.round(v * 100, 3)) %" : name == GuardNames.ink ? "\(fmt(Stats.round(v * 100, 2))) % ink" : name == GuardNames.builtWithin ? "\(fmt(v)) ms" : fmt(v)
   }
 }

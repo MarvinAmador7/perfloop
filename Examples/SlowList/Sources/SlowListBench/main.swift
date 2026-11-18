@@ -20,8 +20,11 @@ bench.scenario("select", summary: "Select rows one after another: each selection
                budget: "no frame held past its vsync at the panel's rate", secondFixture: "rows300") { run in
   let model = ListModel.sample(count: run.fixture.int("rows", 1000))
   try await run.show(view: ListContainerView(model: model), size: bench.windowSize)
+  // The ink guard (built in): after each selection the rows and the status line must show drawn content. A row that
+  // renders nothing leaves the rows region blank, however fast it is.
+  let ink: [InkRegion] = [.find("rows") { run.scrollView() }, .identifier("status")]
   let n = run.int("steps", 8)
-  for i in 0..<n { await run.step("select#\(i)") { model.selection = i } }
+  for i in 0..<n { await run.step("select#\(i)", ink: ink) { model.selection = i } }
   run.check("landed", model.selection == n - 1, "selection \(model.selection.map(String.init) ?? "none"), expected \(n - 1)")
 }
 
@@ -32,7 +35,7 @@ bench.scenario("filter", summary: "Type a filter: the list narrows with each key
   let queries = ["e", "em", "emb", "embe", "ember"]
   for (i, q) in queries.enumerated() {
     let want = model.items.filter { $0.title.localizedCaseInsensitiveContains(q) }.count
-    await run.step("filter#\(i) '\(q)'", until: { run.lastEvent("list.count") == want }) { model.filter = q }
+    await run.step("filter#\(i) '\(q)'", until: { run.lastEvent("list.count") == want }, ink: [.find("rows") { run.scrollView() }]) { model.filter = q }
   }
   run.check("narrowed", run.lastEvent("list.count") == model.visible.count, "the list shows \(run.lastEvent("list.count") ?? -1) of \(model.visible.count) items")
 }

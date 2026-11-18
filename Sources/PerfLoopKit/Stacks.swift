@@ -90,11 +90,17 @@ public struct SymbolCount: Codable, Sendable, Equatable {
 }
 
 /// One symbolised frame: its cleaned name and whether it is in the bench's own executable (our code: the app's modules
-/// and the bench, linked into it) rather than a system framework.
+/// and the bench, linked into it) rather than a system framework. `bench` marks the bench's own code (its target's
+/// named functions, PerfLoopHost's checks and captures: `Symbols.benchRole`), `driver` the scenario's top-level
+/// closures (the body and the step actions, which call the app): neither is the app's.
 public struct StackFrame: Hashable, Sendable {
   public var symbol: String
   public var ours: Bool
-  public init(_ symbol: String, ours: Bool = false) { self.symbol = symbol; self.ours = ours }
+  public var bench: Bool
+  public var driver: Bool
+  public init(_ symbol: String, ours: Bool = false, bench: Bool = false, driver: Bool = false) {
+    self.symbol = symbol; self.ours = ours; self.bench = bench; self.driver = driver
+  }
 }
 
 /// Samples of one stretch folded: the tree and the tops. Stacks come leaf first (the sampled pc, then each caller);
@@ -109,6 +115,11 @@ public struct StackProfile: Sendable, Equatable {
   public var framework: [SymbolCount]
   /// Where the samples landed (the leaf frame).
   public var selfTop: [SymbolCount]
+  /// Samples whose nearest frame of the bench's executable (leaf first, the run-loop trunk and the scenario's own
+  /// closures passed over) is the bench's code, not the app's: the bench measuring itself (a check or a capture inside
+  /// a step). `bench` ranks those frames, inclusive.
+  public var benchSamples: Int
+  public var bench: [SymbolCount]
 
   /// `top` entries per list; tree nodes under `minShare` of the samples are pruned (their weight stays in the parent).
   public init(stacks: [[StackFrame]], top: Int = 10, minShare: Double = 0.005, maxDepth: Int = 160) {
@@ -117,7 +128,14 @@ public struct StackProfile: Sendable, Equatable {
     let root = Node()
     var incl: [StackFrame: Int] = [:], selfc: [String: Int] = [:]
     var under: [String: [String: Int]] = [:]
+    var benchN = 0, benchIncl: [String: Int] = [:]
     for s in stacks {
+      // Leaf first: the nearest frame that is the app's or the bench's says whose work the sample was.
+      if let f = s.first(where: { $0.bench || ($0.ours && !$0.driver && !Self.isTrunk($0.symbol)) }), f.bench {
+        benchN += 1
+        var seen: Set<String> = []
+        for b in s where b.bench && seen.insert(b.symbol).inserted { benchIncl[b.symbol, default: 0] += 1 }
+      }
       var chain: [StackFrame] = []
       for f in s.reversed() where chain.last?.symbol != f.symbol { chain.append(f) }
       root.v += 1
@@ -148,6 +166,8 @@ public struct StackProfile: Sendable, Equatable {
       SymbolCount(symbol: s.0, samples: s.1, under: under[s.0]?.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key)
     }
     selfTop = rank(selfc.map { ($0.key, $0.value) }).map { SymbolCount(symbol: $0.0, samples: $0.1) }
+    benchSamples = benchN
+    bench = rank(benchIncl.map { ($0.key, $0.value) }).map { SymbolCount(symbol: $0.0, samples: $0.1) }
   }
 
   /// The run loop's own frames, under everything the main thread does: never the answer to "where did the time go".
@@ -275,9 +295,37 @@ public enum Symbols {
     return nil
   }
 
+  /// Whose code a demangled name (before `clean`) is, for a bench whose own target is `benchModules`: `.bench` for its
+  /// named functions and what runs inside them (`Drive.inkOpened`, a closure in it, an extension it adds) and for
+  /// PerfLoopHost's checks and captures; `.driver` for a closure at the target's top level (the scenario body and its
+  /// step actions: they call the app, so the work under them is the app's); `.other` for everything else.
+  public enum BenchRole: Sendable, Equatable { case bench, driver, other }
+
+  public static func benchRole(_ demangled: String, benchModules: Set<String>) -> BenchRole {
+    var t = demangled.trimmingCharacters(in: .whitespaces)
+    t = t.replacingOccurrences(of: #"^\(\d+\) (suspend|await) resume partial function for "#, with: "", options: .regularExpression)
+    for p in ["async function pointer to ", "partial apply forwarder for ", "partial apply for ", "merged ", "specialized ", "static ", "@objc ", "outlined function "] {
+      while t.hasPrefix(p) { t.removeFirst(p.count) }
+    }
+    if hostBenchPrefixes.contains(where: { t.hasPrefix($0) || t.contains(" in " + $0) }) { return .bench }
+    guard !benchModules.isEmpty else { return .other }
+    if benchModules.contains(where: { t.contains("(extension in \($0)):") }) { return .bench }
+    let segments = splitTop(t, " in ")
+    guard let outer = segments.last.map({ cut($0) }) else { return .other }
+    let closures = segments.dropLast().allSatisfy { $0.hasPrefix("closure #") || $0.hasPrefix("implicit closure #") }
+    if closures, segments.count > 1, benchModules.contains(outer) { return .driver }
+    if benchModules.contains(where: { outer.hasPrefix($0 + ".") }) { return .bench }
+    return .other
+  }
+
+  /// PerfLoopHost's own work a scenario can call inside a step: a capture or a check measures the bench, not the app.
+  static let hostBenchPrefixes = ["PerfLoopHost.Snapshot.", "PerfLoopHost.Ink.", "PerfLoopHost.InkRegion."]
+
   /// Name prefixes of the app's own modules, whose qualifier is dropped too (a bench sets them: `["MyApp"]` drops
   /// `MyAppKit.` and `MyApp.`).
   public static var appModulePrefixes: [String] = []
+  /// The bench target's module(s), for `benchRole` (PerfLoopHost sets it from where `Bench(…)` was called).
+  public static var benchModules: Set<String> = []
 
   /// Drops a leading module qualifier of each dotted name (`CapcomdStore.CapcomdStore.receive` → `CapcomdStore.receive`:
   /// only the first word of a name is a module).

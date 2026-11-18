@@ -110,6 +110,14 @@ public struct Doctor {
     }
     if !m.knobs.isEmpty { add("knobs", .ok, m.knobs.map { "\($0.name)=\($0.default ?? "?")" }.joined(separator: ", ")) }
 
+    // The helpers a scenario needs to measure the right frame and judge what it drew (F17): PerfLoopHost has them.
+    if m.harness == "PerfLoopHost" {
+      add("harness", .ok, "PerfLoopHost: step(until:), wait and settle against racy first commits, the ink guard, checks in their own run-loop turn")
+    } else {
+      add("harness", .warn, "protocol \(m.protocol) without PerfLoopHost's helpers (the manifest names no harness): no step(until:), wait or settle, so a check can race the first commit after a structural change and pass one rep, fail the next; no ink guard; a check's own work can land inside a step",
+          fix: "link PerfLoopHost (ADAPTER.md), or rebuild what ADAPTER.md §3b lists in the adapter; a PerfLoopHost bench built before 2026-11-17 says this too: rebuild it")
+    }
+
     // verbs
     if !m.has(verb: "run") { add("verbs", .fail, "no `run`: knob experiments, sweeps and the guards need it") }
     add("pairs", .ok, m.defaultVia == "ab" ? "measured through the adapter's own ab" : "measured through two runs per pair (no ab)")
