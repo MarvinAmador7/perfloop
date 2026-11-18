@@ -7,6 +7,7 @@ import PerfLoopProbe
 /// one load of a nil.
 public struct ListView: View {
   @Bindable var model: ListModel
+  @FocusState private var filterFocused: Bool
   public init(model: ListModel) { self.model = model }
 
   public var body: some View {
@@ -16,6 +17,9 @@ public struct ListView: View {
     return VStack(spacing: 0) {
       HStack {
         TextField("Filter", text: $model.filter).textFieldStyle(.roundedBorder)
+          .focused($filterFocused)
+          .accessibilityIdentifier("filter")
+          .onChange(of: model.findRequests) { filterFocused = true }
         Text("\(vis.count) items").foregroundStyle(.secondary).monospacedDigit()
       }
       .padding(8)
@@ -87,6 +91,37 @@ struct RowContent: View {
     .frame(height: 44)
     .background(selected ? Color.accentColor.opacity(0.25) : Color.clear)
     .contentShape(Rectangle())
+  }
+}
+
+/// The app's menu bar: the app menu, Edit (the text field's cut, copy, paste and undo through the responder chain) and
+/// List: Find… (⌘F) puts the keyboard in the filter field, Clear Filter (⌘K) empties it.
+@MainActor public enum ListMenu {
+  @MainActor final class Actions: NSObject {
+    let model: ListModel
+    init(model: ListModel) { self.model = model }
+    @objc func find(_ sender: Any?) { model.findRequests += 1 }
+    @objc func clearFilter(_ sender: Any?) { model.filter = "" }
+  }
+  static var actions: Actions?
+
+  public static func install(for model: ListModel) {
+    let a = Actions(model: model); actions = a
+    let bar = NSMenu(title: "Main")
+    func menu(_ title: String, _ items: [NSMenuItem]) {
+      let m = NSMenu(title: title); items.forEach(m.addItem)
+      let top = NSMenuItem(title: title, action: nil, keyEquivalent: ""); top.submenu = m; bar.addItem(top)
+    }
+    func item(_ title: String, _ action: Selector, _ key: String, _ target: AnyObject? = nil, _ mods: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+      let i = NSMenuItem(title: title, action: action, keyEquivalent: key); i.keyEquivalentModifierMask = mods; i.target = target
+      return i
+    }
+    menu("SlowList", [item("Quit SlowList", #selector(NSApplication.terminate(_:)), "q")])
+    menu("Edit", [item("Undo", Selector(("undo:")), "z"), item("Redo", Selector(("redo:")), "z", nil, [.command, .shift]), .separator(),
+                  item("Cut", #selector(NSText.cut(_:)), "x"), item("Copy", #selector(NSText.copy(_:)), "c"), item("Paste", #selector(NSText.paste(_:)), "v"),
+                  item("Select All", #selector(NSText.selectAll(_:)), "a")])
+    menu("List", [item("Find…", #selector(Actions.find(_:)), "f", a), item("Clear Filter", #selector(Actions.clearFilter(_:)), "k", a)])
+    NSApp.mainMenu = bar
   }
 }
 

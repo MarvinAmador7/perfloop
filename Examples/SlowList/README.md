@@ -7,7 +7,7 @@ deliberately slow path, and its PerfLoop bench. It is the second app PerfLoop ru
 |---|---|
 | `Sources/SlowListKit/Model.swift` | a knob (`ListKnobs.rank`) where an idea varies, and `Mutations.record` on the state that drives bodies |
 | `Sources/SlowListKit/Views.swift` | `Probe.body("Row", id:)` in the bodies worth counting; the slow path; the fix (`SLOWLIST_ROW_VALUES`); a cheat (`SLOWLIST_CHEAT`) |
-| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, three scenarios (one replays a trackpad gesture), a knob, a guard of its own, `bench.main()` |
+| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, four scenarios (one replays a trackpad gesture, one presses real keys through the menu bar), a knob, a guard of its own, `bench.main()` |
 | `Package.swift` | depends on PerfLoop like an outside app; the `PerfLoopStamp` plugin on the bench target |
 | `walkthrough.sh` | the loop end to end on this app |
 
@@ -33,6 +33,7 @@ $B describe                                  # the manifest the runner reads
 $B run select --reps 1                       # opens a window for ~3 s; prints where the time went
 PERFLOOP_KNOBS=rows.rank=index $B run select --reps 1
 $B run scroll --reps 1                       # a trackpad flick replayed into the list: how closely the content followed
+$B run find --reps 1 --pictures /tmp/find    # ⌘F, typing, ⌘K: the menu item each fired, the focus, the window before/after
 $B run scroll --set gesture=synthetic:drag-down --set inject-block-ms=60 --reps 1   # the meter's self-check: stalls
 $B record-gesture scroll --name my-swipe     # your own swipe over the list, for --set gesture=FILE
 $B profile select                            # the same scenario under xctrace: call trees per step

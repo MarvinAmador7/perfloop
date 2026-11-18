@@ -77,7 +77,23 @@ Everything in `deskbench.result/1` (`Results.swift`) stays with the same names a
     "steps": [ { …as today…, "cpuMs": 38.9, "instructions": 61200000, "hitchTimeRatioMsPerS": 0.0,
                  "causes": [ { "keyPath": "AgentSlice.onScreen", "count": 2, "ids": 2,      // sets, distinct objects
                                "bodies": { "Column": 34, "CrewTab": 4 }, "objects": { "Column": 17, "CrewTab": 2 } } ],
-                 "smoothness": { "positionErrorP95Pt": 0.8, "stalls": 0, "jerkP95": 1.9, "latencyFrames": 1, … } | null } ],   // §8
+                 "smoothness": { "positionErrorP95Pt": 0.8, "stalls": 0, "jerkP95": 1.9, "latencyFrames": 1, … } | null,   // §8
+                 // PerfLoopHost, every step: the keyboard before the action and after the step settled (ADAPTER.md §6c)
+                 "focus": { "before": { …focus… }, "after": { "keyWindow": { "title": "", "class": "NSWindow", "role": "bench" },
+                            "mainWindow": { … }, "firstResponder": { "class": "NSTextView" }, "fieldEditor": true,
+                            "editing": { "class": "NSTextField", "identifier": "filter", "label": "Filter" }, "inside": ["sidebar"] },
+                            "expected": "#filter", "matched": true } | null,
+                 // run.press / type / key / click
+                 "input": { "kind": "press", "keys": "⌘F", "keyCode": 3, "characters": "f", "layout": "com.apple.keylayout.US",
+                            "outcome": "fired",            // fired | fired-other | not-fired | delivered | hit | missed | nothing | undelivered
+                            "menuItem": "Find…", "menuPath": "List › Find…", "expected": "Find…", "target": { "class": "Actions" },
+                            "holder": null, "taken": null,  // not-fired: a disabled item with the keys; key-equivalent | responder | unhandled
+                            "responder": { … }, "count": null, "unhandled": null, "asText": null,              // type
+                            "point": null, "asked": null, "hit": null, "consumer": null, "consumerKind": null,   // click: view | gesture-recognizer | nobody
+                            "recognizer": null, "notes": null,
+                            "pictures": { "before": "/…/find-rep0-1-press-F.before.png", "after": "….after.png", "diff": "….diff.png",
+                                          "changedPct": 3.2, "changedRect": [8, 6, 420, 30] } | null,   // points from the top-left
+                            "line": "press ⌘F → fired menu 'Find…' (List › Find…) → Actions; focus: nothing (the bench window is key) → NSTextField #filter \"Filter\" (field editor)" } | null } ],
     "worstStretches": [ { …as today…,
                  "stacks": { …tree… } | null,          // folded, symbolised; null when the sampler was off
                  "samples": 231,

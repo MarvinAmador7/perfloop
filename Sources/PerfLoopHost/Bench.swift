@@ -207,8 +207,10 @@ public final class Bench: @unchecked Sendable {
       describe [--json]                     the perfloop.manifest/1 a runner reads
       knobs [--json]                        the runtime knobs this process runs with (PERFLOOP_KNOBS)
       run SCENARIO [--fixture F] [--reps N] [--set k=v] [--json] [--out FILE] [--artifacts DIR]
-          [--knob k=v] [--guards LIST] [--guard-param k=v] [--sampler on|off] [--no-activate] [--quiet-check S]
+          [--knob k=v] [--guards LIST] [--guard-param k=v] [--sampler on|off] [--no-activate] [--quiet-check S] [--pictures DIR]
                                             drive a scenario in a window of this process; the result is perfloop.result/2.
+                                            --pictures DIR: an input step (run.press/type/key/click) that changed the window
+                                            writes it before and after, and the difference, there (PERFLOOP_PICTURES).
                                             Before each rep it waits up to S s (10; perfloop's runner passes 0 and gates
                                             itself) for a quiet machine (≤ 30 % of the cores busy, no build running),
                                             then runs and marks the rep quiet: false
@@ -229,7 +231,7 @@ public final class Bench: @unchecked Sendable {
     fixtures: \(fixtures.map(\.name).joined(separator: ", "))
     window lock: run, profile and record-gesture wait for the window lock and hold it (other benches and perfloop runs on
     this Mac take turns): $PERFLOOP_LOCK, else /tmp/perfloop-window-UID.lock; --lock DIR another, --no-lock none
-    environment: PERFLOOP_KNOBS=k=v,… PERFLOOP_GUARDS=a,b PERFLOOP_GUARD_PARAMS=k=v,… PERFLOOP_ARTIFACTS=DIR PERFLOOP_SAMPLER=off
+    environment: PERFLOOP_KNOBS=k=v,… PERFLOOP_GUARDS=a,b PERFLOOP_GUARD_PARAMS=k=v,… PERFLOOP_ARTIFACTS=DIR PERFLOOP_PICTURES=DIR PERFLOOP_SAMPLER=off
     exit codes: 0 pass · 1 usage · 2 harness error · 3 budget, check or guard failed · 5 untrusted (the window not active, key, visible and unoccluded: never decides)
     """
   }
@@ -380,6 +382,7 @@ public final class Bench: @unchecked Sendable {
     let fromFlags: [String] = a.all("guards").flatMap { $0.split(separator: ",").map(String.init) }
     let requested: Set<String> = Set((fromEnv + fromFlags).filter { !$0.isEmpty && $0 != "checks" })
     let artifacts = a.one("artifacts") ?? env["PERFLOOP_ARTIFACTS"]
+    let pictures = (a.one("pictures") ?? env["PERFLOOP_PICTURES"]).map { ($0 as NSString).expandingTildeInPath }
     let gp = guardParams(a, scenario: spec)
     let samplerOn = !(a.one("sampler") == "off" || (a.one("sampler") == nil && env["PERFLOOP_SAMPLER"] == "off"))
     let sampler: MainThreadSampler? = samplerOn && MainThreadSampler.supported ? MainThreadSampler(config: SamplerConfig()) : nil
@@ -400,6 +403,7 @@ public final class Bench: @unchecked Sendable {
       Probe.sink = recorder; Mutations.sink = recorder.causes
       let run = Run(scenario: name, fixture: fixture, params: params, rep: i, recorder: recorder, activate: activate, sampler: sampler)
       run.appearance = appearance
+      run.picturesDir = pictures
       if i == 0 { run.waitFor = waitFor }
       defer { run.close(); Probe.sink = nil; Mutations.sink = nil }
       try await body(run)
@@ -547,10 +551,35 @@ public final class Bench: @unchecked Sendable {
       if let o = w.topOurs, !o.isEmpty { out.append("    ours: " + o.prefix(4).map { "\($0.symbol) ×\($0.samples)" }.joined(separator: ", ")) }
       if let f = w.topFramework, !f.isEmpty { out.append("    framework: " + f.prefix(3).map { "\($0.symbol) ×\($0.samples)\($0.under.map { " under \($0)" } ?? "")" }.joined(separator: ", ")) }
     }
+    out += Self.inputLines(r.reps)
     for c in r.reps.flatMap(\.checks) where !c.pass { out.append("  check \(c.name) FAILED: \(c.detail)") }
     for g in r.reps.flatMap({ $0.guards ?? [] }) where !g.pass { out.append("  guard \(g.name) FAILED: \(g.detail)") }
     out += r.notes.map { "  " + $0 }
     return out.joined(separator: "\n")
+  }
+}
+
+extension Bench {
+  /// The input steps of the first rep, one line each, with the pictures to look at; and the steps (of any rep) whose
+  /// focus moved when they didn't say where it should land.
+  static func inputLines(_ reps: [RepRecord]) -> [String] {
+    var out: [String] = []
+    if let rep = reps.first, rep.steps.contains(where: { $0.input != nil }) {
+      out.append("  input (rep \(rep.index + 1)):")
+      for s in rep.steps {
+        guard let i = s.input else { continue }
+        out.append("    " + (i.line.isEmpty ? InputRecord.line(i, focus: s.focus) : i.line))
+        for n in i.notes ?? [] { out.append("      note: " + n) }
+        if let p = i.pictures { out.append("      look at: " + ([p.after] + (p.diff.map { [$0] } ?? []) + [p.before]).joined(separator: "  ")) }
+      }
+    }
+    var seen = Set<String>()
+    for rep in reps {
+      for s in rep.steps where s.input == nil && s.focus?.changed == true && s.focus?.expected == nil && seen.insert(s.name).inserted {
+        out.append("  \(s.name) moved the focus with no expectFocus (rep \(rep.index + 1)): \(s.focus!.text)")
+      }
+    }
+    return out
   }
 }
 
@@ -566,7 +595,7 @@ struct HostArgs {
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["fixture", "reps", "set", "out", "artifacts", "guards", "guard-param", "diff-out", "sampler", "quiet-check", "knob", "host", "objective",
                                     "wait-for", "template", "seconds", "top", "per", "min-ms", "process", "champion", "hold",
-                                    "name", "count", "timeout", "device", "feed", "lock"]
+                                    "name", "count", "timeout", "device", "feed", "lock", "pictures"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
