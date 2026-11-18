@@ -41,6 +41,8 @@ import PerfLoopProbe
   /// `--pictures DIR` (`PERFLOOP_PICTURES`): where input steps write the window before and after, when it changed.
   var picturesDir: String?
   var keyMapCache: KeyMap?
+  /// An identifier lookup turned SwiftUI's accessibility tree on in this rep (`element(identifier:)`).
+  var accessibilityTreeOn = false
 
   init(scenario: String, fixture: Fixture, params: [String: String], rep: Int, recorder: Recorder, activate: Bool, sampler: MainThreadSampler?) {
     self.scenario = scenario; self.fixture = fixture; self.params = params; self.rep = rep; self.recorder = recorder; self.activate = activate; self.sampler = sampler

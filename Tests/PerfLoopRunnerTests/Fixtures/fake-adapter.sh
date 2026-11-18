@@ -173,7 +173,7 @@ run)
       pics=", \"pictures\": { \"before\": \"$PERFLOOP_PICTURES/press-k.before.png\", \"after\": \"$PERFLOOP_PICTURES/press-k.after.png\", \"diff\": \"$PERFLOOP_PICTURES/press-k.diff.png\", \"changedPct\": 12 }"
     fi
     inputs=", { \"name\": \"press ⌘K\", \"atMs\": 0, \"durationMs\": 30, \"frames\": {}, \"mainThread\": {}, \"bodies\": {}, \"notes\": [],
-      \"input\": { \"kind\": \"press\", \"outcome\": \"fired\", \"line\": \"press ⌘K → fired menu 'Search…'; focus: nothing → #palette.field\" $pics } },
+      \"input\": { \"kind\": \"press\", \"outcome\": \"fired\", \"line\": \"press ⌘K → fired menu 'Search…'; focus: nothing → #palette.field\", \"notes\": [\"the window wasn't key\"] $pics } },
       { \"name\": \"close\", \"atMs\": 0, \"durationMs\": 30, \"frames\": {}, \"mainThread\": {}, \"bodies\": {}, \"notes\": [\"focus: #palette.field → nothing (the step has no expectFocus: say where the keyboard should land)\"] }"
   fi
   cat <<JSON

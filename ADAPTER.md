@@ -244,7 +244,11 @@ PerfLoopHost does all of it: `run.press("⇧⌘D", expect: "Split Down")`, `run.
 is never posted, made into an NSEvent, so AppKit takes the characters from the current keyboard layout and matches
 ⇧⌘D to ⇧⌘D, which a hand-made `NSEvent.keyEvent` doesn't: the study's misrouted ⇧⌘D), the modifiers pressed and
 released around the key as a hand does, and put on the app's own queue with `NSApp.postEvent` (not `sendEvent`, which
-skips the queue and leaves `NSApp.currentEvent` stale). Nothing is posted to the system. It proves routing through
+skips the queue and leaves `NSApp.currentEvent` stale). Nothing is posted to the system. A SwiftUI view's
+`.accessibilityIdentifier` lives on its accessibility element, not on an NSView: `click(identifier:)` and an identifier
+`expectFocus` find it there, turning on SwiftUI's accessibility tree (`AXEnhancedUserInterface`, as VoiceOver does) for
+the lookup; SwiftUI may then keep the tree up to date for the rest of the rep, which the step says, so a scenario
+measured for speed clicks a view or a point instead. It proves routing through
 the app (key equivalents, menus, the responder chain, field editors, gesture recognizers), not the HID path, input
 methods or accessibility clients. A bench of your own can do the same; the fields are what the runner reads.
 

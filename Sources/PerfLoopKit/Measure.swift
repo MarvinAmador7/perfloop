@@ -80,22 +80,25 @@ public struct MeasureInput: Codable, Sendable, Equatable {
   public var lines: [String]
   /// Per line, the pictures to look at (after, diff, before), store-relative; empty when the step changed nothing.
   public var pictures: [[String]]
-  public init(rep: Int, lines: [String], pictures: [[String]]) { self.rep = rep; self.lines = lines; self.pictures = pictures }
+  /// Per line, what the bench noted about the input (the window wasn't key, SwiftUI's accessibility tree turned on).
+  public var notes: [[String]]?
+  public init(rep: Int, lines: [String], pictures: [[String]], notes: [[String]]? = nil) { self.rep = rep; self.lines = lines; self.pictures = pictures; self.notes = notes }
 
   /// From a `perfloop.result` rep: its steps' `input.line` and pictures, and the notes of steps whose focus moved
   /// unannounced (`focus: … (the step has no expectFocus …)`). nil when the rep has neither.
   public static func read(rep: JSONValue, index: Int) -> MeasureInput? {
-    var lines: [String] = [], pics: [[String]] = []
+    var lines: [String] = [], pics: [[String]] = [], notes: [[String]] = []
     for st in rep["steps"]?.array ?? [] {
       if let i = st["input"], let line = i["line"]?.string {
         lines.append(line)
         let p = i["pictures"]
         pics.append(["after", "diff", "before"].compactMap { p?[$0]?.string })
+        notes.append(i["notes"]?.strings ?? [])
       } else if let n = (st["notes"]?.array ?? []).compactMap(\.string).first(where: { $0.hasPrefix("focus: ") }) {
-        lines.append("\(st["name"]?.string ?? "step"): \(n)"); pics.append([])
+        lines.append("\(st["name"]?.string ?? "step"): \(n)"); pics.append([]); notes.append([])
       }
     }
-    return lines.isEmpty ? nil : MeasureInput(rep: index, lines: lines, pictures: pics)
+    return lines.isEmpty ? nil : MeasureInput(rep: index, lines: lines, pictures: pics, notes: notes.contains { !$0.isEmpty } ? notes : nil)
   }
 }
 
@@ -328,6 +331,7 @@ public enum Measure {
       o.append("input (rep \(i.rep)):")
       for (n, line) in i.lines.enumerated() {
         o.append("  " + line)
+        for x in (i.notes ?? []).dropFirst(n).first ?? [] { o.append("    note: " + x) }
         if n < i.pictures.count, !i.pictures[n].isEmpty { o.append("    look at: " + i.pictures[n].joined(separator: "  ")) }
       }
     }

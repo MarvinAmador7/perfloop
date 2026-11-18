@@ -478,13 +478,16 @@ extension Run {
     if let v = view(identifier: identifier) {
       return await click(v, count: count, modifiers: modifiers, expectFocus: expectFocus, name: label, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
     }
+    let treeWasOn = accessibilityTreeOn
     guard let (w, rect) = element(identifier: identifier) else {
       check(label, false, "no view or accessibility element #\(identifier) in the windows")
       return await step(label) {}
     }
     await endTurn()   // the walk never lands in the step's stretches
+    let note = accessibilityTreeOn && !treeWasOn
+      ? ["finding #\(identifier) turned on SwiftUI's accessibility tree (AXEnhancedUserInterface, as VoiceOver does): SwiftUI may keep it up to date for the rest of the rep, which the steps after this one pay for"] : []
     return await click(at: CGPoint(x: rect.midX, y: rect.midY), window: w, asked: ResponderRef(class: "element", identifier: identifier), askedView: nil, count: count,
-                       modifiers: modifiers, expectFocus: expectFocus, label: label, timeoutMs: timeoutMs, quietMs: quietMs, until: until)
+                       modifiers: modifiers, expectFocus: expectFocus, label: label, timeoutMs: timeoutMs, quietMs: quietMs, until: until, notes: note)
   }
 
   /// A click at `point` in `window`'s coordinates (the bench window's by default; AppKit's, origin bottom-left).
@@ -547,6 +550,7 @@ extension Run {
     guard !was else { return nil }
     NSApp.accessibilitySetValue(true, forAttribute: eui)
     defer { NSApp.accessibilitySetValue(false, forAttribute: eui) }
+    accessibilityTreeOn = true
     return walkElements(identifier)
   }
 
@@ -636,7 +640,7 @@ extension Run {
   }
 
   func click(at p: CGPoint, window w: NSWindow, asked: ResponderRef?, askedView: NSView?, count: Int, modifiers: NSEvent.ModifierFlags, expectFocus: FocusTarget?,
-             label: String, timeoutMs: Double, quietMs: Double, until: (() -> Bool)?) async -> StepRecord {
+             label: String, timeoutMs: Double, quietMs: Double, until: (() -> Bool)?, notes extra: [String] = []) async -> StepRecord {
     let root = w.contentView?.superview ?? w.contentView
     let hitView = root.flatMap { $0.superview == nil ? $0.hitTest(p) : $0.hitTest($0.superview!.convert(p, from: nil)) }
     let wasKey = w.isKeyWindow
@@ -650,7 +654,7 @@ extension Run {
     var rec = InputRecord(kind: "click", outcome: "hit")
     rec.point = [Stats.round(Double(p.x), 1), Stats.round(Double(p.y), 1)]
     rec.asked = asked
-    var notes: [String] = []
+    var notes = extra
     if let h = hitView {
       rec.hit = Focus.ref(h)
       if let a = askedView, h !== a, !h.isDescendant(of: a) { rec.outcome = "missed" }

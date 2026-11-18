@@ -67,7 +67,8 @@ final class MeasureLoopTests: FakeBenchCase {
     let dir = store.measureDir(m.id)
     XCTAssertEqual(Self.pictures(dir).map { $0.deletingLastPathComponent().lastPathComponent }, ["input", "input", "input"], "the other rep's are deleted")
     let text = Measure.text(m)
-    XCTAssertTrue(text.contains("input (rep 1):\n  press ⌘K → fired menu 'Search…'; focus: nothing → #palette.field\n    look at: runs/m0001/input/press-k.after.png"), text)
+    XCTAssertEqual(i.notes, [["the window wasn't key"], []])
+    XCTAssertTrue(text.contains("input (rep 1):\n  press ⌘K → fired menu 'Search…'; focus: nothing → #palette.field\n    note: the window wasn't key\n    look at: runs/m0001/input/press-k.after.png"), text)
   }
 
   func testUntrustedRepsAreNamedNeverQuoted() throws {
