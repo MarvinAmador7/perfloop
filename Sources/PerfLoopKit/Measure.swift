@@ -127,9 +127,12 @@ public struct BaselineRecord: Codable, Sendable, Equatable {
   public var max: Double
   public var referenceScenario: String?
   public var referenceMedian: Double?
-  /// The reference picture, relative to the store root (and its `.later.png` beside it).
+  /// The reference picture, relative to the store root (and its `.later.png` and `.layout.json` beside it).
   public var snapshot: String?
   public var replaces: String?
+  /// The look it was measured in (`Looks.key`: `dark`, `light-text-xLarge`; nil for light at the default text size):
+  /// each look has its own baseline, under `baselines/<scenario>~<key>/`.
+  public var look: String?
   public init(scenario: String, fixture: String, metric: String, measurement: String, build: Build, trusted: Int, reps: Int, median: Double, min: Double, max: Double) {
     self.scenario = scenario; self.fixture = fixture; self.metric = metric; self.measurement = measurement; self.build = build; createdAt = Clock.now()
     self.trusted = trusted; self.reps = reps; self.median = median; self.min = min; self.max = max
@@ -256,6 +259,7 @@ public enum Measure {
     let s = m.summary
     o.append("\(m.kind) \(m.id) · \(m.scenario) on \(m.fixture)\(fixtureNote(m)) · \(m.target) [\(m.build.line)] · \(m.reps.count) rep(s)" + (m.runner.map { " on \($0.line)" } ?? ""))
     if let k = m.knobs, !k.isEmpty { o.append("knobs: " + k.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ", ")) }
+    if let l = Looks.key(m.params) { o.append("look: \(l) (its baseline and reference picture are this look's own)") }
     o.append(numbers(m.metric, s))
     if s.trusted > 0 {
       var f: [String] = []
@@ -292,7 +296,9 @@ public enum Measure {
       o.append(line + ". Information, not a verdict: other minutes, not interleaved")
     }
     if let g = m.snapshot {
-      o.append("snapshot against the baseline's: \(g.pass ? "same" : g.review == true ? "REVIEW" : "DIFFERENT") · \(g.detail)" + (g.artifacts.isEmpty ? "" : " · " + g.artifacts.joined(separator: ", ")))
+      let declared = (g.looks ?? []).contains { $0.expected == true }
+      o.append("snapshot against the baseline's: \(g.pass ? (declared ? "changed where declared" : "same") : g.review == true ? "REVIEW" : "DIFFERENT") · \(g.detail)" + (g.artifacts.isEmpty ? "" : " · " + g.artifacts.joined(separator: ", ")))
+      o += Looks.lines(g, indent: "  ")
     }
     for n in m.notes { o.append("note: " + n) }
     if let st = store { o.append("result: \(st)") }

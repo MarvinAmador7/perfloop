@@ -14,6 +14,16 @@ bench.privatePaths = ["Secrets/"]            // never recorded in an experiment'
 bench.fixture("rows1000", summary: "1,000 items (the default)", params: ["rows": "1000"], parametric: ["rows": 10...50_000])
 bench.fixture("rows300", summary: "300 items: the second fixture a win must not be worse on", params: ["rows": "300"], parametric: ["rows": 10...50_000])
 bench.knobs { [ListKnobs.rank] }
+// Regions snapshots are compared by (`snapdiff`: same, moved, differs per region; `--expect-look footer` declares an
+// intended change there): the AppKit status line by its identifier; the scenarios add the list (a view) and the filter
+// bar (a rect: SwiftUI's views aren't NSViews, and its accessibility elements exist only once an assistive app asks),
+// and the details panel is a region of its own (a child window).
+bench.region("footer")
+/// The list and the filter bar above it, as regions of the scenario's snapshots.
+@MainActor func listRegions(_ run: Run) {
+  if let sv = run.scrollView() { run.region("list", view: sv) }
+  run.region("filter", rect: CGRect(x: 0, y: 0, width: bench.windowSize.width, height: 38))
+}
 
 bench.scenario("select", summary: "Select rows one after another: each selection re-evaluates the rows that read it",
                guards: ["checks", "snapshot-diff", "rows-drawn"], params: ["steps": "8"],
@@ -21,8 +31,21 @@ bench.scenario("select", summary: "Select rows one after another: each selection
   let model = ListModel.sample(count: run.fixture.int("rows", 1000))
   try await run.show(view: ListContainerView(model: model), size: bench.windowSize)
   let n = run.int("steps", 8)
+  listRegions(run)
   for i in 0..<n { await run.step("select#\(i)") { model.selection = i } }
   run.check("landed", model.selection == n - 1, "selection \(model.selection.map(String.init) ?? "none"), expected \(n - 1)")
+}
+
+bench.scenario("details", summary: "Open the details panel (a child window over the list) and select rows: the panel follows",
+               kind: .latency, guards: ["checks", "snapshot-diff"], params: ["steps": "4"]) { run in
+  let model = ListModel.sample(count: run.fixture.int("rows", 1000))
+  try await run.show(view: ListContainerView(model: model), size: bench.windowSize)
+  listRegions(run)
+  let panel = DetailsPanel(model: model)
+  run.atClose { panel.hide() }                 // up while the snapshot is taken, which draws it in
+  await run.step("open details", until: { panel.isVisible }) { model.selection = 0; panel.show(over: run.window!) }
+  for i in 1...run.int("steps", 4) { await run.step("select#\(i)") { model.selection = i * 3 } }
+  run.check("panel-shown", panel.isVisible && panel.parent === run.window, "the panel is \(panel.isVisible ? "" : "not ")visible, \(panel.parent === run.window ? "" : "not ")a child of the window")
 }
 
 bench.scenario("filter", summary: "Type a filter: the list narrows with each key", kind: .latency, guards: ["checks", "rows-drawn"],

@@ -49,6 +49,8 @@ machine; rerun).
              { "name": "build.perFrame", "type": "int", "default": 2, "range": [1, 8] } ],
   "hosts": [ "scene", "window" ], "defaultHost": "scene", "defaultFixture": "crew17",
   "fixtureSchemes": [ "file" ],                  // optional (2026-11): the scheme: forms --fixture takes; absent: any passes
+  "appearances": [ "light", "dark", "system" ],  // optional (2026-11, v11): what --set appearance= takes; absent: refused
+  "textSizes": [ "large", "xLarge" ],            // optional (2026-11, v11): what --set textSize= takes (the bench applies it); absent: refused
   "probes": [ "Column", "ColumnHead", "ColumnThread", "EntryRow", "ColumnComposer", "CrewTab", "TitleBar", "OpenGroup", "Reel", "RootView", "DecisionBar", "FoldedDeck" ],
   "exitCodes": { "ok": 0, … } }
 ```
@@ -62,6 +64,8 @@ Everything in `deskbench.result/1` (`Results.swift`) stays with the same names a
   "tool": { …, "build": { …build… } },                 // ToolInfo.commit kept, now equal to build.commit
   "params": { …, "knobs": { "reel.slide": "ca", "build.perFrame": "2" } },   // the full knob vector, defaults included
   "profiled": false,                                   // true when a profiler was attached: never an objective input
+  "appearance": "light" | "dark" | "system",           // PerfLoopHost (2026-11, v11): the look the reps drew in
+  "textSize": "xLarge" | null,                         // the bench's text size, when --set textSize= asked for one
   "runner": "local",
   "summary": {
     …as today…,
@@ -87,6 +91,38 @@ Everything in `deskbench.result/1` (`Results.swift`) stays with the same names a
     "guards": [ { "name": "snapshot-diff", "pass": true, "detail": "0.1 % of pixels differ", "artifacts": ["…/step-rep0.png"],
                   "value": 0.001, "limit": 0.005, "review": null } ]   // review: true = over tolerance, the owner decides
   } ] }
+```
+
+**Looks (2026-11, v5).** A rep's `snapshot-diff` capture lists its picture, its `.later.png` and its layout
+(`X.layout.json`, below). The runner replaces the candidate's record with the champion's `snapdiff` comparison, which
+carries the regions:
+
+```jsonc
+{ "name": "snapshot-diff", "pass": true, "review": null, "value": 0.0011, "limit": 0.005,   // value: the whole window's share
+  "detail": "footer resized (92×14 → 158×14 pt) [declared]; same: list, filter, details, rest; …",
+  "artifacts": [ "runs/m0013/snapshot.png", … ],
+  "looks": [ { "name": "footer", "look": "same|moved|differs|missing|resized", "share": 0.21,   // where it was, no shift
+               "movedPt": [60, 0],                  // moved: by how much (right, down)
+               "expected": true,                    // declared with --expect-look: the PR's reviewer accepts it
+               "detail": "92×14 → 158×14 pt",
+               "before": "…-footer.before.png", "after": "…-footer.after.png", "diff": "…-footer.diff.png" },   // a changed region's pictures
+             { "name": "rest", "look": "same", "share": 0 } ] }   // `rest`: outside the named regions; `window` when none is named
+```
+
+`pass` is false (with `review: true`) when a region not declared with `--expect-look` changed; a change only in declared
+regions passes, and its pictures are kept for the PR's reviewer. Two pictures drawn in different looks are not compared
+(no `looks`, `review: true`).
+
+`perfloop.snapshot/1`, the layout beside a snapshot (`X.png` → `X.layout.json`; rects in the picture's pixels from its
+top-left corner):
+
+```jsonc
+{ "schema": "perfloop.snapshot/1", "size": [1800, 1400], "scale": 2, "appearance": "dark", "textSize": null,
+  "regions": [ { "name": "footer", "rect": [20, 1360, 184, 28], "source": "identifier|view|rect|child window" } ],
+  "missing": [ "filter" ],                                         // named, not found when the snapshot was taken
+  "childWindows": [ { "name": "details", "kind": "DetailsPanel", "rect": [1248, 134, 520, 240],
+                      "clipped": null, "material": null, "sheet": null } ],   // drawn in where they are on screen (v7)
+  "notCaptured": [ "the title bars (the window's and its child windows')", "materials: 2 visual-effect view(s) drawn flat …" ] }
 ```
 
 `checks[]` is unchanged; `guards[]` is the subset that gates acceptance plus the new ones. `Budgets.evaluate` keeps
@@ -131,6 +167,7 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
 { "schema": "perfloop.experiment/1", "id": "0007", "createdAt": "…", "state": "new|built|screened|promising|inconclusive|rejected|full|won|lost|needsReview|promoted|abandoned|noRegression|regressed",
   "hypothesis": "sizeThatFits answers itself so Auto Layout never sizes 16 hosting views",
   "kind": "code" | "knob", "behaviourChange": false,
+  "expectLook": [ "footer" ] | null,                             // 2026-11 (v5): regions whose look the change means to alter
   "expect": "same" | null,                                       // same: a feature or guard check (noRegression|regressed|inconclusive), never promoted
   "parent": { "experiment": "0005", "build": { …build… } },     // the champion at creation
   "patch": "exp/0007/patch.diff" | null, "knobs": { "reel.slide": "clip" } | null,
@@ -138,6 +175,7 @@ Kept: `template`, `trace`, `scenario`, `fixture`, `process`, `durationS`, `hitch
   "scenario": "step", "fixture": "crew17", "secondFixture": "swarm64",
   "screen": { "pairs": 3, "results": [ "screen/a1.json", "screen/b1.json", … ], "objective": { "a": [..], "b": [..] },
               "wins": 3, "medianGainPct": 61.2, "band": 8.1, "guardsPassed": true, "guardReviews": null, "verdict": "promising",   // needsReview: a guard asks the owner; inconclusive: more pairs or the full
+              "declaredLooks": [ "snapshot-diff in pair 1: footer differs 3.2 % [declared]" ] | null,   // 2026-11: passed, for the PR's reviewer
               "extendedTo": 6 },                                 // the pairs asked for, when `exp screen --more` added some
   "full":   { "repsPerSide": 5, "extendedTo": 8, "mwuP": 0.004, "effectPct": 58.9, "band": 7.0,
               "frameGuards": { "hitchTimeRatioMsPerS": { "a": 41.0, "b": 2.1, "pass": true }, "longestStretchMs": { … } },

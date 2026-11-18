@@ -31,9 +31,13 @@ extension Store {
     return String(format: "m%04d", n)
   }
 
-  public func baselineDir(_ scenario: String) -> URL { root.appendingPathComponent("baselines").appendingPathComponent(Sweep.fileName(scenario)) }
-  public func baseline(_ scenario: String) -> BaselineRecord? {
-    try? PLJSON.read(BaselineRecord.self, path: baselineDir(scenario).appendingPathComponent("baseline.json").path)
+  /// A scenario's baseline folder, one per look (`Looks.key`): `baselines/<scenario>/` for light at the default text
+  /// size, `baselines/<scenario>~dark/` and so on for the others.
+  public func baselineDir(_ scenario: String, look: String? = nil) -> URL {
+    root.appendingPathComponent("baselines").appendingPathComponent(Sweep.fileName(scenario) + (look.map { "~" + Sweep.fileName($0) } ?? ""))
+  }
+  public func baseline(_ scenario: String, look: String? = nil) -> BaselineRecord? {
+    try? PLJSON.read(BaselineRecord.self, path: baselineDir(scenario, look: look).appendingPathComponent("baseline.json").path)
   }
   public func baselines() -> [BaselineRecord] {
     let names = ((try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("baselines").path)) ?? []).sorted()
@@ -55,6 +59,8 @@ extension Loop {
     /// A scenario of the champion's, run on the champion interleaved with these reps (one of it per rep).
     public var reference: String?
     public var exe: String?
+    /// Regions the change means to alter (`--expect-look`), for the comparison with the baseline's picture.
+    public var expectLook: [String] = []
     public init(target: String, kind: String = "run") { self.target = target; self.kind = kind; reps = kind == "baseline" ? 5 : 3 }
   }
 
@@ -102,6 +108,8 @@ extension Loop {
     }
     guard let fx = o.fixture ?? (t.scenario == sc ? t.fixture : nil) ?? m?.fixture(for: sc) else { throw PLError.usage("pass --fixture: the build's manifest names none") }
     if let m, let why = m.unknownFixture(fx, whose: "\(t.label)'s manifest") { throw PLError.usage(why) }
+    if let m, let why = m.unsupportedLook(o.params, whose: "\(t.label)'s adapter") { throw PLError.usage(why) }
+    let look = Looks.key(o.params)
     if let ks = m?.knobs {
       for (k, v) in o.knobs {
         guard let knob = ks.first(where: { $0.name == k }) else { throw PLError.usage("unknown knob '\(k)'; the manifest has \(ks.map(\.name).joined(separator: ", ").ifEmpty("none"))") }
@@ -168,10 +176,10 @@ extension Loop {
     var record: BaselineRecord?
     if o.kind == "baseline" {
       record = try writeBaseline(x, capture: capture)
-    } else if let b = store.baseline(sc), b.measurement != id {
+    } else if let b = store.baseline(sc, look: look), b.measurement != id {
       x.againstBaseline = Measure.compare(x.summary, fixture: fx, reference: x.reference, with: b)
       if let shot = b.snapshot.map(store.abs), FileManager.default.fileExists(atPath: shot), let c = capture {
-        x.snapshot = compareSnapshot(shot, c, scenario: sc, params: g.params, build: t.entry, champion: cEntry, dir: dir)
+        x.snapshot = compareSnapshot(shot, c, scenario: sc, params: g.params, build: t.entry, champion: cEntry, dir: dir, expected: o.expectLook)
       }
     }
     // Pictures are a few MB each: the reps' are deleted; what a person has to look at is in the run's own folder.
@@ -242,16 +250,20 @@ extension Loop {
     guard let med = s.median, let lo = s.min, let hi = s.max else { return nil }
     var b = BaselineRecord(scenario: x.scenario, fixture: x.fixture, metric: x.metric, measurement: x.id, build: x.build, trusted: s.trusted, reps: s.ran, median: med, min: lo, max: hi)
     b.referenceScenario = x.reference?.scenario; b.referenceMedian = x.reference?.summary.median
-    b.replaces = store.baseline(x.scenario)?.measurement
-    let dir = store.baselineDir(x.scenario)
+    let look = Looks.key(x.params)
+    b.look = look
+    b.replaces = store.baseline(x.scenario, look: look)?.measurement
+    let dir = store.baselineDir(x.scenario, look: look)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let fm = FileManager.default
-    for f in ["reference.png", "reference.later.png"] { try? fm.removeItem(at: dir.appendingPathComponent(f)) }
+    for f in ["reference.png", "reference.later.png", "reference.layout.json"] { try? fm.removeItem(at: dir.appendingPathComponent(f)) }
     if let c = capture {
       let png = dir.appendingPathComponent("reference.png")
       try fm.copyItem(atPath: c, toPath: png.path)
-      let later = String(c.dropLast(4)) + ".later.png"
-      if fm.fileExists(atPath: later) { try fm.copyItem(atPath: later, toPath: dir.appendingPathComponent("reference.later.png").path) }
+      // The picture half a second later (what moves by itself) and the layout (regions, child windows, look) beside it.
+      for (from, to) in [(Looks.laterPath(c), Looks.laterPath(png.path)), (Looks.layoutPath(c), Looks.layoutPath(png.path))] where fm.fileExists(atPath: from) {
+        try fm.copyItem(atPath: from, toPath: to)
+      }
       b.snapshot = store.rel(png)
     }
     try PLJSON.write(b, path: dir.appendingPathComponent("baseline.json").path)
@@ -260,7 +272,8 @@ extension Loop {
 
   /// The run's picture against the baseline's, judged by the champion's adapter when it has the scenario (the judge
   /// the loop uses), else by the measured build's own; nil when neither answers `snapdiff`.
-  func compareSnapshot(_ reference: String, _ capture: String, scenario: String, params: [String: JSONValue], build: Store.Entry, champion: Store.Entry?, dir: URL) -> GuardResult? {
+  func compareSnapshot(_ reference: String, _ capture: String, scenario: String, params: [String: JSONValue], build: Store.Entry, champion: Store.Entry?, dir: URL,
+                       expected: [String] = []) -> GuardResult? {
     let judge = [champion].compactMap { $0 }.first { $0.manifest?.scenario(scenario) != nil && $0.manifest?.has(verb: "snapdiff") != false }
       ?? (build.manifest?.has(verb: "snapdiff") != false ? build : nil)
     guard let j = judge else { return nil }
@@ -268,17 +281,26 @@ extension Loop {
     // The run's picture is kept beside the diff while it needs a look (the rep folders are cleaned up).
     let mine = dir.appendingPathComponent("snapshot.png").path, diffOut = dir.appendingPathComponent("snapshot-diff.png").path
     try? fm.copyItem(atPath: capture, toPath: mine)
-    let later = String(capture.dropLast(4)) + ".later.png"
-    if fm.fileExists(atPath: later) { try? fm.copyItem(atPath: later, toPath: String(mine.dropLast(4)) + ".later.png") }
+    for (from, to) in [(Looks.laterPath(capture), Looks.laterPath(mine)), (Looks.layoutPath(capture), Looks.layoutPath(mine))] where fm.fileExists(atPath: from) { try? fm.copyItem(atPath: from, toPath: to) }
     var r: GuardResult
     if let o = try? Adapter(exe: j.executable).snapdiff(reference, mine, params: GuardNames.params(params), diffOut: diffOut), let v = o.json?["guard"], let g = GuardResult(json: v), [0, 3].contains(o.status) {
-      r = g
+      r = Looks.judge(g, expected: expected)
     } else {
       r = GuardResult(name: GuardNames.snapshotDiff, pass: false, detail: "snapdiff couldn't compare the baseline's picture with this run's", artifacts: [reference, mine], review: true)
     }
-    try? fm.removeItem(atPath: String(mine.dropLast(4)) + ".later.png")
-    if r.pass { for f in [mine, diffOut] { try? fm.removeItem(atPath: f) }; r.artifacts = [] }
-    else { r.artifacts = [reference, mine, diffOut].filter { fm.fileExists(atPath: $0) }.map { store.rel(URL(fileURLWithPath: $0)) } }
+    for f in [Looks.laterPath(mine), Looks.layoutPath(mine)] { try? fm.removeItem(atPath: f) }
+    func rel(_ p: String?) -> String? { p.flatMap { fm.fileExists(atPath: $0) ? store.rel(URL(fileURLWithPath: $0)) : nil } }
+    let declared = (r.looks ?? []).contains { $0.expected == true }
+    if r.pass && !declared {
+      for f in [mine, diffOut] + (r.looks ?? []).flatMap(\.pictures) { try? fm.removeItem(atPath: f) }
+      r.artifacts = []
+    } else {
+      r.artifacts = [reference, mine, diffOut].compactMap(rel)
+    }
+    if var ls = r.looks {
+      for i in ls.indices { ls[i].before = rel(ls[i].before); ls[i].after = rel(ls[i].after); ls[i].diff = rel(ls[i].diff) }
+      r.looks = ls
+    }
     return r
   }
 
@@ -291,7 +313,10 @@ extension Loop {
       return "\(again) once the Mac is quiet and unlocked (perfloop doctor says what isn't); no number above is to be quoted" + (x.kind == "baseline" ? ", and no baseline was recorded" : "")
     }
     if !s.checksFailed.isEmpty || !s.guardsFailed.isEmpty { return "the scenario's own checks failed (\((s.checksFailed + s.guardsFailed).joined(separator: ", "))): fix the feature before reading its numbers" }
-    if let g = x.snapshot, !g.pass { return "look at the two pictures and the diff above: a change from the baseline's look is the owner's call (say so in your PR)" }
+    if let g = x.snapshot, !g.pass { return "look at the pictures above (each changed region's before, after and diff): a change outside the regions you declared with --expect-look is the owner's call (say so in your PR)" }
+    if let g = x.snapshot, (g.looks ?? []).contains(where: { $0.expected == true }) {
+      return "the look changed only where you declared it: put each declared region's pictures (above) in your PR for the reviewer to accept by looking"
+    }
     if x.kind == "baseline" {
       return "quote this baseline in your PR and commit the scenario with the feature; once the champion has \(x.scenario), perfloop run champion --scenario \(x.scenario) compares it with this baseline"
     }
@@ -312,7 +337,7 @@ extension Loop {
     for b in bs {
       guard cm.scenario(b.scenario) != nil else { waiting.append("\(b.scenario) (\(b.measurement))"); continue }
       if runs.contains(where: { $0.build.hash == c.build.hash && $0.againstBaseline?.measurement == b.measurement }) { continue }
-      o.append("baseline \(b.scenario) (\(b.measurement), \(b.metric) \(Measure.number(b.median)) on \(b.fixture)): the champion has \(b.scenario) now; perfloop run champion --scenario \(b.scenario) compares it with the baseline")
+      o.append("baseline \(b.scenario)\(b.look.map { " in \($0)" } ?? "") (\(b.measurement), \(b.metric) \(Measure.number(b.median)) on \(b.fixture)): the champion has \(b.scenario) now; perfloop run champion --scenario \(b.scenario) compares it with the baseline")
     }
     if !waiting.isEmpty { o.append("baselines waiting for a champion with their scenario: " + waiting.joined(separator: ", ")) }
     return o
@@ -321,7 +346,7 @@ extension Loop {
   /// The reps' pictures: every `.png` in a measurement's subfolders (`r1/`, `ref2/`, …).
   static func pictures(under dir: URL) -> [URL] {
     guard let e = FileManager.default.enumerator(atPath: dir.path) else { return [] }
-    return e.compactMap { $0 as? String }.filter { $0.contains("/") && $0.hasSuffix(".png") }.map { dir.appendingPathComponent($0) }
+    return e.compactMap { $0 as? String }.filter { $0.contains("/") && ($0.hasSuffix(".png") || $0.hasSuffix(".layout.json")) }.map { dir.appendingPathComponent($0) }
   }
 
   /// `perfloop run`'s exit code: 2 every rep failed, 5 nothing could be trusted (or, for a baseline, none was

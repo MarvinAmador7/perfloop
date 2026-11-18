@@ -82,6 +82,16 @@ not a verdict (a feature changes what it shows). These checks get no "drop it", 
 rules (the streak, the 2 h, the 20 candidates): the 2 h clock starts at the first optimisation experiment and doesn't
 run while an expect-same screen or full does.
 
+**Looks.** Snapshots are compared region by region (the bench's named regions, each child window, and `rest`):
+`same`, `moved 60,0 pt`, `differs 3.2 %`, `missing`, `resized`, each changed region with `look at:` its before, after
+and diff pictures. Open them: you read images, and the picture is half the check. When your change means to alter how
+a region looks, declare it up front: `perfloop exp new "…" --expect same --expect-look footer,sidebar` (or `perfloop run
+… --expect-look footer` against a baseline). A change only in declared regions passes, marked `declared`, and its
+pictures go in the PR for the reviewer to accept by looking; a change anywhere else stays a look for the owner, whatever
+you declared. Declare only what the change is about: a declared region is still reviewed, by a person, from its
+pictures. Check the other look too: `--set appearance=dark` runs both sides dark, and `perfloop baseline S --set
+appearance=dark` gives a new scenario its dark reference picture.
+
 ## Measuring without a verdict: `run` and `baseline`
 
 `exp` judges a candidate against the champion, on a scenario the champion has. Two things it can't do, and what to use
@@ -194,8 +204,9 @@ one is in the store; `perfloop store gc` deletes those.
   the owner.
 - Feel and taste: animation curves, springs, gesture handling, spacing, what a placeholder shows. The bench measures
   smoothness, not feel.
-- A `needsReview` verdict: a snapshot that doesn't look like the champion's (both pictures and a diff are in the
-  experiment's folder), or no decision at 10+10 pairs.
+- A `needsReview` verdict: a snapshot that doesn't look like the champion's outside the regions you declared with
+  `--expect-look` (each changed region's before, after and diff are in the experiment's folder, named on its `look`
+  line), or no decision at 10+10 pairs. A change only in declared regions is the PR reviewer's, from those pictures.
 - A guard, scenario or fixture you think is wrong or missing.
 - Promoting a knob: the winning value becomes the default and the knob is deleted, in a follow-up change.
 - A champion `champion merged` refuses for good: a PR that was squash-merged or rebased (its build commit is never on

@@ -18,16 +18,19 @@ public struct GuardResult: Codable, Sendable, Equatable {
   public var limit: Double?
   /// A failure that asks the owner (needsReview) instead of vetoing outright.
   public var review: Bool?
-  public init(name: String, pass: Bool, detail: String, artifacts: [String] = [], value: Double? = nil, limit: Double? = nil, review: Bool? = nil) {
-    self.name = name; self.pass = pass; self.detail = detail; self.artifacts = artifacts; self.value = value; self.limit = limit; self.review = review
+  /// snapshot-diff: the comparison region by region (Looks.swift), with each changed region's pictures.
+  public var looks: [RegionLook]?
+  public init(name: String, pass: Bool, detail: String, artifacts: [String] = [], value: Double? = nil, limit: Double? = nil, review: Bool? = nil, looks: [RegionLook]? = nil) {
+    self.name = name; self.pass = pass; self.detail = detail; self.artifacts = artifacts; self.value = value; self.limit = limit; self.review = review; self.looks = looks
   }
-  enum CodingKeys: String, CodingKey { case name, pass, detail, artifacts, value, limit, review }
+  enum CodingKeys: String, CodingKey { case name, pass, detail, artifacts, value, limit, review, looks }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     name = try c.decode(String.self, forKey: .name); pass = try c.decodeIfPresent(Bool.self, forKey: .pass) ?? false
     detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""; artifacts = (try? c.decodeIfPresent([String].self, forKey: .artifacts)) ?? []
     value = try? c.decodeIfPresent(Double.self, forKey: .value); limit = try? c.decodeIfPresent(Double.self, forKey: .limit)
     review = try? c.decodeIfPresent(Bool.self, forKey: .review)
+    looks = try? c.decodeIfPresent([RegionLook].self, forKey: .looks)
   }
   public init?(json v: JSONValue?) {
     guard let v, v.object != nil, let g = try? v.decode(GuardResult.self) else { return nil }
@@ -117,10 +120,13 @@ extension Explain {
   public static func guardLines(_ s: Stage) -> [String] {
     var o: [String] = []
     for p in s.pairs where !(p.b.guards ?? []).isEmpty || !(p.a.guards ?? []).isEmpty {
-      let b = (p.b.guards ?? []).map { g in "\(g.name) \(g.pass ? "✓" : g.review == true ? "REVIEW" : "✗")\(g.value.map { " " + guardValue(g.name, $0) } ?? "")" }
+      let b = (p.b.guards ?? []).map { g in
+        "\(g.name) \(g.pass ? ((g.looks ?? []).contains { $0.expected == true } ? "✓ declared look" : "✓") : g.review == true ? "REVIEW" : "✗")\(g.value.map { " " + guardValue(g.name, $0) } ?? "")"
+      }
       let aFailed = (p.a.guards ?? []).filter { !$0.pass }.map(\.name)
       o.append("  guards pair \(p.index + 1): " + b.joined(separator: ", ") + (aFailed.isEmpty ? "" : " (champion failed: \(aFailed.joined(separator: ", ")))"))
       for g in p.b.guards ?? [] where !g.pass && !g.artifacts.isEmpty { o.append("    \(g.name) artifacts: " + g.artifacts.joined(separator: " ")) }
+      for g in p.b.guards ?? [] { o += Looks.lines(g) }
     }
     return o
   }

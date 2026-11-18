@@ -125,7 +125,7 @@ final class MeasureLoopTests: FakeBenchCase {
     XCTAssertEqual(d.snapshot?.pass, false); XCTAssertEqual(d.snapshot?.review, true)
     XCTAssertEqual(d.snapshot?.artifacts.count, 3)
     for a in d.snapshot?.artifacts ?? [] { XCTAssertTrue(FileManager.default.fileExists(atPath: store.abs(a)), a) }
-    XCTAssertTrue(d.next?.contains("look at the two pictures") == true, d.next ?? "")
+    XCTAssertTrue(d.next?.contains("look at the pictures above") == true, d.next ?? "")
   }
 
   func testNoBaselineFromUntrustedReps() throws {

@@ -1,6 +1,7 @@
 #!/bin/sh
-# The PerfLoop loop on SlowList, end to end: build the champion and two candidates, store, champion, a knob experiment,
-# a deliberate cheat the guards must refuse, a real code fix screened, run in full, promoted, and the ledger.
+# The PerfLoop loop on SlowList, end to end: build the champion and three candidates, store, champion, a knob experiment,
+# a deliberate cheat the guards must refuse, a real code fix screened, run in full, promoted, a look change declared
+# (light and dark, with the details panel drawn in), and the ledger.
 #
 #   ./walkthrough.sh --dry-run          print every command, run nothing (no window)
 #   ./walkthrough.sh [--lock DIR]       run it: builds for ~5 min, then opens a window 34 times over ~2 min, so run it when nobody is using the
@@ -44,18 +45,18 @@ new_exp() {
 cleanup() { if [ $keep = 0 ] && [ $dry = 0 ]; then rm -rf "$W"; echo "(removed $W)"; else echo "(kept $W)"; fi; }
 trap cleanup EXIT
 
-say "build the runner and three benches: the app as it is (the champion), a code fix, a cheat"
+say "build the runner and four benches: the app as it is (the champion), a code fix, a cheat, a look change"
 run swift build -c release --package-path "$pkg" --product perfloop
 [ $dry = 0 ] && rm -rf "$PERFLOOP_HOME"
-for v in champion fix cheat; do
+for v in champion fix cheat look; do
   if [ $reuse = 1 ] && [ -x "$W/bench-$v/SlowListBench" ]; then echo "(reusing $W/bench-$v)"; continue; fi
-  case $v in champion) flags="" ;; fix) flags="-Xswiftc -DSLOWLIST_ROW_VALUES" ;; cheat) flags="-Xswiftc -DSLOWLIST_CHEAT" ;; esac
+  case $v in champion) flags="" ;; fix) flags="-Xswiftc -DSLOWLIST_ROW_VALUES" ;; cheat) flags="-Xswiftc -DSLOWLIST_CHEAT" ;; look) flags="-Xswiftc -DSLOWLIST_ROW_VALUES -Xswiftc -DSLOWLIST_LOOK" ;; esac
   # shellcheck disable=SC2086
   run swift build -c release --package-path "$here" --product SlowListBench --scratch-path "$W/build-$v" $flags
   run mkdir -p "$W/bench-$v"
   run cp "$W/build-$v/release/SlowListBench" "$W/bench-$v/SlowListBench"
 done
-[ $dry = 1 ] || rm -rf "$W/build-champion" "$W/build-fix" "$W/build-cheat"
+[ $dry = 1 ] || rm -rf "$W/build-champion" "$W/build-fix" "$W/build-cheat" "$W/build-look"
 
 say "is this Mac and this bench ready?"
 run "$P" doctor --bench "$W/bench-champion" || true
@@ -82,6 +83,15 @@ new_exp "rows take values: two bodies per selection, ranks sorted once" --bench 
 run "$P" exp screen "$id" $runner
 run "$P" exp full "$id" $runner
 run "$P" exp promote "$id" || true
+run "$P" explain "exp/$id"
+
+# The look build carries the fix too, so it costs nothing against the champion whether or not step 3 promoted it.
+say "4. a look change: the status line names the item; declared, so only the footer region may change (the details panel is drawn in)"
+new_exp "the status line names the selected item and counts the list" --bench "$W/bench-look" --scenario details --expect same --expect-look footer --no-screen
+run "$P" exp screen "$id" $runner
+run "$P" explain "exp/$id"
+new_exp "the same, in dark mode" --bench "$W/bench-look" --scenario details --expect same --expect-look footer --set appearance=dark --no-screen
+run "$P" exp screen "$id" $runner
 run "$P" explain "exp/$id"
 
 say "what the loop remembers"

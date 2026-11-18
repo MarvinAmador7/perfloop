@@ -6,8 +6,8 @@ deliberately slow path, and its PerfLoop bench. It is the second app PerfLoop ru
 | File | What it shows |
 |---|---|
 | `Sources/SlowListKit/Model.swift` | a knob (`ListKnobs.rank`) where an idea varies, and `Mutations.record` on the state that drives bodies |
-| `Sources/SlowListKit/Views.swift` | `Probe.body("Row", id:)` in the bodies worth counting; the slow path; the fix (`SLOWLIST_ROW_VALUES`); a cheat (`SLOWLIST_CHEAT`) |
-| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, three scenarios (one replays a trackpad gesture), a knob, a guard of its own, `bench.main()` |
+| `Sources/SlowListKit/Views.swift` | `Probe.body("Row", id:)` in the bodies worth counting; the slow path; the fix (`SLOWLIST_ROW_VALUES`); a cheat (`SLOWLIST_CHEAT`); a look change (`SLOWLIST_LOOK`: the status line names the item); the details panel (a child window) |
+| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, four scenarios (one replays a trackpad gesture, one opens a child panel), the regions snapshots are compared by, a knob, a guard of its own, `bench.main()` |
 | `Package.swift` | depends on PerfLoop like an outside app; the `PerfLoopStamp` plugin on the bench target |
 | `walkthrough.sh` | the loop end to end on this app |
 
@@ -33,6 +33,7 @@ $B describe                                  # the manifest the runner reads
 $B run select --reps 1                       # opens a window for ~3 s; prints where the time went
 PERFLOOP_KNOBS=rows.rank=index $B run select --reps 1
 $B run scroll --reps 1                       # a trackpad flick replayed into the list: how closely the content followed
+$B run details --set appearance=dark --reps 1   # the details panel over the list, in dark mode
 $B run scroll --set gesture=synthetic:drag-down --set inject-block-ms=60 --reps 1   # the meter's self-check: stalls
 $B record-gesture scroll --name my-swipe     # your own swipe over the list, for --set gesture=FILE
 $B profile select                            # the same scenario under xctrace: call trees per step
@@ -95,3 +96,30 @@ the middle of the drag) reported 16 stalls, a 28 pt worst error and an 86 ms lon
 step on the slow path, 8.8 with `rows.rank=index`; `diff` of the two names `ListModel.rankBySorting`'s sort (insertion
 sort −61.5 ms, `CFStringCompareWithOptionsAndLocale` −40.6 ms per step) as what shrank. The trace was deleted after its
 tables were exported.
+
+## Looks: regions, a child window, dark mode (2026-11-17, the owner's spare Mac mini over ssh, macOS 26.6.2)
+
+The bench names regions for its snapshots: `footer` (the AppKit status line, by its `identifier`), `list` (the scroll
+view) and `filter` (a rect: SwiftUI's views aren't NSViews). The `details` scenario opens a panel attached to the window
+(`DetailsPanel`, a child window) and selects rows; the panel is drawn into the snapshot where it is on screen and is a
+region of its own. With the champion's build and one with `-DSLOWLIST_LOOK` (the footer reads "Item 12 selected · 1000
+items" instead of "Selected item 12"):
+
+```sh
+perfloop baseline details --bench bench-champ --reps 2 --runner ssh://…            # light reference picture
+perfloop baseline details --bench bench-champ --reps 2 --set appearance=dark …     # dark: baselines/details~dark/
+perfloop run bench-look --scenario details --reps 1 …                               # REVIEW: footer resized (92×14 → 158×14 pt)
+perfloop run bench-look --scenario details --reps 1 --expect-look footer …          # changed where declared
+perfloop run bench-champ --scenario details --set appearance=dark --reps 1 …       # same in every region
+```
+
+| Run | Snapshot against its look's baseline |
+|---|---|
+| look build, nothing declared | `REVIEW · footer resized (92×14 → 158×14 pt); same: list, filter, details, rest`, the footer's before and after crops named on a `look at:` line; next: the owner's call |
+| look build, `--expect-look footer` | `changed where declared · footer resized … [declared]`; exit 0; next: put the footer's pictures in the PR for the reviewer |
+| champion build, dark | `same · the same in every region (footer, list, filter, details, rest)` |
+
+Every rep was trusted. The layout beside each picture listed the panel (`childWindows: details, DetailsPanel`) and
+`notCaptured: the title bars (the window's and its child windows')`. The footer is a label sized to its text, so its
+region grew with it: `resized`, not `differs`. A whole-window `snapdiff` with the alignment search took under 0.1 s on
+900×700 pictures.

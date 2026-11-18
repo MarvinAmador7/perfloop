@@ -60,6 +60,19 @@ public final class MCPServer {
   static func prop(_ type: String, _ d: String, _ extra: [String: JSONValue] = [:]) -> JSONValue {
     .object(["type": .string(type), "description": .string(d)].merging(extra) { $1 })
   }
+  static let appearanceProp = prop("string", "The look both sides draw in: light (the default), dark or system; each look has its own baseline and reference picture",
+                                   ["enum": .array(Looks.appearances.map(JSONValue.string))])
+  static let expectLookProp = prop("string", "R,R: the snapshot regions your change means to alter (the bench's named regions, a child window's name, or rest). A snapshot that differs only there passes as declared, for the PR's reviewer to accept by looking at the region's pictures; a difference elsewhere asks the owner")
+  /// `--set appearance=X` and `--expect-look R` from a tool's arguments.
+  static func looks(_ a: [String: JSONValue], expect: Bool = true) throws -> [String] {
+    var x: [String] = []
+    if let v = a["appearance"]?.string, !v.isEmpty {
+      guard Looks.appearances.contains(v) else { throw Refused(description: "appearance is \(Looks.appearances.joined(separator: ", ")), not '\(v)'") }
+      x += ["--set", "appearance=\(v)"]
+    }
+    if expect { x += try opt(a, "expect_look", name, flag: "--expect-look") }
+    return x
+  }
   static let runnerProp = prop("string", "Where windows open: \"local\" (this Mac now, holding the window lock; the default), \"local-idle\" (this Mac once nobody has touched it for 120 s; a rep is redone if someone does), or \"ssh://user@host\" (a spare Mac). Results never mix runners.")
 
   /// Every tool, in the order an agent meets them.
@@ -87,6 +100,7 @@ public final class MCPServer {
                       "scenario": Self.prop("string", "Default: the champion's"), "fixture": Self.prop("string", "Default: the champion's. A listed name, name@k=v, or the adapter's file:PATH (refused when the file isn't on the Mac the reps run on)"),
                       "behaviour_change": Self.prop("boolean", "The change alters what the user sees or can do: promotion then needs the owner"),
                       "screen": Self.prop("boolean", "Screen it now (default true)"), "runner": Self.runnerProp,
+                      "appearance": Self.appearanceProp, "expect_look": Self.expectLookProp,
                       "expect": Self.prop("string", "faster (default: an optimisation, promoted when it wins) or same (a feature or guard check: does it cost anything?)",
                                           ["enum": .array(["faster", "same"].map(JSONValue.string))])],
          required: ["hypothesis"], kind: .job) { [unowned self] a in
@@ -94,6 +108,7 @@ public final class MCPServer {
       x += try Self.opt(a, "bench", Self.path, flag: "--bench") + Self.opt(a, "build_cmd", { $0 }, flag: "--build-cmd") + Self.opt(a, "knobs", Self.knobs, flag: "--knobs")
       x += try Self.opt(a, "scenario", Self.name, flag: "--scenario") + Self.opt(a, "fixture", Self.fixture, flag: "--fixture")
       if a["behaviour_change"]?.bool == true { x.append("--behaviour-change") }
+      x += try Self.looks(a)
       if let v = a["expect"]?.string, !v.isEmpty {
         guard ["faster", "same"].contains(v) else { throw Refused(description: "expect is faster or same, not '\(v)'") }
         x += ["--expect", v]
@@ -141,18 +156,20 @@ public final class MCPServer {
          properties: ["target": Self.prop("string", "champion, exp/ID, a build hash in the store, or a stamped bench's path"), "scenario": Self.prop("string", "Default: the target's"),
                       "fixture": Self.prop("string", "Default: the scenario's own, else the manifest's. A listed name, name@k=v, or the adapter's file:PATH"), "reps": Self.prop("integer", "Reps (default 3)"),
                       "reference": Self.prop("string", "A champion scenario run beside each rep, the same minutes: a yardstick for how fast the Mac ran"),
-                      "knobs": Self.prop("string", "k=v,k=v"), "runner": Self.runnerProp], required: ["target"], kind: .job) { [unowned self] a in
+                      "knobs": Self.prop("string", "k=v,k=v"), "runner": Self.runnerProp,
+                      "appearance": Self.appearanceProp, "expect_look": Self.expectLookProp], required: ["target"], kind: .job) { [unowned self] a in
       var x = try ["run", Self.targetOrPath(Self.req(a, "target"))] + Self.opt(a, "scenario", Self.name, flag: "--scenario") + Self.opt(a, "fixture", Self.fixture, flag: "--fixture")
-      x += try Self.opt(a, "reference", Self.name, flag: "--reference") + Self.opt(a, "knobs", Self.knobs, flag: "--knobs")
+      x += try Self.opt(a, "reference", Self.name, flag: "--reference") + Self.opt(a, "knobs", Self.knobs, flag: "--knobs") + Self.looks(a)
       if let r = a["reps"]?.double { x += ["--reps", String(max(1, Int(r)))] }
       return try x + self.runner(a) },
     Tool(name: "baseline", description: "First numbers (trusted reps only) and a reference snapshot for a scenario the champion doesn't have yet (a feature's own); once a champion has it, `run` on the champion is compared with it. Records nothing when no rep could be trusted; its ledger line is `baseline` either way. Opens windows. Returns a job.",
          properties: ["scenario": Self.prop("string", "The new scenario"), "bench": Self.prop("string", "The bench that has it (stamped)"), "build": Self.prop("string", "Or a build in the store (hash) or exp/ID"),
                       "fixture": Self.prop("string", "Default: the scenario's own, else the manifest's. A listed name, name@k=v, or the adapter's file:PATH"), "reps": Self.prop("integer", "Reps (default 5)"),
-                      "reference": Self.prop("string", "A champion scenario run beside each rep, the same minutes"), "runner": Self.runnerProp], required: ["scenario"], kind: .job) { [unowned self] a in
+                      "reference": Self.prop("string", "A champion scenario run beside each rep, the same minutes"), "runner": Self.runnerProp,
+                      "appearance": Self.appearanceProp], required: ["scenario"], kind: .job) { [unowned self] a in
       var x = try ["baseline", Self.name(Self.req(a, "scenario"))] + Self.opt(a, "bench", Self.path, flag: "--bench") + Self.opt(a, "build", Self.targetOrPath, flag: "--build")
       guard x.contains("--bench") || x.contains("--build") else { throw Refused(description: "give the bench that has the scenario (bench) or a build in the store (build)") }
-      x += try Self.opt(a, "fixture", Self.fixture, flag: "--fixture") + Self.opt(a, "reference", Self.name, flag: "--reference")
+      x += try Self.opt(a, "fixture", Self.fixture, flag: "--fixture") + Self.opt(a, "reference", Self.name, flag: "--reference") + Self.looks(a, expect: false)
       if let r = a["reps"]?.double { x += ["--reps", String(max(1, Int(r)))] }
       return try x + self.runner(a) },
     Tool(name: "queue_add", description: "Queues an experiment's stages for a runner (the owner's `queue run` takes them, e.g. overnight on a spare Mac).",

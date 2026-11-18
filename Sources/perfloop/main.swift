@@ -35,12 +35,17 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
   exp new "<hypothesis>" [--bench PATH | --build-cmd CMD --bench PATH | --build HASH | --knobs k=v,…]
           [--scenario S] [--fixture F] [--second-fixture F] [--set k=v] [--via ab|run]
           [--behaviour-change] [--patch FILE] [--no-screen] [--against ID] [--expect faster|same]
+          [--expect-look R,…]
                                             a candidate against the champion; screens it unless --no-screen.
                                             --expect same: a feature or guard check that it costs nothing (a feature
                                             PR): no-regression | regressed | inconclusive, never promoted, out of the
                                             stopping rules. F (every verb): a listed fixture, NAME@k=v, or the
                                             adapter's file:PATH, refused up front when the file isn't on the Mac the
-                                            reps run on
+                                            reps run on. --expect-look R,…: the regions whose look the
+                                            change means to alter: a snapshot that differs only there passes as
+                                            declared (the PR's reviewer accepts it by looking at its pictures), a
+                                            difference elsewhere asks the owner. --set appearance=dark (or system,
+                                            textSize=NAME when the bench has text sizes): both sides draw in that look
   exp status [ID] [--json]                  open experiments and what each needs next, the 2 h time budget spent and
                                             left, and stop: lines (with ID: its explain)
   exp screen ID [--more [N]]                3 interleaved pairs: promising | inconclusive | rejected (| untrusted:
@@ -59,13 +64,15 @@ perfloop: an agent-first performance loop for native macOS apps (README.md; agen
                                             asks the owner; only the owner sets a tolerance (never inside exp)
   explain exp/ID                            exp/ID/explain.txt: everything needed to decide the next step
   run champion|exp/ID|BUILD|BENCH --scenario S [--fixture F] [--reps N] [--reference S2] [--set k=v] [--knobs k=v]
+          [--expect-look R,…]
                                             one build's scenario, measured on its own (opens windows; through the runner,
                                             like a stage): trusted numbers, checks, where the time went; no verdict.
                                             The scenario may be one only that build has (a feature's own). --reference S2
                                             runs the champion's S2 beside each rep, the same minutes, as a yardstick.
                                             Stored under runs/ (explain run/ID), a ledger line `measure`. Exit 5 when no
-                                            rep could be trusted, 3 when a check failed
-  baseline S --bench PATH|--build HASH [--fixture F] [--reps N] [--reference S2]
+                                            rep could be trusted, 3 when a check failed. Its snapshot is compared with
+                                            the baseline of its look (--set appearance=dark has its own)
+  baseline S --bench PATH|--build HASH [--fixture F] [--reps N] [--reference S2] [--set appearance=dark]
                                             first numbers (trusted reps only) and a reference snapshot for a scenario the
                                             champion doesn't have yet; once a champion has S, run champion --scenario S
                                             is compared with it. Nothing is recorded when no rep could be trusted.
@@ -151,7 +158,7 @@ struct Args {
   static let valued: Set<String> = ["bench", "commit", "note", "exe", "keep", "scenario", "fixture", "second-fixture", "set", "via", "build-cmd", "build", "knobs",
                                     "patch", "pr", "store", "app", "exp", "against", "guard-tolerance", "dir",
                                     "runner", "idle", "until", "stage", "idle-from", "remote-env", "launch", "busy-apps", "lock", "target", "perfloop", "template", "top", "label",
-                                    "max-load", "quiet-timeout", "reps", "reference", "main"]
+                                    "max-load", "quiet-timeout", "reps", "reference", "main", "expect-look"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
@@ -300,6 +307,7 @@ func run(_ args: Args) throws -> Int32 {
     o.params = args.all("set").reduce(into: [:]) { d, kv in let p = kv.split(separator: "=", maxSplits: 1).map(String.init); if p.count == 2 { d[p[0]] = p[1] } }
     o.behaviourChange = args.has("behaviour-change") || args.has("behavior-change"); o.via = args.one("via"); o.patch = args.one("patch")
     o.screen = !args.has("no-screen"); o.against = args.one("against"); o.expect = args.one("expect")
+    o.expectLook = Looks.names(args.all("expect-look"))
     let l = try loop(bench: o.bench); try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
     show(try l.new(o), l); return 0
   case ("exp", "status"):
@@ -484,8 +492,8 @@ func run(_ args: Args) throws -> Int32 {
 /// the runner like a stage's reps, no verdict; the exit code says whether anything could be trusted.
 func measureCommand(_ args: Args, json: Bool, loop: (String?) throws -> Loop) throws -> Int32 {
   let base = args[0] == "baseline"
-  let usage = base ? "usage: perfloop baseline SCENARIO --bench PATH|--build HASH [--fixture F] [--reps N] [--reference S2]"
-                   : "usage: perfloop run champion|exp/ID|BUILD|BENCH --scenario S [--fixture F] [--reps N] [--reference S2] [--set k=v] [--knobs k=v]"
+  let usage = base ? "usage: perfloop baseline SCENARIO --bench PATH|--build HASH [--fixture F] [--reps N] [--reference S2] [--set k=v]"
+                   : "usage: perfloop run champion|exp/ID|BUILD|BENCH --scenario S [--fixture F] [--reps N] [--reference S2] [--set k=v] [--knobs k=v] [--expect-look R,…]"
   guard let target = base ? args.one("bench") ?? args.one("build") : args[1] else { throw PLError.usage(usage) }
   if base && args[1] == nil { throw PLError.usage(usage) }
   var o = Loop.MeasureOptions(target: target, kind: base ? "baseline" : "run")
@@ -493,6 +501,7 @@ func measureCommand(_ args: Args, json: Bool, loop: (String?) throws -> Loop) th
   if let r = args.one("reps") { guard let n = Int(r), n >= 1 else { throw PLError.usage("--reps takes a count ≥ 1") }; o.reps = n }
   o.knobs = args.all("knobs").reduce(into: [:]) { $0.merge(Adapter.knobs($1)) { $1 } }
   o.params = args.all("set").reduce(into: [:]) { d, kv in let p = kv.split(separator: "=", maxSplits: 1).map(String.init); if p.count == 2 { d[p[0]] = p[1] } }
+  o.expectLook = Looks.names(args.all("expect-look"))
   let l = try loop(FileManager.default.fileExists(atPath: Store.tilde(target)) ? target : nil)
   try useRunner(l, args, gatedByDefault: false); defer { l.runner.close() }
   let m = try l.runScenario(o)

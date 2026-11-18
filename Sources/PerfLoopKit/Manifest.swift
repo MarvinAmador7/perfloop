@@ -38,13 +38,18 @@ public struct Manifest: Codable, Sendable, Equatable {
   /// Environment variables the adapter's `profile` needs beyond the allowlist (TraceEnv): `perfloop profile` starts it
   /// with those and nothing else, since a trace holds the recorded process's environment. Secret-like names never pass.
   public var profileEnv: [String]?
+  /// The appearances the bench applies for `--set appearance=` (PerfLoopHost: light, dark, system), and the text sizes
+  /// for `--set textSize=` (the bench's own: macOS has no system text size for an app to follow). nil: the adapter
+  /// applies none, and the runner refuses those parameters rather than measure the default look under their name.
+  public var appearances: [String]?
+  public var textSizes: [String]?
 
   public init(app: String, adapter: String, build: Build?, scenarios: [ScenarioEntry], fixtures: [JSONValue] = [], knobs: [KnobEntry] = [], source: String? = "describe") {
     schema = "perfloop.manifest/1"; self.protocol = 1; self.app = app; self.adapter = adapter; self.build = build
     self.scenarios = scenarios; self.fixtures = fixtures; self.knobs = knobs; self.source = source
   }
 
-  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards, gestures, verbs, privatePaths, fixtureSchemes, profileEnv }
+  enum CodingKeys: String, CodingKey { case schema, `protocol`, app, adapter, build, scenarios, fixtures, knobs, hosts, defaultHost, probes, exitCodes, source, defaultFixture, isolationGuards, gestures, verbs, privatePaths, fixtureSchemes, profileEnv, appearances, textSizes }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     schema = try c.decodeIfPresent(String.self, forKey: .schema) ?? "perfloop.manifest/1"
@@ -65,6 +70,21 @@ public struct Manifest: Codable, Sendable, Equatable {
     privatePaths = try? c.decodeIfPresent([String].self, forKey: .privatePaths)
     fixtureSchemes = try? c.decodeIfPresent([String].self, forKey: .fixtureSchemes)
     profileEnv = try? c.decodeIfPresent([String].self, forKey: .profileEnv)
+    appearances = try? c.decodeIfPresent([String].self, forKey: .appearances)
+    textSizes = try? c.decodeIfPresent([String].self, forKey: .textSizes)
+  }
+
+  /// Why the look parameters in `params` (`appearance`, `textSize`) can't run on this adapter, or nil when they can.
+  public func unsupportedLook(_ params: [String: String]?, whose: String) -> String? {
+    if let a = params?[Looks.parameter] {
+      guard let ok = appearances else { return "\(whose) applies no appearance (`appearances` is absent; PerfLoopHost's benches apply light, dark and system): --set appearance=\(a) would measure the default look under that name" }
+      if !ok.contains(a) { return "appearance '\(a)' isn't one \(whose) applies (\(ok.joined(separator: ", ")))" }
+    }
+    if let t = params?[Looks.textSizeParameter] {
+      guard let ok = textSizes, !ok.isEmpty else { return "\(whose) applies no text size (`textSizes` is absent: the bench must apply it through the app's own setting, ADAPTER.md §5a): --set textSize=\(t) would measure the default size under that name" }
+      if !ok.contains(t) { return "text size '\(t)' isn't one \(whose) applies (\(ok.joined(separator: ", ")))" }
+    }
+    return nil
   }
 
   /// Whether the adapter answers `verb` (adapters from before `verbs` answer deskbench's).

@@ -58,7 +58,8 @@ final class CLIArgumentsTests: XCTestCase {
   /// Flags added by other verbs reach this table too: `exp new --expect`, `exp screen --more [N]`.
   func testExpectAndMoreAreTaken() throws {
     for argv in [["exp", "new", "h", "--build", "abc", "--expect", "same"], ["exp", "screen", "0002", "--more"], ["exp", "screen", "0002", "--more", "5"],
-                 ["exp", "screen", "0002", "--more", "--runner", "local-idle"]] {
+                 ["exp", "screen", "0002", "--more", "--runner", "local-idle"], ["exp", "new", "h", "--build", "abc", "--expect", "same", "--expect-look", "footer,list"],
+                 ["run", "champion", "--scenario", "s", "--set", "appearance=dark", "--expect-look", "footer"], ["baseline", "s", "--build", "abc", "--set", "appearance=dark"]] {
       XCTAssertNoThrow(try CLIArguments.check(argv), "\(argv)")
     }
     XCTAssertThrowsError(try CLIArguments.check(["exp", "new", "h", "--build", "abc", "--expect"]))
@@ -72,7 +73,7 @@ final class CLIArgumentsTests: XCTestCase {
                                         "behaviour_change": .bool(true), "screen": .bool(true), "runner": .string("local-idle"), "pr": .string("u"), "note": .string("n"),
                                         "template": .string("time"), "a": .string("champion"), "b": .string("exp/0003"), "set": .array([.string("rows=1..4")]),
                                         "reps": .number(2), "reference": .string("r"), "build": .string("abc123"), "stage": .string("full"), "wait_s": .number(0),
-                                        "expect": .string("same"), "more": .number(3)]
+                                        "expect": .string("same"), "more": .number(3), "appearance": .string("dark"), "expect_look": .string("footer,list")]
     var checked = 0
     for t in s.tools where !["job", "jobs", "cancel_job"].contains(t.name) {
       for variant in [t.properties.keys.filter { $0 != "build" || t.properties["bench"] == nil }, Array(t.required)] {

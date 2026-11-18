@@ -187,9 +187,11 @@ public enum Acceptance {
     if !st.guardsPassed { r += st.guardFailures }
     let reviews = st.guardReviews ?? []
     r += reviews.map { "needs review: " + $0 }
+    let declared = (st.declaredLooks ?? []).map { "declared look: " + $0 }
+    r += declared
     if use.count < pairs.count { r.append("\(pairs.count - use.count) pair(s) unusable: " + pairs.compactMap(unusable).joined(separator: "; ")) }
     let ci = PairedT.bounds(gains)
-    if r.count == reviews.count && n >= screenPairs {
+    if r.count == reviews.count + declared.count && n >= screenPairs {
       st.verdict = reviews.isEmpty ? "promising" : "needsReview"
       r.append("won \(st.wins)/\(n) pairs, median gain \(med) % ≥ \(threshold) %")
     } else if !st.guardsPassed {
@@ -250,6 +252,7 @@ public enum Acceptance {
     }
     if !unchecked.isEmpty { r.append("not checked: \(unchecked.joined(separator: ", ")) (the adapter reports none per side)") }
     r += (st.guardReviews ?? []).map { "look: " + $0 }
+    r += (st.declaredLooks ?? []).map { "declared look (the PR's reviewer accepts it): " + $0 }
     if use.count < pairs.count { r.append("\(pairs.count - use.count) pair(s) unusable: " + pairs.compactMap(unusable).joined(separator: "; ")) }
     st.reasons = r
     return st
@@ -308,6 +311,7 @@ public enum Acceptance {
         // A snapshot unlike the champion's is never a win: the owner looks first (C6).
         st.verdict = (st.guardReviews ?? []).isEmpty ? "won" : "needsReview"
         r += (st.guardReviews ?? []).map { "needs review: " + $0 }
+        r += (st.declaredLooks ?? []).map { "declared look: " + $0 }
       }
       else {
         st.verdict = "lost"
@@ -350,6 +354,7 @@ public enum Acceptance {
     st.untrusted = untrustedSummary(pairs)
     st.guardFailures = guardFailures(pairs, guards: guards); st.guardsPassed = st.guardFailures.isEmpty
     let reviews = guardReviews(pairs, guards: guards); st.guardReviews = reviews.isEmpty ? nil : reviews
+    let declared = Looks.declared(pairs); st.declaredLooks = declared.isEmpty ? nil : declared
     return st
   }
 }

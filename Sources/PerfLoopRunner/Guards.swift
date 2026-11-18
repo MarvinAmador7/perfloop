@@ -20,10 +20,13 @@ extension Loop {
     return ["PERFLOOP_GUARDS": run.joined(separator: ","), "PERFLOOP_GUARD_PARAMS": GuardNames.params(g.params), "PERFLOOP_ARTIFACTS": dir.path]
   }
 
-  /// After a pair: the candidate's snapshot against the champion's, judged by the champion's adapter. The candidate's
-  /// own `snapshot-diff` record (its capture) is replaced by the comparison. Passing pictures are deleted (they are a
-  /// few MB a side); failing ones stay, with the diff picture, for the owner. Artifacts become store-relative.
-  func judgeSnapshots(_ p: inout Pair, _ g: (guards: [String], params: [String: JSONValue]), dir: URL, sides s: Sides) {
+  /// After a pair: the candidate's snapshot against the champion's, judged by the champion's adapter, region by region
+  /// when both pictures have layouts; then the regions the experiment declared (`--expect-look`) are judged here, so a
+  /// change only there passes as `declared` for the PR's reviewer (decision 5), and any other asks the owner. The
+  /// candidate's own `snapshot-diff` record (its capture) is replaced by the comparison. Pictures nobody has to look at
+  /// are deleted (they are a few MB a side); a review's, or a declared change's, stay with the regions' crops and
+  /// diffs. Artifacts become store-relative.
+  func judgeSnapshots(_ p: inout Pair, _ g: (guards: [String], params: [String: JSONValue]), dir: URL, sides s: Sides, expected: [String] = []) {
     guard g.guards.contains(GuardNames.snapshotDiff), p.failure == nil else { relativise(&p); return }
     func png(_ side: Side) -> String? {
       side.guards?.first { $0.name == GuardNames.snapshotDiff && $0.pass }?.artifacts.first { $0.hasSuffix(".png") && !$0.hasSuffix(".later.png") }
@@ -38,23 +41,36 @@ extension Loop {
     let diffOut = dir.appendingPathComponent("diff.png").path
     var r: GuardResult
     if let o = try? Adapter(exe: s.champion.executable).snapdiff(pa, pb, params: GuardNames.params(g.params), diffOut: diffOut), let v = o.json?["guard"], let x = GuardResult(json: v), [0, 3].contains(o.status) {
-      r = x
+      r = Looks.judge(x, expected: expected)
     } else {
       r = GuardResult(name: GuardNames.snapshotDiff, pass: false, detail: "the champion's snapdiff couldn't compare \(pa) with \(pb)", artifacts: [pa, pb], review: true)
     }
     p.b.guards![bi] = r
-    // Keep what the owner needs to look at, nothing else.
-    let later = [pa, pb].map { $0.replacingOccurrences(of: ".png", with: ".later.png") }
-    for f in later { try? fm.removeItem(atPath: f) }
-    if r.pass { for f in [pa, pb, diffOut] { try? fm.removeItem(atPath: f) }; p.b.guards![bi].artifacts = [] }
+    // Keep what the owner or the PR's reviewer needs to look at, nothing else.
+    for f in [pa, pb].flatMap({ [Looks.laterPath($0), Looks.layoutPath($0)] }) { try? fm.removeItem(atPath: f) }
+    let declared = (r.looks ?? []).contains { $0.expected == true }
+    if r.pass && !declared {
+      for f in [pa, pb, diffOut] + (r.looks ?? []).flatMap(\.pictures) { try? fm.removeItem(atPath: f) }
+      p.b.guards![bi].artifacts = []; p.b.guards![bi].looks = r.looks.map { $0.map { var l = $0; l.before = nil; l.after = nil; l.diff = nil; return l } }
+    }
     relativise(&p)
   }
 
-  /// Artifact paths relative to the store, and only those that still exist.
+  /// Artifact paths relative to the store, and only those that still exist (the regions' pictures too).
   func relativise(_ p: inout Pair) {
+    func rel(_ x: String?) -> String? {
+      guard let x, FileManager.default.fileExists(atPath: store.abs(x)) else { return nil }
+      return store.rel(URL(fileURLWithPath: store.abs(x)))
+    }
     for side in [\Pair.a, \Pair.b] {
       guard var gs = p[keyPath: side].guards else { continue }
-      for i in gs.indices { gs[i].artifacts = gs[i].artifacts.filter { FileManager.default.fileExists(atPath: store.abs($0)) }.map { store.rel(URL(fileURLWithPath: store.abs($0))) } }
+      for i in gs.indices {
+        gs[i].artifacts = gs[i].artifacts.compactMap(rel)
+        if var ls = gs[i].looks {
+          for j in ls.indices { ls[j].before = rel(ls[j].before); ls[j].after = rel(ls[j].after); ls[j].diff = rel(ls[j].diff) }
+          gs[i].looks = ls
+        }
+      }
       p[keyPath: side].guards = gs
     }
   }

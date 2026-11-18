@@ -36,6 +36,7 @@ FAKE_EXTRA=
 FAKE_STEP_FIXTURE=
 FAKE_RAN_FIXTURE=
 FAKE_SCHEMES=-
+FAKE_APPEARANCES=
 
 self="$0"
 log() { if [ -n "$FAKE_LOG" ]; then echo "$*" >> "$FAKE_LOG"; fi; }
@@ -86,6 +87,8 @@ describe)
   stepfx=""; if [ -n "$FAKE_STEP_FIXTURE" ]; then stepfx="\"fixture\": \"$FAKE_STEP_FIXTURE\","; fi
   # FAKE_SCHEMES: the manifest's fixtureSchemes, comma separated ("-": no field; empty: []).
   schemes=""; if [ "$FAKE_SCHEMES" != "-" ]; then schemes="\"fixtureSchemes\": [$(echo "$FAKE_SCHEMES" | sed 's/[^,][^,]*/"&"/g; s/,/, /g')],"; fi
+  # FAKE_APPEARANCES: the looks the bench applies (v11), comma separated; empty: no field.
+  if [ -n "$FAKE_APPEARANCES" ]; then schemes="$schemes \"appearances\": [$(echo "$FAKE_APPEARANCES" | sed 's/[^,][^,]*/"&"/g; s/,/, /g')],"; fi
   if [ "$FAKE_GUARDED" = 1 ]; then
   cat <<JSON
 { "schema": "perfloop.manifest/1", "protocol": 1, "app": "fake-app", "adapter": "fakebench", $verbs
@@ -186,7 +189,19 @@ snapdiff)
   if cmp -s "$a" "$b" || awk -v t="$tol" 'BEGIN { exit !(t >= 0.2) }'; then pass=true; code=0; rev=null; else pass=false; code=3; rev=true; fi
   v=0; if ! cmp -s "$a" "$b"; then v=0.2; fi
   if [ -n "$out" ]; then echo diff > "$out"; fi
-  echo "{ \"schema\": \"deskbench.snapdiff/1\", \"guard\": { \"name\": \"snapshot-diff\", \"pass\": $pass, \"detail\": \"fake: $v of the pixels differ\", \"artifacts\": [\"$a\", \"$b\", \"$out\"], \"value\": $v, \"limit\": $tol, \"review\": $rev } }"
+  # FAKE_LOOKS (the test's environment): a region of that name, compared on its own (v5), with its pictures when it
+  # changed; everything else (rest) the same.
+  looks=""
+  if [ -n "$FAKE_LOOKS" ]; then
+    fl=same; pics=""
+    if ! cmp -s "$a" "$b"; then
+      fl=differs; base=${out%.png}
+      for k in before after diff; do echo "$k" > "$base-$FAKE_LOOKS.$k.png"; done
+      pics=", \"before\": \"$base-$FAKE_LOOKS.before.png\", \"after\": \"$base-$FAKE_LOOKS.after.png\", \"diff\": \"$base-$FAKE_LOOKS.diff.png\""
+    fi
+    looks=", \"looks\": [ { \"name\": \"$FAKE_LOOKS\", \"look\": \"$fl\", \"share\": $v $pics }, { \"name\": \"rest\", \"look\": \"same\", \"share\": 0 } ]"
+  fi
+  echo "{ \"schema\": \"deskbench.snapdiff/1\", \"guard\": { \"name\": \"snapshot-diff\", \"pass\": $pass, \"detail\": \"fake: $v of the pixels differ\", \"artifacts\": [\"$a\", \"$b\", \"$out\"], \"value\": $v, \"limit\": $tol, \"review\": $rev $looks } }"
   exit $code
   ;;
 profile)

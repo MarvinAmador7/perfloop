@@ -27,6 +27,16 @@ import PerfLoopProbe
   let activate: Bool
   let sampler: MainThreadSampler?
   var appearance: NSAppearance.Name? = .aqua
+  /// The look the rep draws in (`--set appearance=light|dark|system`, light by default): the bench window and, through
+  /// `NSApp.appearance`, its child windows, popovers, sheets and menus.
+  public internal(set) var appearanceName = "light"
+  /// The text size asked for (`--set textSize=…`, one of the bench's `textSizes`), nil for the default. macOS has no
+  /// system text size an app follows: the scenario applies it through the app's own setting.
+  public internal(set) var textSize: String?
+  /// The regions snapshots are compared by: the bench's (`bench.region`), then the scenario's (`run.region`).
+  var regions: [LookRegion] = []
+  var appAppearance: NSAppearance??
+  var closers: [@MainActor () -> Void] = []
   var steps: [StepRecord] = []
   var checks: [CheckResult] = []
   var notes: [String] = []
@@ -69,6 +79,9 @@ import PerfLoopProbe
     w.isReleasedWhenClosed = false
     // One appearance on every machine, so snapshots of the champion and the candidate compare (Bench.appearance).
     if let a = appearance { w.appearance = NSAppearance(named: a) }
+    // Child windows, popovers and sheets follow the app's appearance, not their parent's: set it too, for the rep.
+    if appAppearance == nil { appAppearance = .some(NSApp.appearance) }
+    NSApp.appearance = appearance.flatMap { NSAppearance(named: $0) }
     w.contentView = view
     w.center()
     window = w
@@ -108,11 +121,29 @@ import PerfLoopProbe
                        frame: [w.frame.origin.x, w.frame.origin.y, w.frame.width, w.frame.height], backingScale: w.backingScaleFactor, keyWindowIsChild: child ? true : nil)
   }
 
+  /// Runs `f` when the rep's window closes, after the guards have judged it: a scenario that opens a panel, popover or
+  /// sheet leaves it up so snapshots draw it in (they are taken after the scenario returns), and closes it here.
+  public func atClose(_ f: @escaping @MainActor () -> Void) { closers.append(f) }
+
   func close() {
+    for f in closers.reversed() { f() }
+    closers = []
     recorder.stop()
     if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
     window?.orderOut(nil); window?.contentView = nil; window?.close(); window = nil
+    if let a = appAppearance { NSApp.appearance = a; appAppearance = nil }
   }
+
+  // MARK: regions
+
+  /// Names a part of the window for snapshots (v5): `snapdiff` reports it on its own (`same`, `moved`, `differs`),
+  /// and an agent declares the regions its change means to alter with `--expect-look NAME`. Found when the snapshot is
+  /// taken, in the window and its child windows, by `identifier` (an NSView's `identifier` or accessibility identifier).
+  public func region(_ name: String, identifier: String) { regions.append(.identifier(name, identifier)) }
+  /// …or as a view (wherever it is then).
+  public func region(_ name: String, view: NSView) { regions.append(.view(name, view)) }
+  /// …or as a fixed rect, in points from the content's top-left corner.
+  public func region(_ name: String, rect: CGRect) { regions.append(.rect(name, rect)) }
 
   // MARK: measuring
 

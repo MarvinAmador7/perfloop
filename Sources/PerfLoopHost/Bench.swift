@@ -96,6 +96,12 @@ public final class Bench: @unchecked Sendable {
   /// The bench window's appearance (light by default), whatever the Mac's setting: snapshots compare across machines.
   /// nil follows the system.
   public var appearance: NSAppearance.Name? = .aqua
+  /// The text sizes this bench applies for `--set textSize=NAME` (v11), by name ("large", "xLarge", …): its scenarios
+  /// read `run.textSize` and apply it through the app's own setting (macOS has no system text size an app follows, so
+  /// PerfLoopHost can't). Empty: `--set textSize=` is refused rather than measure the default size under its name.
+  public var textSizes: [String] = []
+  /// Regions every scenario's snapshots are compared by (`region`); a scenario adds its own with `run.region`.
+  var regionList: [LookRegion] = []
 
   /// `stamp` is `perfLoopBuildStamp` from the PerfLoopStamp plugin; nil leaves the bench unstamped, which
   /// `perfloop store add` refuses.
@@ -125,6 +131,31 @@ public final class Bench: @unchecked Sendable {
   /// A guard of the bench's own (`built-within`-like checks of what is on screen), by name: a scenario lists it in
   /// `guards`, the runner asks for it, and it is judged after each rep with the window up.
   public func `guard`(_ name: String, _ body: @escaping GuardBody) { guardBodies[name] = body }
+
+  /// A region of every scenario's window, found by the `identifier` (default: the name) of an NSView (or its
+  /// accessibility identifier; a SwiftUI view's only once SwiftUI has built accessibility elements: LookRegion.identifier):
+  /// `snapdiff` compares snapshots region by region, and `--expect-look NAME` declares an intended change there (v5).
+  public func region(_ name: String, identifier: String? = nil) { regionList.append(.identifier(name, identifier ?? name)) }
+
+  /// The look `params` ask for: the window's appearance (`appearance=light|dark|system`, else the bench's default) and
+  /// the text size (`textSize=`, one of `textSizes`).
+  func look(_ params: [String: String]) throws -> (name: NSAppearance.Name?, appearance: String, textSize: String?) {
+    var name = appearance, text = appearance == nil ? "system" : appearance == .darkAqua ? "dark" : "light"
+    if let a = params[Looks.parameter] {
+      switch a {
+      case "light": name = .aqua; text = a
+      case "dark": name = .darkAqua; text = a
+      case "system": name = nil; text = a
+      default: throw HostError.usage("--set appearance takes light, dark or system, not '\(a)'")
+      }
+    }
+    let t = params[Looks.textSizeParameter].flatMap { $0.isEmpty ? nil : $0 }
+    if let t, !textSizes.contains(t) {
+      throw HostError.usage(textSizes.isEmpty ? "\(adapter) applies no text size (its bench lists none in textSizes: the scenarios apply run.textSize through the app's own setting)"
+                                              : "--set textSize takes \(textSizes.joined(separator: ", ")), not '\(t)'")
+    }
+    return (name, text, t)
+  }
 
   // MARK: what the runner reads
 
@@ -183,6 +214,7 @@ public final class Bench: @unchecked Sendable {
     m.gestures = gestures.isEmpty ? nil : gestures
     // `resolveFixture` takes only registered names when there are some (any name when none): no `scheme:` form.
     m.fixtureSchemes = fixtures.isEmpty ? nil : []
+    m.appearances = Looks.appearances; m.textSizes = textSizes.isEmpty ? nil : textSizes
     return m
   }
 
@@ -206,14 +238,15 @@ public final class Bench: @unchecked Sendable {
       list [--json]                         scenarios, fixtures and the build stamp
       describe [--json]                     the perfloop.manifest/1 a runner reads
       knobs [--json]                        the runtime knobs this process runs with (PERFLOOP_KNOBS)
-      run SCENARIO [--fixture F] [--reps N] [--set k=v] [--json] [--out FILE] [--artifacts DIR]
+      run SCENARIO [--fixture F] [--reps N] [--set k=v] [--json] [--out FILE] [--artifacts DIR] [--set appearance=light|dark|system]
           [--knob k=v] [--guards LIST] [--guard-param k=v] [--sampler on|off] [--no-activate] [--quiet-check S]
                                             drive a scenario in a window of this process; the result is perfloop.result/2.
                                             Before each rep it waits up to S s (10; perfloop's runner passes 0 and gates
                                             itself) for a quiet machine (≤ 30 % of the cores busy, no build running),
                                             then runs and marks the rep quiet: false
-      snapdiff A.png B.png [--diff-out D.png] [--guard-param snapshot-diff.tolerance=X] [--json]
-                                            the snapshot-diff guard, headless (exit 3 over tolerance)
+      snapdiff A.png B.png [--diff-out D.png] [--guard-param snapshot-diff.tolerance=X] [--expect-look R,…] [--json]
+                                            the snapshot-diff guard, headless, region by region (same, moved, differs);
+                                            exit 3 when a region not declared with --expect-look changed
       profile SCENARIO [--template time|hitches|swiftui] [--fixture F] [--reps N] [--set k=v] [--out DIR] [--keep-trace] [--json]
                                             the scenario under xctrace (Xcode): call trees per step, hitches, hangs, SwiftUI
                                             tables, as perfloop.profile/2; the trace is deleted unless --keep-trace
@@ -302,12 +335,13 @@ public final class Bench: @unchecked Sendable {
       guard a.positional.count >= 3 else { return (1, "usage: \(adapter) snapdiff A.png B.png [--diff-out D.png] [--guard-param snapshot-diff.tolerance=X]") }
       let gp = guardParams(a)
       let (g, code) = Snapshot.snapdiff(a: a.positional[1], b: a.positional[2], tolerance: gp["snapshot-diff.tolerance"] ?? 0.005,
-                                        threshold: Int(gp["snapshot-diff.threshold"] ?? 16), diffOut: a.one("diff-out"))
+                                        threshold: Int(gp["snapshot-diff.threshold"] ?? 16), diffOut: a.one("diff-out"), expected: Looks.names(a.all("expect-look")),
+                                        maxMovePt: gp["snapshot-diff.maxMovePt"] ?? 120)
       if json {
         let gj = (try? PLJSON.decode(JSONValue.self, from: Data(PLJSON.encode(g).utf8))) ?? .null
         return (code, PLJSON.encode(["schema": .string("perfloop.snapdiff/1"), "guard": gj] as [String: JSONValue]))
       }
-      return (code, "snapshot-diff: \(g.pass ? "PASS" : "OVER TOLERANCE") · \(g.detail)")
+      return (code, (["snapshot-diff: \(g.pass ? "PASS" : "REVIEW") · \(g.detail)"] + Looks.lines(g, indent: "  ")).joined(separator: "\n"))
     case "profile": return ProfileVerb.record(self, a)
     case "gestures":
       if json { return (0, PLJSON.encode(SyntheticGestures.all)) }
@@ -372,6 +406,7 @@ public final class Bench: @unchecked Sendable {
       guard x.count == 2 else { throw HostError.usage("--set takes k=v, not '\(kv)'") }
       params[x[0]] = x[1]
     }
+    let look = try look(params)
     let ks = knobList()
     let problems = Knobs.problems
     if !problems.isEmpty { throw HostError.usage("knobs: " + problems.joined(separator: "; ")) }
@@ -399,7 +434,7 @@ public final class Bench: @unchecked Sendable {
       let recorder = Recorder(nominalHz: Double(NSScreen.main?.maximumFramesPerSecond ?? 60))
       Probe.sink = recorder; Mutations.sink = recorder.causes
       let run = Run(scenario: name, fixture: fixture, params: params, rep: i, recorder: recorder, activate: activate, sampler: sampler)
-      run.appearance = appearance
+      run.appearance = look.name; run.appearanceName = look.appearance; run.textSize = look.textSize; run.regions = regionList
       if i == 0 { run.waitFor = waitFor }
       defer { run.close(); Probe.sink = nil; Mutations.sink = nil }
       try await body(run)
@@ -413,9 +448,9 @@ public final class Bench: @unchecked Sendable {
         var gs: [GuardResult] = []
         for g in requested.sorted() { gs.append(await judge(g, run: run, params: gp, artifacts: artifacts)) }
         guards = gs
-      } else if let dir = artifacts, let w = run.window, let png = Snapshot.png(of: w) {
+      } else if let dir = artifacts, let w = run.window, let c = Snapshot.capture(w, regions: run.regions, appearance: run.appearanceName, textSize: run.textSize) {
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name)-rep\(i).png"))
+        _ = Snapshot.write(c, to: URL(fileURLWithPath: dir).appendingPathComponent("\(name)-rep\(i)\(Self.suffix(run)).png"))
       }
       if run.steps.isEmpty { run.note("the scenario measured no step: call run.step") }
       let rec = recorder.timeline.rep(index: i, steps: run.steps, checks: run.checks, guards: guards, window: window, notes: run.notes) { r, s in
@@ -458,6 +493,7 @@ public final class Bench: @unchecked Sendable {
     var result = HostResult(tool: tool, app: app, adapter: adapter, scenario: name, fixture: fixture.name, params: pj, startedAt: startedAt, reps: records,
                             summary: summary, verdict: verdict, exitCode: Int(code), notes: notes)
     result.expectedFixture = spec.fixture
+    result.appearance = look.appearance; result.textSize = look.textSize
     if a.has("profiled") { result.profiled = true; result.notes.append("recorded under a profiler: these numbers never decide") }
     let text = PLJSON.encode(result)
     if let o = a.one("out") { try text.write(toFile: o, atomically: true, encoding: .utf8) }
@@ -500,7 +536,8 @@ public final class Bench: @unchecked Sendable {
       let recorder = Recorder(nominalHz: Double(NSScreen.main?.maximumFramesPerSecond ?? 60))
       Probe.sink = recorder; Mutations.sink = recorder.causes
       let run = Run(scenario: name, fixture: fixture, params: scenarios.first { $0.name == name }?.params ?? [:], rep: 0, recorder: recorder, activate: !a.has("no-activate"), sampler: nil)
-      run.appearance = appearance
+      let look = try look(run.params)
+      run.appearance = look.name; run.appearanceName = look.appearance; run.textSize = look.textSize
       run.recordRequest = RecordRequest(url: url, name: a.one("name") ?? url.deletingPathExtension().lastPathComponent, device: a.one("device"),
                                         count: max(1, Int(a.one("count") ?? "1") ?? 1), timeoutS: Double(a.one("timeout") ?? "60") ?? 60, feed: feed)
       defer { run.close(); Probe.sink = nil; Mutations.sink = nil }
@@ -521,15 +558,31 @@ public final class Bench: @unchecked Sendable {
       guard let dir = artifacts else { return GuardResult(name: name, pass: false, detail: "no artifacts directory (PERFLOOP_ARTIFACTS or --artifacts) to write the snapshot to") }
       guard let w = run.window else { return GuardResult(name: name, pass: false, detail: "no window to capture") }
       try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-      let base = URL(fileURLWithPath: dir).appendingPathComponent("\(run.scenario)-rep\(run.rep).settled")
-      guard let a = Snapshot.png(of: w), (try? a.write(to: base.appendingPathExtension("png"))) != nil else { return GuardResult(name: name, pass: false, detail: "couldn't capture the window") }
+      let base = URL(fileURLWithPath: dir).appendingPathComponent("\(run.scenario)-rep\(run.rep)\(Self.suffix(run)).settled")
+      let png = base.appendingPathExtension("png")
+      guard let a = Snapshot.capture(w, regions: run.regions, appearance: run.appearanceName, textSize: run.textSize), Snapshot.write(a, to: png) else {
+        return GuardResult(name: name, pass: false, detail: "couldn't capture the window")
+      }
       await run.sleep(ms: params["snapshot-diff.laterMs"] ?? 500)
-      let later = URL(fileURLWithPath: base.path + ".later.png")
+      let later = URL(fileURLWithPath: Looks.laterPath(png.path))
       if let b = Snapshot.png(of: w) { try? b.write(to: later) }
-      return GuardResult(name: name, pass: true, detail: "captured", artifacts: [base.appendingPathExtension("png").path, later.path])
+      return GuardResult(name: name, pass: true, detail: "captured: " + Self.captured(a.layout), artifacts: [png.path, later.path, Looks.layoutPath(png.path)])
     }
     guard let g = guardBodies[name] else { return GuardResult(name: name, pass: false, detail: "this bench has no guard '\(name)' (it has: \((["snapshot-diff"] + guardBodies.keys.sorted()).joined(separator: ", ")))") }
     return await g(run, params)
+  }
+
+  /// `-dark`, `-light-text-xLarge`: what a snapshot's file name carries for a look other than light at the default size.
+  @MainActor static func suffix(_ run: Run) -> String { Looks.key(appearance: run.appearanceName, textSize: run.textSize).map { "-" + $0 } ?? "" }
+
+  /// What a capture holds, for its guard record: the look, the regions, the child windows, what it can't show.
+  static func captured(_ l: SnapshotLayout) -> String {
+    var p = ["\(l.appearance ?? "light")" + (l.textSize.map { ", text \($0)" } ?? "")]
+    p.append(l.regions.isEmpty ? "no named regions" : "regions " + l.regions.map(\.name).joined(separator: ", "))
+    if let m = l.missing { p.append("not found: " + m.joined(separator: ", ")) }
+    if let c = l.childWindows { p.append("child windows drawn in: " + c.map(\.name).joined(separator: ", ")) }
+    if let n = l.notCaptured { p.append("not captured: " + n.joined(separator: "; ")) }
+    return p.joined(separator: " · ")
   }
 
   /// The text `run` prints without --json.
@@ -549,6 +602,9 @@ public final class Bench: @unchecked Sendable {
     }
     for c in r.reps.flatMap(\.checks) where !c.pass { out.append("  check \(c.name) FAILED: \(c.detail)") }
     for g in r.reps.flatMap({ $0.guards ?? [] }) where !g.pass { out.append("  guard \(g.name) FAILED: \(g.detail)") }
+    if let g = r.reps.last?.guards?.first(where: { $0.name == "snapshot-diff" && $0.pass }), let png = g.artifacts.first {
+      out.append("  snapshot (\(r.appearance ?? "light")): \(g.detail) · look at: \(png)")
+    }
     out += r.notes.map { "  " + $0 }
     return out.joined(separator: "\n")
   }
@@ -566,7 +622,7 @@ struct HostArgs {
   var flags: [String: [String]] = [:]
   static let valued: Set<String> = ["fixture", "reps", "set", "out", "artifacts", "guards", "guard-param", "diff-out", "sampler", "quiet-check", "knob", "host", "objective",
                                     "wait-for", "template", "seconds", "top", "per", "min-ms", "process", "champion", "hold",
-                                    "name", "count", "timeout", "device", "feed", "lock"]
+                                    "name", "count", "timeout", "device", "feed", "lock", "expect-look"]
   init(_ argv: [String]) {
     var i = 0
     while i < argv.count {
