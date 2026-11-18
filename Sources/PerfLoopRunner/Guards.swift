@@ -14,10 +14,15 @@ extension Loop {
   }
 
   /// What a side's run gets in its environment: the guards it runs itself, their parameters, where to write.
+  /// The artifacts directory is always given: a built-in guard (ink) writes its pictures there whatever the manifest
+  /// lists.
   func guardEnv(_ g: (guards: [String], params: [String: JSONValue]), dir: URL) -> [String: String] {
     let run = GuardNames.adapterRun(g.guards)
-    guard !run.isEmpty else { return [:] }
-    return ["PERFLOOP_GUARDS": run.joined(separator: ","), "PERFLOOP_GUARD_PARAMS": GuardNames.params(g.params), "PERFLOOP_ARTIFACTS": dir.path]
+    var env = ["PERFLOOP_ARTIFACTS": dir.path]
+    let params = GuardNames.params(g.params)
+    if !params.isEmpty { env["PERFLOOP_GUARD_PARAMS"] = params }
+    if !run.isEmpty { env["PERFLOOP_GUARDS"] = run.joined(separator: ",") }
+    return env
   }
 
   /// After a pair: the candidate's snapshot against the champion's, judged by the champion's adapter, region by region
@@ -69,6 +74,9 @@ extension Loop {
         if var ls = gs[i].looks {
           for j in ls.indices { ls[j].before = rel(ls[j].before); ls[j].after = rel(ls[j].after); ls[j].diff = rel(ls[j].diff) }
           gs[i].looks = ls
+        }
+        for k in (gs[i].inkRegions ?? []).indices {
+          gs[i].inkRegions![k].picture = rel(gs[i].inkRegions![k].picture)
         }
       }
       p[keyPath: side].guards = gs

@@ -23,6 +23,7 @@ public enum Readings {
     }
     var s = Side(objective: value, hitch: r.at("frames.hitchTimeRatioMsPerS")?.double, longest: r.at("mainThread.longestMs")?.double,
                  checksFailed: (r["checks"]?.array ?? []).filter { $0["pass"]?.bool == false }.compactMap { $0["name"]?.string })
+    if let cs = r["checks"]?.array { s.checksPassed = cs.filter { $0["pass"]?.bool == true }.compactMap { $0["name"]?.string } }
     window(r["window"], into: &s)
     machine(r, into: &s)
     s.steadyHz = r.at("frames.steadyHz")?.double; s.lateFrames = r.at("frames.late")?.double
@@ -177,6 +178,11 @@ public enum Readings {
     }
     var n = StretchNote(durationMs: d, step: w["step"]?.string, topOurs: names("topOurs"), topFramework: names("topFramework"))
     n.causes = CauseTable.rows(w["causes"]).map { CauseTable.line($0, groups: 3) }
+    if let b = w["benchSamples"]?.double, let all = w["samples"]?.double, all > 0 {
+      n.benchPct = Stats.round(b / all * 100, 1)
+      let top = names("topBench")
+      n.topBench = top.isEmpty ? nil : top
+    }
     return n
   }
 }

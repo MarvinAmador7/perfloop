@@ -343,10 +343,11 @@ extension Loop {
     return o
   }
 
-  /// The reps' pictures: every `.png` in a measurement's subfolders (`r1/`, `ref2/`, …).
+  /// The reps' pictures: every `.png` in a measurement's subfolders (`r1/`, `ref2/`, …), but the ink guard's crops
+  /// (`ink/`): small, and what the result tells the agent to look at.
   static func pictures(under dir: URL) -> [URL] {
     guard let e = FileManager.default.enumerator(atPath: dir.path) else { return [] }
-    return e.compactMap { $0 as? String }.filter { $0.contains("/") && ($0.hasSuffix(".png") || $0.hasSuffix(".layout.json")) }.map { dir.appendingPathComponent($0) }
+    return e.compactMap { $0 as? String }.filter { $0.contains("/") && ($0.hasSuffix(".png") || $0.hasSuffix(".layout.json")) && !$0.contains("/ink/") }.map { dir.appendingPathComponent($0) }
   }
 
   /// `perfloop run`'s exit code: 2 every rep failed, 5 nothing could be trusted (or, for a baseline, none was

@@ -248,6 +248,27 @@ final class MeasureLoopTests: FakeBenchCase {
   }
 
   static func pictures(_ dir: URL) -> [URL] { Loop.pictures(under: dir) }
+
+  /// v3 + v9: the built-in ink guard judges a feature's own scenario with no manifest asking for it, its crops stay in
+  /// the run's folder and the text says where to look, and a region drawn in 2 of 3 trusted reps is flaky: exit 3.
+  func testInkIsBuiltInAndAFlakyRegionFailsTheRun() throws {
+    try baseline()
+    let cand = try bench("cand", ["EXTRA": "toggle", "INK": "flaky"])
+    let m = try loop.runScenario(options(cand, "toggle", reps: 3))
+    XCTAssertEqual(m.summary.trusted, 3)
+    XCTAssertEqual(m.summary.guardsFailed, ["ink"])
+    XCTAssertEqual(m.summary.checks?.first { $0.name == "ink" }?.text, "ink flaky 2/3")
+    XCTAssertEqual(Loop.exitCode(m), 3)
+    XCTAssertTrue(adapterCalls("run").allSatisfy { !$0.contains("guards=ink") }, "never asked for: the adapter judges it on its own")
+    let crops = m.reps.compactMap { $0.side.guards?.first { $0.name == "ink" }?.artifacts.first }
+    XCTAssertEqual(crops.count, 3)
+    for c in crops { XCTAssertTrue(FileManager.default.fileExists(atPath: c), "\(c): an ink crop is kept, pass or fail") }
+    XCTAssertTrue(Self.pictures(store.measureDir(m.id)).isEmpty, "the snapshots still go")
+    let text = Measure.text(m)
+    XCTAssertTrue(text.contains("FAILED: guard ink flaky 2/3 (flaky: it passed in some trusted reps, not all; a failure)"), text)
+    XCTAssertTrue(text.contains("look at (ink failed): " + crops[1]), text)
+    XCTAssertTrue(m.next?.hasPrefix("the scenario's own checks failed (ink)") == true, m.next ?? "")
+  }
 }
 
 extension Loop.MeasureOptions {

@@ -27,7 +27,7 @@ public enum Snapshot {
 
   /// The window as `png(of:)` draws it, with its named regions located and its child windows drawn in. `children` nil:
   /// the window's visible child windows and sheets, at any depth (a test passes its own).
-  @MainActor public static func capture(_ window: NSWindow, regions: [LookRegion] = [], appearance: String? = nil, textSize: String? = nil,
+  @MainActor public static func capture(_ window: NSWindow, regions: [InkRegion] = [], appearance: String? = nil, textSize: String? = nil,
                                         children: [NSWindow]? = nil) -> Capture? {
     guard let v = window.contentView, let content = image(of: v) else { return nil }
     let w = content.width, h = content.height
@@ -65,10 +65,10 @@ public enum Snapshot {
     // Named regions, then each child window as one (unless a named region has its name).
     var missing: [String] = []
     for region in regions {
-      guard let (rect, source) = region.locate(window), let r = Optional(pixels(rect, in: origin, scale: scale, height: h)), let inside = r.inside(w, h) else {
+      guard let rect = screenRect(region, in: window), let inside = pixels(rect, in: origin, scale: scale, height: h).inside(w, h) else {
         missing.append(region.name); continue
       }
-      layout.regions.append(SnapshotLayout.Region(name: region.name, rect: inside, source: source))
+      layout.regions.append(SnapshotLayout.Region(name: region.name, rect: inside, source: source(region)))
     }
     for k in kids where !layout.regions.contains(where: { $0.name == k.name }) {
       let r = PixelRect(x: k.rect[0], y: k.rect[1], w: k.rect[2], h: k.rect[3], height: h)
@@ -77,6 +77,20 @@ public enum Snapshot {
     layout.missing = missing.isEmpty ? nil : missing
     guard let img = ctx.makeImage(), let png = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) else { return nil }
     return Capture(png: png, layout: layout)
+  }
+
+  /// Where a region is on screen now (the ink guard's placing, `Ink.resolve`), or nil: not found, or a hidden view.
+  @MainActor static func screenRect(_ r: InkRegion, in window: NSWindow) -> CGRect? {
+    switch r.place {
+    case .view(let v) where v.isHiddenOrHasHiddenAncestor || v.alphaValue == 0: return nil
+    default: break
+    }
+    guard let (cv, rect) = Ink.resolve(r, in: window), let w = cv.window, rect.width > 0, rect.height > 0 else { return nil }
+    return w.convertToScreen(cv.convert(rect, to: nil))
+  }
+
+  static func source(_ r: InkRegion) -> String {
+    switch r.place { case .rect: "rect"; case .view, .find: "view"; case .identifier: "identifier" }
   }
 
   /// Writes a capture to `X.png` and its layout to `X.layout.json`; false when either couldn't be written.

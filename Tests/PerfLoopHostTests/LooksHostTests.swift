@@ -149,7 +149,7 @@ import PerfLoopKit
     let panel = NSPanel(contentRect: NSRect(x: -10000 + 20, y: -10000 + 100 - 10 - 30, width: 50, height: 30), styleMask: [.borderless], backing: .buffered, defer: false)
     panel.isReleasedWhenClosed = false; defer { panel.close() }
     panel.contentView = Fill(.red, NSRect(x: 0, y: 0, width: 50, height: 30)); panel.identifier = NSUserInterfaceItemIdentifier("details")
-    let c = try XCTUnwrap(Snapshot.capture(w, regions: [.identifier("footer", "footer"), .identifier("gone", "nothing-has-this"), .rect("corner", CGRect(x: 0, y: 0, width: 10, height: 10)), .view("bar", footer)],
+    let c = try XCTUnwrap(Snapshot.capture(w, regions: [.identifier("footer"), .identifier("nothing-has-this", name: "gone"), .rect("corner", CGRect(x: 0, y: 0, width: 10, height: 10)), .view("bar", footer)],
                                            appearance: "dark", children: [panel]))
     let s = Int(c.layout.scale)
     XCTAssertEqual(c.layout.size, [200 * s, 100 * s]); XCTAssertEqual(c.layout.appearance, "dark"); XCTAssertEqual(c.layout.key, "dark")
@@ -185,6 +185,15 @@ import PerfLoopKit
     defer { p2.close(); p1.close(); w.close() }
     w.addChildWindow(p1, ordered: .above); p1.addChildWindow(p2, ordered: .above)
     XCTAssertEqual(Snapshot.childWindows(of: w, visibleOnly: false).map(ObjectIdentifier.init), [ObjectIdentifier(p1), ObjectIdentifier(p2)])
+  }
+
+  /// One region model: the bench's regions, the scenario's, and those its steps name for the ink guard, once per name.
+  func testRegionsAreTheInkGuardsAndNamedOnce() {
+    let run = Run(scenario: "s", fixture: Fixture("f"), params: [:], rep: 0, recorder: Recorder(nominalHz: 60), activate: false, sampler: nil)
+    run.regions = [.identifier("status")]
+    run.regions([.rect("filter", CGRect(x: 0, y: 0, width: 10, height: 10)), .rect("status", CGRect(x: 0, y: 0, width: 5, height: 5))])
+    XCTAssertEqual(run.regions.map(\.name), ["status", "filter"])
+    if case .rect = run.regions[0].place {} else { XCTFail("a scenario's region replaces the bench's of the same name") }
   }
 
   // MARK: appearance and text size (v11)

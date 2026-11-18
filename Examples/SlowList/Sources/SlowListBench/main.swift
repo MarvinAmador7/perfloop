@@ -3,7 +3,7 @@ import PerfLoopHost
 import PerfLoopProbe
 import SlowListKit
 
-// SlowList's bench: the app's own window content (ListContainerView) on fixture data, two scenarios, one knob, one
+// SlowList's bench: the app's own window content (ListContainerView) on fixture data, its scenarios, one knob, one
 // guard of its own. PerfLoopHost answers the runner's contract (ADAPTER.md in the PerfLoop repository); this file only says what to
 // measure. An agent improving SlowList never edits this file inside an experiment (AGENTS.md).
 
@@ -14,25 +14,23 @@ bench.privatePaths = ["Secrets/"]            // never recorded in an experiment'
 bench.fixture("rows1000", summary: "1,000 items (the default)", params: ["rows": "1000"], parametric: ["rows": 10...50_000])
 bench.fixture("rows300", summary: "300 items: the second fixture a win must not be worse on", params: ["rows": "300"], parametric: ["rows": 10...50_000])
 bench.knobs { [ListKnobs.rank] }
-// Regions snapshots are compared by (`snapdiff`: same, moved, differs per region; `--expect-look footer` declares an
-// intended change there): the AppKit status line by its identifier; the scenarios add the list (a view) and the filter
-// bar (a rect: SwiftUI's views aren't NSViews, and its accessibility elements exist only once an assistive app asks),
-// and the details panel is a region of its own (a child window).
-bench.region("footer")
-/// The list and the filter bar above it, as regions of the scenario's snapshots.
-@MainActor func listRegions(_ run: Run) {
-  if let sv = run.scrollView() { run.region("list", view: sv) }
-  run.region("filter", rect: CGRect(x: 0, y: 0, width: bench.windowSize.width, height: 38))
-}
+// Regions: the ink guard's (each step's `ink:` must leave them drawn) are also the regions snapshots are compared by
+// (`snapdiff`: same, moved, differs per region; `--expect-look status` declares an intended change there), so a region
+// is named once. The rows, the AppKit status line (by its identifier), and the filter bar above them (a rect: SwiftUI's
+// views aren't NSViews, and its accessibility elements exist only once an assistive app asks).
+@MainActor func listRegions(_ run: Run) -> [InkRegion] { [.find("rows") { run.scrollView() }, .identifier("status")] }
+bench.regions([.rect("filter", CGRect(x: 0, y: 0, width: 900, height: 38))])
 
 bench.scenario("select", summary: "Select rows one after another: each selection re-evaluates the rows that read it",
                guards: ["checks", "snapshot-diff", "rows-drawn"], params: ["steps": "8"],
                budget: "no frame held past its vsync at the panel's rate", secondFixture: "rows300") { run in
   let model = ListModel.sample(count: run.fixture.int("rows", 1000))
   try await run.show(view: ListContainerView(model: model), size: bench.windowSize)
+  // The ink guard (built in): after each selection the rows and the status line must show drawn content. A row that
+  // renders nothing leaves the rows region blank, however fast it is.
+  let ink = listRegions(run)
   let n = run.int("steps", 8)
-  listRegions(run)
-  for i in 0..<n { await run.step("select#\(i)") { model.selection = i } }
+  for i in 0..<n { await run.step("select#\(i)", ink: ink) { model.selection = i } }
   run.check("landed", model.selection == n - 1, "selection \(model.selection.map(String.init) ?? "none"), expected \(n - 1)")
 }
 
@@ -40,11 +38,12 @@ bench.scenario("details", summary: "Open the details panel (a child window over 
                kind: .latency, guards: ["checks", "snapshot-diff"], params: ["steps": "4"]) { run in
   let model = ListModel.sample(count: run.fixture.int("rows", 1000))
   try await run.show(view: ListContainerView(model: model), size: bench.windowSize)
-  listRegions(run)
   let panel = DetailsPanel(model: model)
   run.atClose { panel.hide() }                 // up while the snapshot is taken, which draws it in
-  await run.step("open details", until: { panel.isVisible }) { model.selection = 0; panel.show(over: run.window!) }
-  for i in 1...run.int("steps", 4) { await run.step("select#\(i)") { model.selection = i * 3 } }
+  // The panel is a region too (a child window): drawn after every step, compared on its own.
+  let ink = listRegions(run) + [.find("details") { panel.isVisible ? panel.contentView : nil }]
+  await run.step("open details", until: { panel.isVisible }, ink: ink) { model.selection = 0; panel.show(over: run.window!) }
+  for i in 1...run.int("steps", 4) { await run.step("select#\(i)", ink: ink) { model.selection = i * 3 } }
   run.check("panel-shown", panel.isVisible && panel.parent === run.window, "the panel is \(panel.isVisible ? "" : "not ")visible, \(panel.parent === run.window ? "" : "not ")a child of the window")
 }
 
@@ -55,7 +54,7 @@ bench.scenario("filter", summary: "Type a filter: the list narrows with each key
   let queries = ["e", "em", "emb", "embe", "ember"]
   for (i, q) in queries.enumerated() {
     let want = model.items.filter { $0.title.localizedCaseInsensitiveContains(q) }.count
-    await run.step("filter#\(i) '\(q)'", until: { run.lastEvent("list.count") == want }) { model.filter = q }
+    await run.step("filter#\(i) '\(q)'", until: { run.lastEvent("list.count") == want }, ink: [.find("rows") { run.scrollView() }]) { model.filter = q }
   }
   run.check("narrowed", run.lastEvent("list.count") == model.visible.count, "the list shows \(run.lastEvent("list.count") ?? -1) of \(model.visible.count) items")
 }

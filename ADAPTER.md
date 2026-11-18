@@ -47,6 +47,7 @@ candidate's, so an experiment can't change how it is judged. Without `describe`,
   "privatePaths": [".secrets/"],                                       // optional; never recorded in a patch
   "fixtureSchemes": ["file"],                                         // optional; the scheme: forms --fixture takes
   "profileEnv": ["MYAPP_DATA_DIR"],                                   // optional; what `profile` needs beyond the allowlist (§6)
+  "harness": "PerfLoopHost",                                          // optional; the library answering the contract (§3b)
   "appearances": ["light", "dark", "system"],                         // optional; what --set appearance= takes (§5a)
   "textSizes": ["large", "xLarge"] }                                  // optional; what --set textSize= takes (§5a)
 ```
@@ -88,7 +89,7 @@ The environment it runs with:
 | `PERFLOOP_KNOBS` | `name=value,name=value`: the knob values for this process (C4); unset = every default |
 | `PERFLOOP_GUARDS` | the guards to judge after each rep, comma separated (never `checks`: those always run) |
 | `PERFLOOP_GUARD_PARAMS` | `k=v,…` from the champion's manifest (and only the owner's override) |
-| `PERFLOOP_ARTIFACTS` | the directory guard files go to (snapshots) |
+| `PERFLOOP_ARTIFACTS` | the directory guard files go to (snapshots, the ink guard's crops under `ink/`); always set by the runner |
 
 The result (`perfloop.result/2`; `deskbench.result/1` is read the same way). The runner looks fields up by path, so
 extra fields are fine and missing optional ones fall back. What it reads, per rep (`reps[]`):
@@ -101,12 +102,13 @@ extra fields are fine and missing optional ones fall back. What it reads, per re
 | `frames.hitchTimeRatioMsPerS`, `mainThread.longestMs` | frame guards (not worse beyond their band) |
 | `frames.ticks` (else `frames.p95Ms`) | 0: the rep presented no frame (screen locked, window off-screen): its frame metrics are missing, not 0, and the rep is untrusted. Report the tick count |
 | `frames.steadyHz`, `frames.late` | information; `explain` reports a rate change |
-| `checks[]` `{ name, pass, detail }` | the `checks` guard: a check the candidate fails while the champion passes vetoes it |
-| `guards[]` `{ name, pass, detail, artifacts, value, limit, review }` | the named guards; `review: true` asks the owner |
+| `checks[]` `{ name, pass, detail }` | the `checks` guard: a check the candidate fails while the champion passes vetoes it. Counted per trusted rep: one that passes in only some of them is `flaky N/M`, a failure (below). List every check in every rep, passing ones too: a check one rep reports and another doesn't counts as not passed there |
+| `guards[]` `{ name, pass, detail, artifacts, value, limit, review }` | the named guards; `review: true` asks the owner. `ink` (§3b) is built in: it judges whenever a rep reports it, whatever the manifest lists, and its `inkRegions[] { region, after, pass, ink, min, rect, detail, picture }` say which region failed after which step, with the crop to look at |
 | `window { appActive, keyWindow, visible, occluded }` | all four right, or the rep is untrusted and never decides (a rep without one: the result's top-level `window`) |
 | top-level `fixture` | the fixture that ran (`name` or `name@k=v`). A rep that says it ran another than the one the runner asked for has no numbers (`ran fixture X, asked for Y`): its data was the wrong one. PerfLoopHost adds `expectedFixture`, the scenario's own |
 | `quiet`, `busyPct`, `busy[]` | the machine when the rep started: `quiet: false` makes the rep untrusted; `busyPct` (share of the cores busy) and `busy` (what kept them busy) say why. Per rep or top level; `noise.quiet` / `noise.reasons` (deskbench) are read the same way. Optional: the local runner's own quiet gate fills the same fields on each side (and its wait under `machine`), false when either saw a busy machine |
 | `worstStretches[] { step, durationMs, topOurs[], topFramework[], causes[] }` | `explain`'s "where the time went" |
+| `worstStretches[] { samples, benchSamples, topBench[] }` | how much of the stretch was the bench's own code, not the app's: `explain` warns at 25 % or more (§3b) |
 | `smoothness { positionErrorP95Pt, stalls, jerkP95 }` | gesture-replay frame guards (C9) |
 | top-level `profiled: true` | the rep never feeds the objective |
 
@@ -124,6 +126,13 @@ the same way in both orders while the other side's is right: the build does that
 stage says `deterministic` and stops early. (A guard the candidate failed on a trusted pair still rejects it, or, for
 an `--expect same` check, makes it `regressed`, whatever the untrusted pairs say.)
 
+**Checks per trusted rep.** Every verdict path counts a check (and a guard) over the trusted reps only: an untrusted
+rep's result is reported and never counts, pass or fail. `run` and `baseline` fail (exit 3) on a check that didn't pass
+in every trusted rep, and print it as `drawn flaky 2/3` or `drawn ✗ 0/3`; a screen, a full and an expect-same stage veto
+a check the candidate failed in a pair where the champion passed it, one line per check with the candidate's count
+(`drawn failed on the candidate in pair 2 (passed on the champion) · the candidate passed 2/3 (flaky: a failure)`). A
+check the champion fails in the same pairs judges nothing and the stage says so: it is the bench's to fix.
+
 ## 3a. What `perfloop run` and `perfloop baseline` use
 
 They measure one build with no champion on the other side, through `run` (§3) only, one process per rep, with
@@ -139,6 +148,35 @@ checked`.
 `baseline` keeps a reference picture when the scenario guards `snapshot-diff` and the rep writes its capture as §5
 says; a later `run` of the scenario is compared with it through the champion adapter's `snapdiff` (or the measured
 build's, while the champion doesn't have the scenario). Without `snapshot-diff` there is no picture, only numbers.
+
+## 3b. What PerfLoopHost gives a scenario (and an adapter of its own must rebuild)
+
+A protocol-1 adapter that doesn't link PerfLoopHost answers the verbs, but its scenarios lack what keeps their numbers
+and checks honest after a structural change (a sidebar, a palette, a split). `perfloop doctor --bench` says so
+(`harness: … without PerfLoopHost's helpers`) unless the manifest says `"harness": "PerfLoopHost"`.
+
+| Helper | What it is for |
+|---|---|
+| `run.step(name, until: { … }) { action }` | When the change takes more than one commit to show (SwiftUI puts a new view in the window a frame or two after the state change), the step's latency is the action → the first frame after `until` held, and the step settles after that. Use it whenever "the first frame" might not be the one that shows the change |
+| `await run.wait(timeoutMs:) { … }` | Before a check, outside a step: wait (on every frame, probe event and stretch) until the view tree has what the check reads. A check right after a step can race the first commit and pass one rep, fail the next (`flaky`) |
+| `await run.settle()` | Wait for the window to come to rest (no main-thread stretch over 2 ms for 100 ms) before something that needs a still frame: a snapshot, a check of positions |
+| `run.step(…, ink: [regions])` | The **ink guard**: regions (`.view`, `.identifier`, `.rect` in points from the content's top-left, `.find { view }`) that must show drawn content once the step has come to rest. Each is drawn by its views (`cacheDisplay`) and fails when blank, all background (under `ink.min`, 0.5 % of its pixels unlike its most common colour), zero-size, outside the window or not found; every region leaves a PNG crop in `$PERFLOOP_ARTIFACTS/ink/`, pass or fail, and the rep's `guards[]` gets one `ink` record with them. `await run.ink(regions, after: "label")` judges at another moment |
+| `await run.check(name) { (pass, detail) }` | A check that costs something (pixels, a walk of the view tree): its work runs off the clock |
+| `run.windowState()`, snapshots, `profile` | the trust fields (§3), `snapshot-diff` (§5), the profiler (§6) |
+
+**Off the clock.** The ink guard and `await run.check` run in run-loop turns of their own: after the stretch the step
+ended in has closed, and then they let their own close before the scenario goes on, and their stretches, the frames they
+held up and the bodies they caused are left out of the rep's numbers. Work done inside a step's action or its `until:`
+(or after the step but in the same wake-up) is the step's: the sampler marks the bench target's named functions and
+PerfLoopHost's captures as bench code (`worstStretches[].benchSamples`, `topBench`), and `explain` warns when that is 25 %
+or more of a step's worst stretch (`warning: 91 % of the worst stretch (toggle#0 open) is the bench's own code …`). The
+scenario body and its step actions are closures at the bench's top level: the app's work under them is the app's.
+
+When to use which against a racy first commit: the change itself is measured with `until:` (latency to the frame that
+shows it); a check of the result goes after the step, behind `wait` when what it reads may not be there yet, or as
+`await run.check` when evaluating it costs anything; `settle` is for pictures. An adapter of its own rebuilds the same:
+a wait on the window's frames (a display link) and the run loop's sleeps, never a fixed sleep, and checks outside the
+step's timed span and its run-loop turn.
 
 ## 4. `ab --a EXE --b EXE S --fixture F --reps 1 --json --out FILE` (optional)
 
@@ -195,7 +233,7 @@ PerfLoopHost does all of this; an adapter of its own (capcomd's deskbench) gets 
 
 | What | PerfLoopHost | A protocol-1 adapter must |
 |---|---|---|
-| Regions | `bench.region(NAME, identifier:)` (an NSView's `identifier` or accessibility identifier), `run.region(NAME, view:)`, `run.region(NAME, rect:)` (points from the content's top-left); a visible child window is a region by its `identifier` or title | write `X.layout.json` beside each capture with the regions' rects, and answer `snapdiff` with `looks[]` (§5) |
+| Regions | one region model for the ink guard and the looks (§3b's `InkRegion`: `.view`, `.identifier`, `.rect` in points from the content's top-left, `.find`): every region a step names for the ink guard is a snapshot region too; add others with `bench.regions([…])` or `run.regions([…])`; a visible child window is a region by its `identifier` or title | write `X.layout.json` beside each capture with the regions' rects, and answer `snapdiff` with `looks[]` (§5) |
 | Child windows (v7) | each visible child window and sheet of the bench window, at any depth, is drawn into the snapshot where it is on screen (its content over its background colour) and listed in `childWindows`; keep a panel up past the scenario's end with `run.atClose { panel.close() }` | draw `window.childWindows` and `sheets` into its `cacheDisplay` picture at their screen offsets |
 | Appearance (v11) | `--set appearance=light\|dark\|system` (light by default) sets the bench window's and `NSApp.appearance`, so panels, popovers and sheets follow; the result says `appearance`, the snapshot's file and layout carry it | set its windows' appearance from the parameter, list `appearances` in the manifest, write it into the layout |
 | Text size (v11) | `--set textSize=NAME`, refused unless the bench lists `bench.textSizes`; the scenario reads `run.textSize` and applies it through the app's own setting (macOS has no system text size an app follows) | the same, listing `textSizes` |
@@ -273,9 +311,9 @@ adapter that can't can be wrapped instead: `perfloop lock -- BENCH ab …`.
 
 | Document | Version | Written by | Stability |
 |---|---|---|---|
-| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `fixtureSchemes`, `profileEnv`, `appearances`, `textSizes` added 2026-11 |
+| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `fixtureSchemes`, `profileEnv`, `harness`, `appearances`, `textSizes` added 2026-11 |
 | `perfloop.build` | 1 | adapter (`tool.build`), store (`build.json`) | stable |
-| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11), `appearance` and `textSize` (2026-11, v11) |
+| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11), `guards[].inkRegions` and `worstStretches[].benchSamples`/`topBench` (2026-11), `appearance` and `textSize` (2026-11, v11) |
 | `perfloop.measure`, `perfloop.baseline` | 1 | runner (`runs/<id>/run.json`, `baselines/<scenario>[~<look>]/baseline.json`) | new (2026-11); a pair's `Side` gained `fixture` (what the rep ran); a baseline gained `look` (one per look) |
 | `perfloop.snapdiff` | 1 (reads `deskbench.snapdiff/1`) | adapter `snapdiff` | fields only added; `guard.looks[]` (2026-11, v5) |
 | `perfloop.snapshot` | 1 | adapter (`X.layout.json` beside a snapshot) | new (2026-11, v5/v7/v11) |

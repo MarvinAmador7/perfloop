@@ -86,11 +86,11 @@ run "$P" exp promote "$id" || true
 run "$P" explain "exp/$id"
 
 # The look build carries the fix too, so it costs nothing against the champion whether or not step 3 promoted it.
-say "4. a look change: the status line names the item; declared, so only the footer region may change (the details panel is drawn in)"
-new_exp "the status line names the selected item and counts the list" --bench "$W/bench-look" --scenario details --expect same --expect-look footer --no-screen
+say "4. a look change: the status line names the item; declared, so only the status region may change (the details panel is drawn in)"
+new_exp "the status line names the selected item and counts the list" --bench "$W/bench-look" --scenario details --expect same --expect-look status --no-screen
 run "$P" exp screen "$id" $runner
 run "$P" explain "exp/$id"
-new_exp "the same, in dark mode" --bench "$W/bench-look" --scenario details --expect same --expect-look footer --set appearance=dark --no-screen
+new_exp "the same, in dark mode" --bench "$W/bench-look" --scenario details --expect same --expect-look status --set appearance=dark --no-screen
 run "$P" exp screen "$id" $runner
 run "$P" explain "exp/$id"
 

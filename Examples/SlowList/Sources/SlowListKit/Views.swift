@@ -102,7 +102,7 @@ public final class ListContainerView: NSView {
     list.sizingOptions = []
     footer.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
     footer.textColor = .secondaryLabelColor
-    footer.identifier = NSUserInterfaceItemIdentifier("footer")
+    footer.identifier = NSUserInterfaceItemIdentifier("status")
     for v in [list, footer] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
     NSLayoutConstraint.activate([
       list.topAnchor.constraint(equalTo: topAnchor), list.leadingAnchor.constraint(equalTo: leadingAnchor), list.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -116,7 +116,7 @@ public final class ListContainerView: NSView {
   func observe() {
     withObservationTracking {
       #if SLOWLIST_LOOK
-      // A look change (for the walkthrough): the status line names the item and counts the list. Only the footer changes.
+      // A look change (for the walkthrough): the status line names the item and counts the list. Only it changes.
       footer.stringValue = model.selection.map { "Item \($0) selected · \(model.items.count) items" } ?? "Nothing selected"
       #else
       footer.stringValue = model.selection.map { "Selected item \($0)" } ?? "Nothing selected"

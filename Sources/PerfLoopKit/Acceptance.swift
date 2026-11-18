@@ -140,15 +140,23 @@ public enum Acceptance {
   /// Correctness guards: a check the candidate fails while the champion passes it in the same pair, and a guard the
   /// candidate fails (or drops) that the champion passes (Guards.swift). `guards` are the champion manifest's names
   /// for the scenario ("checks" = all of its checks), never the candidate's.
+  ///
+  /// One line per check or guard, over the pairs given (every verdict path passes the trusted ones: an untrusted rep's
+  /// check never counts, pass or fail), with the candidate's count when there are several: a check it passed in only
+  /// some of them is flaky, and a failure (Checks.swift).
   public static func guardFailures(_ pairs: [Pair], guards: [String]) -> [String] {
-    var out: [String] = []
-    for p in pairs where p.failure == nil {
-      for c in p.b.checksFailed where !p.a.checksFailed.contains(c) && (guards.isEmpty || guards.contains("checks") || guards.contains(c)) {
-        out.append("\(c) failed on the candidate in pair \(p.index + 1) (passed on the champion)")
-      }
-      out += guardResultFailures(p, guards: guards)
+    let ran = pairs.filter { $0.failure == nil }
+    var names: [String] = []
+    for p in ran {
+      for c in p.b.checksFailed + (p.a.checksPassed ?? []) where !names.contains(c) && candidateFailed(c, p) { names.append(c) }
     }
-    return out
+    var out: [String] = []
+    for c in names where guards.isEmpty || guards.contains("checks") || guards.contains(c) {
+      let veto = ran.filter { candidateFailed(c, $0) && !$0.a.checksFailed.contains(c) }
+      guard !veto.isEmpty else { continue }
+      out.append("\(c) failed on the candidate in \(pairList(veto)) (passed on the champion)" + candidateTally(ran.filter { !candidateFailed(c, $0) }.count, ran.count))
+    }
+    return out + guardResultFailures(ran, guards: guards)
   }
 
   /// Pairs a screen takes at most, `exp screen --more` included: past them the full decides.
@@ -208,6 +216,7 @@ public enum Acceptance {
       let range = ci.low.flatMap { l in ci.high.map { "\(Stats.round(l, 1)) … \(Stats.round($0, 1)) %" } }
       r.append("can't tell: the gain could be " + (range.map { "anywhere in \($0) (90 % interval)" } ?? "anything (one pair can't bound it)") + ", around the \(Int(minGainPct)) % a promotion needs: add pairs (exp screen --more) or run the full")
     }
+    r += flakyOnBothSides(use, guards: guards)
     st.reasons = r
     return st
   }
@@ -252,6 +261,7 @@ public enum Acceptance {
     }
     if !unchecked.isEmpty { r.append("not checked: \(unchecked.joined(separator: ", ")) (the adapter reports none per side)") }
     r += (st.guardReviews ?? []).map { "look: " + $0 }
+    r += flakyOnBothSides(use, guards: guards)
     r += (st.declaredLooks ?? []).map { "declared look (the PR's reviewer accepts it): " + $0 }
     if use.count < pairs.count { r.append("\(pairs.count - use.count) pair(s) unusable: " + pairs.compactMap(unusable).joined(separator: "; ")) }
     st.reasons = r
@@ -326,6 +336,7 @@ public enum Acceptance {
     } else {
       st.verdict = "lost"; r.append("no difference the test can see (p ≥ \(unknownBelow))")
     }
+    r += flakyOnBothSides(use, guards: guards)
     st.reasons = r
     return st
   }
@@ -352,9 +363,11 @@ public enum Acceptance {
     let f = floors(metric)
     if !a.isEmpty { st.band = Band(champion: a, candidate: b, floorPct: f.pct, absoluteFloor: f.absolute).pct }
     st.untrusted = untrustedSummary(pairs)
-    st.guardFailures = guardFailures(pairs, guards: guards); st.guardsPassed = st.guardFailures.isEmpty
-    let reviews = guardReviews(pairs, guards: guards); st.guardReviews = reviews.isEmpty ? nil : reviews
-    let declared = Looks.declared(pairs); st.declaredLooks = declared.isEmpty ? nil : declared
+    // Only trusted pairs judge a check or a guard, pass or fail (an ink check passes on a stale frame, a focus check
+    // fails on a locked screen).
+    st.guardFailures = guardFailures(use, guards: guards); st.guardsPassed = st.guardFailures.isEmpty
+    let reviews = guardReviews(use, guards: guards); st.guardReviews = reviews.isEmpty ? nil : reviews
+    let declared = Looks.declared(use); st.declaredLooks = declared.isEmpty ? nil : declared
     return st
   }
 }

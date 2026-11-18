@@ -33,8 +33,9 @@ import PerfLoopProbe
   /// The text size asked for (`--set textSize=…`, one of the bench's `textSizes`), nil for the default. macOS has no
   /// system text size an app follows: the scenario applies it through the app's own setting.
   public internal(set) var textSize: String?
-  /// The regions snapshots are compared by: the bench's (`bench.region`), then the scenario's (`run.region`).
-  var regions: [LookRegion] = []
+  /// The regions snapshots are compared by (the same regions the ink guard takes): the bench's (`bench.region`), the
+  /// scenario's (`run.region`), and every region a step named for the ink guard, once per name.
+  var regions: [InkRegion] = []
   var appAppearance: NSAppearance??
   var closers: [@MainActor () -> Void] = []
   var steps: [StepRecord] = []
@@ -48,6 +49,11 @@ import PerfLoopProbe
   var recordRequest: RecordRequest?
   var recorded: [(String, PerfLoopProbe.Gesture)] = []
   var recordFailures: [String] = []
+  /// The ink guard: every region judged in this rep, the floor when a region names none (`ink.min`), and where the
+  /// crops go (`<artifacts>/ink`).
+  var inkResults: [InkRegionResult] = []
+  var inkMin = Ink.defaultMin
+  var inkDir: URL?
 
   init(scenario: String, fixture: Fixture, params: [String: String], rep: Int, recorder: Recorder, activate: Bool, sampler: MainThreadSampler?) {
     self.scenario = scenario; self.fixture = fixture; self.params = params; self.rep = rep; self.recorder = recorder; self.activate = activate; self.sampler = sampler
@@ -136,14 +142,15 @@ import PerfLoopProbe
 
   // MARK: regions
 
-  /// Names a part of the window for snapshots (v5): `snapdiff` reports it on its own (`same`, `moved`, `differs`),
-  /// and an agent declares the regions its change means to alter with `--expect-look NAME`. Found when the snapshot is
-  /// taken, in the window and its child windows, by `identifier` (an NSView's `identifier` or accessibility identifier).
-  public func region(_ name: String, identifier: String) { regions.append(.identifier(name, identifier)) }
-  /// …or as a view (wherever it is then).
-  public func region(_ name: String, view: NSView) { regions.append(.view(name, view)) }
-  /// …or as a fixed rect, in points from the content's top-left corner.
-  public func region(_ name: String, rect: CGRect) { regions.append(.rect(name, rect)) }
+  /// Names parts of the window for snapshots (v5): `snapdiff` reports each on its own (`same`, `moved`, `differs`), and
+  /// an agent declares the regions its change means to alter with `--expect-look NAME`. The same `InkRegion`s the ink
+  /// guard takes (`.view`, `.identifier`, `.rect`, `.find`), placed when the snapshot is taken; a region a step already
+  /// named for the ink guard is one without this.
+  public func regions(_ rs: [InkRegion]) { for r in rs { addRegion(r) } }
+
+  func addRegion(_ r: InkRegion) {
+    if let i = regions.firstIndex(where: { $0.name == r.name }) { regions[i] = r } else { regions.append(r) }
+  }
 
   // MARK: measuring
 
@@ -153,8 +160,19 @@ import PerfLoopProbe
   ///
   /// `latencyMs` is the action → the first frame after `until` held; without `until`, the action → the end of the last
   /// busy stretch before rest. A step still busy at `timeoutMs` is recorded with `settled: false`.
+  ///
+  /// `ink`: regions that must show drawn content once the step has come to rest (the ink guard). They are judged after
+  /// the step, in run-loop turns of their own whose time, frames and stretches are left out of every number, and the
+  /// rep's `guards[]` gets one `ink` result with a crop of each region (`<artifacts>/ink/`).
   @discardableResult
-  public func step(_ name: String, timeoutMs: Double = 5000, quietMs: Double = 100, until: (() -> Bool)? = nil, _ action: () -> Void) async -> StepRecord {
+  public func step(_ name: String, timeoutMs: Double = 5000, quietMs: Double = 100, until: (() -> Bool)? = nil, ink: [InkRegion] = [], _ action: () -> Void) async -> StepRecord {
+    let r = await measuredStep(name, timeoutMs: timeoutMs, quietMs: quietMs, until: until, action)
+    if !ink.isEmpty { await self.ink(ink, after: name) }
+    for r in ink where !regions.contains(where: { $0.name == r.name }) { regions.append(r) }
+    return r
+  }
+
+  func measuredStep(_ name: String, timeoutMs: Double, quietMs: Double, until: (() -> Bool)?, _ action: () -> Void) async -> StepRecord {
     let at = now
     // The `step` signpost a profile's per-step call trees are cut on (cheap when nothing records it).
     let sp = StepSignposts.poster, spID = sp.makeSignpostID()
@@ -190,6 +208,51 @@ import PerfLoopProbe
                                    notes: stepNotes, causes: nonEmpty(recorder.causes.causes(from: at, to: end)))
     steps.append(r)
     return r
+  }
+
+  // MARK: the bench's own work, off the clock
+
+  /// Runs `work` in a run-loop turn of its own, after the stretch this is called in has closed, and lets that turn
+  /// close before going on: its stretch, the frames it held up and the bodies it caused are left out of the rep's
+  /// numbers (`Timeline.offClock`), and the next step's action starts in a fresh turn. What a check or a capture costs
+  /// is never a step's (F18: a pixel check in the same wake-up as the step's last frame was 91 % of its worst stretch).
+  public func offTheClock<T>(_ work: () async -> T) async -> T {
+    guard recorder.clock.attached else { return await work() }
+    await nextTurn()
+    let a = now
+    let out = await work()
+    recorder.timeline.offClock.append(a...max(a, now))
+    await nextTurn()
+    return out
+  }
+
+  /// Until the stretch open now has closed (the continuation then runs in a later wake-up).
+  func nextTurn() async {
+    let n = recorder.clock.entries.count
+    _ = await recorder.wait(timeoutMs: 1000) { [unowned self] in recorder.clock.entries.count > n }
+  }
+
+  /// The ink guard now, on `regions`, labelled `after` (a step's name, or where the scenario is: "open"). Off the
+  /// clock. Called by `step(…, ink:)`; call it yourself for a moment that isn't a step's end.
+  public func ink(_ regions: [InkRegion], after: String) async {
+    guard let w = window else {
+      inkResults += regions.map { InkRegionResult(region: $0.name, after: after, pass: false, ink: nil, min: $0.min ?? inkMin, rect: nil, detail: "no window", picture: nil) }
+      return
+    }
+    await offTheClock {
+      for r in regions {
+        let file = Ink.fileName(scenario: scenario, rep: rep, after: after, region: r.name, n: inkResults.count)
+        inkResults.append(Ink.judge(r, after: after, window: w, min: r.min ?? inkMin, dir: inkDir, file: file))
+      }
+    }
+  }
+
+  /// A check whose work runs off the clock (`offTheClock`): `body` returns whether it passed and what it saw. Use it
+  /// for anything that costs more than reading a value (pixels, a walk of the view tree) so its time never lands in a
+  /// step.
+  public func check(_ name: String, _ body: () -> (Bool, String)) async {
+    let (pass, detail) = await offTheClock { body() }
+    check(name, pass, detail)
   }
 
   /// Waits for the window to come to rest: no main-thread stretch over 2 ms for `quietMs`.

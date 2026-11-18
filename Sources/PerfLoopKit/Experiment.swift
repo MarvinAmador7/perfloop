@@ -112,6 +112,9 @@ public struct Side: Codable, Sendable, Equatable {
   public var hitchTimeRatioMsPerS: Double?
   public var longestStretchMs: Double?
   public var checksFailed: [String]
+  /// The checks the rep passed, when it lists them (`checks[]` of a result); nil for an `ab` summary, which lists only
+  /// the failed ones. With it, a check another rep reported and this one didn't counts as not passed (Checks.swift).
+  public var checksPassed: [String]?
   /// Present only when the run says so; a profiled or untrusted rep never decides.
   public var profiled: Bool?
   public var trustworthy: Bool?
@@ -157,6 +160,22 @@ public struct StretchNote: Codable, Sendable, Equatable {
   public var topFramework: [String]
   /// What the stretch's bodies followed (`causes[]`, C7), as `CauseTable.line` writes it; nil when the adapter records none.
   public var causes: String? = nil
+  /// The share of the stretch's samples that were the bench's own code, not the app's (`worstStretches[].benchSamples`
+  /// / `samples`), and those frames (`topBench`); nil when the adapter doesn't say.
+  public var benchPct: Double? = nil
+  public var topBench: [String]? = nil
+  public init(durationMs: Double, step: String?, topOurs: [String], topFramework: [String], causes: String? = nil) {
+    self.durationMs = durationMs; self.step = step; self.topOurs = topOurs; self.topFramework = topFramework; self.causes = causes
+  }
+
+  /// The bench measured itself: `Explain.benchWarnPct` or more of the stretch was its own code.
+  public var benchWarning: String? {
+    guard let p = benchPct, p >= Explain.benchWarnPct else { return nil }
+    return "\(Explain.fmt(p)) % of the worst stretch\(step.map { " (\($0))" } ?? "") is the bench's own code, not the app's"
+      + (topBench.flatMap { $0.isEmpty ? nil : " (\($0.prefix(3).joined(separator: "; ")))" } ?? "")
+      + ": the bench measured itself. Run checks and captures after the step, in their own run-loop turn (PerfLoopHost: run.step(…, ink:), "
+      + "`await run.check(name) { … }`), never in the step's action or its until: (ADAPTER.md §3b)"
+  }
 }
 
 /// A screen or full stage's record (SCHEMAS.md §6 `screen` / `full`, both kept in one shape).
