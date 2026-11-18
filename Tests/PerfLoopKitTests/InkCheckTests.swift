@@ -111,9 +111,12 @@ final class InkCheckTests: XCTestCase {
     let action = StackFrame("closure #1 in closure #2 in DeskBench", ours: true, driver: true)
     let ink = StackFrame("Drive.inkOpened", ours: true, bench: true)
     // Leaf first.
-    let stacks: [[StackFrame]] = Array(repeating: [StackFrame("-[NSView cacheDisplayInRect:toBitmapImageRep:]"), ink, action] + trunk.reversed(), count: 9)
-      + [[StackFrame("objc_msgSend"), StackFrame("ListModel.rank", ours: true), action] + trunk.reversed()]   // the app's, under the action
-      + [[StackFrame("CA::Transaction::commit")] + trunk.reversed()]                                         // a commit: nobody's
+    let base: [StackFrame] = Array(trunk.reversed())
+    let capture: [StackFrame] = [StackFrame("-[NSView cacheDisplayInRect:toBitmapImageRep:]"), ink, action] + base
+    let app: [StackFrame] = [StackFrame("objc_msgSend"), StackFrame("ListModel.rank", ours: true), action] + base   // the app's, under the action
+    let commit: [StackFrame] = [StackFrame("CA::Transaction::commit")] + base                                       // a commit: nobody's
+    var stacks: [[StackFrame]] = Array(repeating: capture, count: 9)
+    stacks.append(app); stacks.append(commit)
     let p = StackProfile(stacks: stacks)
     XCTAssertEqual(p.benchSamples, 9); XCTAssertEqual(p.bench.first, SymbolCount(symbol: "Drive.inkOpened", samples: 9))
   }
