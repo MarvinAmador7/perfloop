@@ -68,7 +68,9 @@ public enum Snapshot {
       guard let rect = screenRect(region, in: window), let inside = pixels(rect, in: origin, scale: scale, height: h).inside(w, h) else {
         missing.append(region.name); continue
       }
-      layout.regions.append(SnapshotLayout.Region(name: region.name, rect: inside, source: source(region)))
+      var r = SnapshotLayout.Region(name: region.name, rect: inside, source: source(region))
+      if case .ink(let atLeast) = region.compare { r.compare = "ink"; r.inkAtLeast = atLeast; r.inkMin = region.min ?? Ink.defaultMin }
+      layout.regions.append(r)
     }
     for k in kids where !layout.regions.contains(where: { $0.name == k.name }) {
       let r = PixelRect(x: k.rect[0], y: k.rect[1], w: k.rect[2], h: k.rect[3], height: h)

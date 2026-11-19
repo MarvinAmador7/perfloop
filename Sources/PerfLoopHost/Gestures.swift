@@ -35,14 +35,20 @@ extension Run {
   /// takes them), waiting until the content comes to rest (its offset unchanged for 150 ms). The step carries the
   /// smoothness: position error p95 while the fingers were down, stalls, jerk, latency in frames (`steps[].smoothness`).
   /// `timestamps: false` stamps every event 0, as an old synthetic fling did (AppKit can't see the release velocity then).
+  /// `delivery: .window` hands each event to the app (`NSApp.sendEvent`) for the scroll view's window, at the scroll
+  /// view's middle, instead of to the scroll view itself: the app's local event monitors see every event (a reel that
+  /// takes sideways gestures on its own monitor), and AppKit's window routes what they pass on as it routes a hand's
+  /// (the scroll view under the point gets the finger phases; the window decides where momentum goes).
   @discardableResult
-  public func swipe(_ gesture: ReplayGesture, in scrollView: NSScrollView? = nil, name: String? = nil, timestamps: Bool = true, timeoutMs: Double? = nil) async -> StepRecord {
+  public func swipe(_ gesture: ReplayGesture, in scrollView: NSScrollView? = nil, name: String? = nil, timestamps: Bool = true, delivery: SwipeDelivery = .scrollView,
+                    timeoutMs: Double? = nil) async -> StepRecord {
     let label = name ?? "swipe \(gesture.name)"
-    guard let sv = scrollView ?? self.scrollView(), let w = window else {
+    guard let sv = scrollView ?? self.scrollView(), let w = sv.window ?? window else {
       check("scroll-view", false, "no NSScrollView with a document view in the window")
       return await step(label) {}
     }
     let replay = GestureReplay(sv: sv, window: w, gesture: gesture, timestamps: timestamps)
+    replay.delivery = delivery
     replay.blockMs = double("inject-block-ms", 0)
     let limit = timeoutMs ?? max(3000, gesture.durationMs + 2000)
     var r = await step(label, timeoutMs: limit, quietMs: 100, until: { replay.done && replay.atRest(now: CACurrentMediaTime()) }) { replay.start() }
@@ -64,6 +70,15 @@ extension Run {
   }
 }
 
+/// Where a replayed gesture's events go (`run.swipe(…, delivery:)`).
+public enum SwipeDelivery: String, Sendable {
+  /// To the scroll view's `scrollWheel(with:)`: nothing else sees them.
+  case scrollView
+  /// To the app (`NSApp.sendEvent`) for the scroll view's window, at its middle: local event monitors first, then
+  /// the window's own routing, as a hand's.
+  case window
+}
+
 /// One gesture's replay and what was on screen meanwhile. Events go out from a main-queue timer at their recorded
 /// times (the main run loop serves it, as it serves the window server's events); a display link reads the document
 /// layer's presentation each tick; a run-loop observer after Core Animation's commit notes when the last commit went
@@ -76,6 +91,7 @@ extension Run {
   /// The meter's self-check (`--set inject-block-ms=N`): the main thread sleeps N ms after the middle finger event, as
   /// a slow frame would hold it; the result must show the stalls.
   var blockMs = 0.0
+  var delivery = SwipeDelivery.scrollView
   /// The axis the gesture moves on (the larger total travel).
   let axis: SyntheticGestures.Axis
   /// One event as it went out; `timestamp` is the NSEvent's (the recorded time, 0 with `timestamps: false`).
@@ -183,12 +199,31 @@ extension Run {
     let r = sv.convert(sv.bounds, to: nil)
     let p = window.convertPoint(toScreen: NSPoint(x: r.midX, y: r.midY))
     cg.location = CGPoint(x: p.x, y: (NSScreen.screens.first?.frame.height ?? 0) - p.y)
-    guard let ev = NSEvent(cgEvent: cg) else { return }
+    guard let ev = delivery == .window ? windowed(cg, at: NSPoint(x: r.midX, y: r.midY)) : NSEvent(cgEvent: cg) else { return }
     let d = Double(axis == .x ? ev.scrollingDeltaX : ev.scrollingDeltaY)
     sent.append(Sent(due: t0 + e.t / 1000, delivered: now, timestamp: ev.timestamp, d: d, phase: Gesture.Phase(rawBits: ev.phase.rawValue), momentum: Gesture.Phase(rawBits: ev.momentumPhase.rawValue),
                      precise: ev.hasPreciseScrollingDeltas, finger: e.finger))
-    sv.scrollWheel(with: ev)
+    if delivery == .window { NSApp.sendEvent(ev) } else { sv.scrollWheel(with: ev) }
     if blockMs > 0, e.phase == .changed, sent.filter(\.finger).count == gesture.events.filter(\.finger).count / 2 { usleep(useconds_t(blockMs * 1000)) }
+  }
+
+  /// The scroll event `cg` for the window, at `point` in it. A CGEvent made for a window takes its location in the
+  /// window from a field only the window server and AppKit's own events set (its `location` is ignored), so the event
+  /// starts as an AppKit mouse-moved event at the point (which has it) and becomes a scroll event with `cg`'s fields.
+  /// A field that didn't carry over shows as an unfaithful replay (`unfaithful`).
+  private func windowed(_ cg: CGEvent, at point: NSPoint) -> NSEvent? {
+    guard let m = NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                     eventNumber: 0, clickCount: 0, pressure: 0), let e = m.cgEvent else { return nil }
+    e.type = .scrollWheel
+    let ints: [CGEventField] = [.scrollWheelEventDeltaAxis1, .scrollWheelEventDeltaAxis2, .scrollWheelEventDeltaAxis3, .scrollWheelEventIsContinuous,
+                                .scrollWheelEventScrollPhase, .scrollWheelEventMomentumPhase, .scrollWheelEventScrollCount, .scrollWheelEventInstantMouser]
+    let doubles: [CGEventField] = [.scrollWheelEventFixedPtDeltaAxis1, .scrollWheelEventFixedPtDeltaAxis2, .scrollWheelEventFixedPtDeltaAxis3,
+                                   .scrollWheelEventPointDeltaAxis1, .scrollWheelEventPointDeltaAxis2, .scrollWheelEventPointDeltaAxis3]
+    for f in ints { e.setIntegerValueField(f, value: cg.getIntegerValueField(f)) }
+    for f in doubles { e.setDoubleValueField(f, value: cg.getDoubleValueField(f)) }
+    e.flags = cg.flags
+    e.timestamp = cg.timestamp
+    return NSEvent(cgEvent: e)
   }
 
   /// The content offset shown at each tick: the presentation layer's movement when the views are layer-backed (its
@@ -216,7 +251,8 @@ extension Run {
   func notes() -> [String] {
     let late = sent.map { ($0.delivered - $0.due) * 1000 }
     let f = sent.filter(\.finger).reduce(0) { $0 + $1.d }, m = sent.filter { $0.momentum != .none }.reduce(0) { $0 + $1.d }
-    return ["\(gesture.name): \(sent.count)/\(gesture.events.count) events over \(Int(gesture.durationMs)) ms on \(axis.rawValue), delivered p95 \(Stats.round(Stats.percentile(late, 95), 2)) ms after due (max \(Stats.round(late.max() ?? 0, 2)) ms)",
+    return ["\(gesture.name): \(sent.count)/\(gesture.events.count) events over \(Int(gesture.durationMs)) ms on \(axis.rawValue), delivered p95 \(Stats.round(Stats.percentile(late, 95), 2)) ms after due (max \(Stats.round(late.max() ?? 0, 2)) ms)"
+            + (delivery == .window ? " through the window (NSApp.sendEvent: local monitors saw them)" : ""),
             "fingers moved \(Stats.round(f, 1)) pt, momentum \(Stats.round(m, 1)) pt; content moved \(Stats.round((raw.last?.offset ?? 0) - startOffset, 1)) pt; \(raw.count) display ticks read"]
   }
 

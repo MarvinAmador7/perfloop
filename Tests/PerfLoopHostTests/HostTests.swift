@@ -211,6 +211,71 @@ import PerfLoopProbe
     XCTAssertThrowsError(try b.resolveFixture("nope"))
   }
 
+  /// `file:PATH` from the bench (`fixtureScheme`): the manifest says which schemes it takes, the maker's fixture runs
+  /// under the name asked for, and its refusal is a usage error with its reason. Another scheme is refused, naming the
+  /// ones taken.
+  func testFixtureSchemesComeFromTheBench() throws {
+    let b = bench()
+    XCTAssertEqual(b.manifest().fixtureSchemes, [], "fixtures and no scheme: listed names only, as before")
+    XCTAssertNil(Bench(app: "x", stamp: nil).manifest().fixtureSchemes, "no fixtures, no schemes: any name")
+    b.fixtureScheme("file:") { spec in
+      guard spec.hasSuffix(".json") else { throw HostError.usage("\(spec) isn't a captured fixture (a .json file)") }
+      return Fixture("captured", summary: "a captured fixture", params: ["rows": "77"])
+    }
+    XCTAssertEqual(b.manifest().fixtureSchemes, ["file"])
+    let f = try b.resolveFixture("file:/tmp/run-1.json")
+    XCTAssertEqual(f.name, "file:/tmp/run-1.json", "the result says the fixture asked for")
+    XCTAssertEqual(f.params["rows"], "77")
+    XCTAssertThrowsError(try b.resolveFixture("file:/tmp/run-1.txt")) { XCTAssertEqual("\($0)", "file:/tmp/run-1.txt isn't a captured fixture (a .json file)") }
+    XCTAssertThrowsError(try b.resolveFixture("http://x/y")) { XCTAssertTrue("\($0)".contains("takes no http: fixtures (schemes: file:"), "\($0)") }
+    XCTAssertEqual(try b.resolveFixture("rows500").name, "rows500", "listed names as before")
+    // The runner's own check reads the same manifest: file: passes, http: is refused before a rep runs.
+    let m = try PLJSON.decode(Manifest.self, from: Data(PLJSON.encode(b.manifest()).utf8))
+    XCTAssertNil(m.unknownFixture("file:/tmp/run-1.json"))
+    XCTAssertNotNil(m.unknownFixture("http://x/y"))
+  }
+
+  /// `NAME@k=v` with a value that isn't a number (`rows=40-60`): the bench's check takes it or says why; numbers are
+  /// still held to the parametric range; the manifest's fixture entry says what the key takes.
+  func testFixtureParametersThatArentNumbers() throws {
+    let b = bench()
+    XCTAssertThrowsError(try b.resolveFixture("rows500@rows=40-60")) { XCTAssertTrue("\($0)".contains("is not a number"), "\($0)") }
+    b.fixtureValues("rows", accepts: "N, or LO-HI (10…5000)") { v in
+      let p = v.split(separator: "-").compactMap { Int($0) }
+      guard p.count == 2, p[0] <= p[1], p[0] >= 10, p[1] <= 5000 else { return "not LO-HI within 10…5000" }
+      return nil
+    }
+    b.fixtureValues("mode", accepts: "dense or sparse", fixtures: ["rows50"]) { ["dense", "sparse"].contains($0) ? nil : "unknown mode" }
+    let f = try b.resolveFixture("rows500@rows=40-60")
+    XCTAssertEqual(f.params["rows"], "40-60"); XCTAssertEqual(f.name, "rows500@rows=40-60")
+    XCTAssertThrowsError(try b.resolveFixture("rows500@rows=60-40")) { XCTAssertEqual("\($0)", "fixture rows500: rows=60-40: not LO-HI within 10…5000 (it takes N, or LO-HI (10…5000))") }
+    XCTAssertThrowsError(try b.resolveFixture("rows500@rows=9000"), "a number is still held to its range")
+    XCTAssertEqual(try b.resolveFixture("rows50@mode=dense").params["mode"], "dense", "a key with a check needn't be parametric")
+    XCTAssertThrowsError(try b.resolveFixture("rows500@mode=dense")) { XCTAssertTrue("\($0)".contains("has no parameter 'mode'"), "only the fixtures it names: \($0)") }
+    let entries = b.manifest().fixtures
+    XCTAssertEqual(entries.first { $0["name"]?.string == "rows500" }?["accepts"]?["rows"]?.string, "N, or LO-HI (10…5000)")
+    XCTAssertNil(entries.first { $0["name"]?.string == "rows500" }?["accepts"]?["mode"])
+    XCTAssertEqual(entries.first { $0["name"]?.string == "rows50" }?["accepts"]?["mode"]?.string, "dense or sparse")
+    XCTAssertEqual(entries.first { $0["name"]?.string == "rows500" }?["parametric"]?["rows"], .array([.number(10), .number(5000)]), "sweeps still read the range")
+  }
+
+  /// A scenario that runs inside the app says so in the manifest, and the runner reads it back; the others say nothing.
+  func testAppHostedScenariosAreInTheManifest() throws {
+    let b = bench()
+    XCTAssertEqual(b.manifest().hosts, ["window"])
+    b.scenario("menu", summary: "the app's own menu", kind: .latency, host: .app) { _ in }
+    let m = try PLJSON.decode(Manifest.self, from: Data(PLJSON.encode(b.manifest()).utf8))
+    XCTAssertEqual(m.hosts, ["window", "app"])
+    XCTAssertEqual(m.scenario("menu")?.host, "app")
+    XCTAssertNil(m.scenario("select")?.host)
+    XCTAssertTrue(b.handle(["list"]).1.contains("menu (latency, latencyMs, in the app)"))
+  }
+
+  /// What a SwiftUI app's arguments carry for AppKit (Xcode, `open`) isn't the bench's.
+  func testAttachLeavesAppKitsArgumentsOut() {
+    XCTAssertEqual(Bench.benchArguments(["run", "-NSDocumentRevisionsDebugMode", "YES", "menu", "--reps", "1", "-AppleLanguages", "(en)"]), ["run", "menu", "--reps", "1"])
+  }
+
   // MARK: snapshots
 
   func picture(_ w: Int, _ h: Int, _ paint: (Int, Int) -> (UInt8, UInt8, UInt8)) -> Snapshot.Pixels {

@@ -159,6 +159,12 @@ extension Snapshot {
         l.before = write(ca, n, "before"); l.after = write(cb, n, "after")
         out.append(l); continue
       }
+      // Compared by ink (the champion's picture says so): how much is drawn, wherever it rests.
+      if let r = la?.regions.first(where: { $0.name == n }), r.compare == "ink" {
+        var l = inkLook(n, ca, cb, atLeast: r.inkAtLeast ?? 0.5, min: r.inkMin ?? Ink.defaultMin)
+        if l.changed { l.before = write(ca, n, "before"); l.after = write(cb, n, "after") }
+        out.append(l); continue
+      }
       let ma = crop(keep(movA), width: a.width, ra), mb = crop(keep(movB), width: b.width, rb)
       var l = look(n, ca, ma, cb, mb, shift: (rb[0] - ra[0], rb[1] - ra[1]), scale: scale, maxShift: maxShift, threshold: threshold, tolerance: tolerance)
       if l.changed {
@@ -212,6 +218,16 @@ extension Snapshot {
       } else { l.diff = whole?.diff }
     }
     return out + [l]
+  }
+
+  /// One region compared by its ink: `same` when the candidate's holds at least `atLeast` of the champion's ink (and
+  /// `min`, when the champion's did), else `differs`; the detail says both shares either way.
+  static func inkLook(_ name: String, _ a: Pixels, _ b: Pixels, atLeast: Double, min: Double) -> RegionLook {
+    let ia = Ink.share(a).share, ib = Ink.share(b).share
+    func pct(_ x: Double) -> String { "\(Stats.round(x * 100, 2)) %" }
+    let enough = ib >= ia * atLeast && (ia < min || ib >= min)
+    let detail = "compared by ink: \(pct(ia)) → \(pct(ib))" + (enough ? "" : ib < ia * atLeast ? ", under \(Int((atLeast * 100).rounded())) % of the champion's" : ", under the floor of \(pct(min))")
+    return RegionLook(name: name, look: enough ? "same" : "differs", share: nil, detail: detail)
   }
 
   /// One region: same where it was, moved (by its own rect's shift and/or a shift of its content), or differs.

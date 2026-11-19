@@ -41,10 +41,12 @@ machine; rerun).
       "guardParams": { "built-within.ms": 300, "snapshot-diff.tolerance": 0.005 },
       "frameGuards": [ "hitchTimeRatioMsPerS", "longestStretchMs" ],   // judged by their bands (Acceptance)
       "secondFixture": "swarm64",                // promotion needs not-worse here
-      "fixture": "search"                        // optional (2026-11): the scenario's own fixture, before defaultFixture
+      "fixture": "search",                       // optional (2026-11): the scenario's own fixture, before defaultFixture
+      "host": "app"                              // optional (2026-11): runs inside the app (its window, menu bar, scene); absent: window
   } ],
   "isolationGuards": [ "burst", "typing" ],      // their checks run on every promotion, whatever the experiment climbs
-  "fixtures": [ { …FixtureSpec as today…, "parametric": { "agents": [1, 64], "items": [50, 600] } } ],
+  "fixtures": [ { …FixtureSpec as today…, "parametric": { "agents": [1, 64], "items": [50, 600] },
+                  "accepts": { "items": "N, or LO-HI" } } ],   // optional (2026-11): values beyond a number in range, the adapter's to take
   "knobs": [ { "name": "reel.slide", "type": "choice", "default": "ca", "choices": ["ca", "clip"], "since": "0.7" },
              { "name": "build.perFrame", "type": "int", "default": 2, "range": [1, 8] } ],
   "hosts": [ "scene", "window" ], "defaultHost": "scene", "defaultFixture": "crew17",
@@ -111,7 +113,8 @@ Everything in `deskbench.result/1` (`Results.swift`) stays with the same names a
                 { "name": "ink", "pass": false, "detail": "pane after open: blank: no pixel differs from its background (look at: …)",
                   "artifacts": ["…/ink/toggle-rep0-01-open-pane.png", …], "value": 0, "limit": 0.005,       // built in (2026-11)
                   "inkRegions": [ { "region": "pane", "after": "open", "pass": false, "ink": 0, "min": 0.005,
-                                    "rect": [220, 0, 680, 700], "detail": "blank: …", "picture": "…/ink/toggle-rep0-01-open-pane.png" } ] } ]
+                                    "rect": [220, 0, 680, 700], "detail": "blank: …", "picture": "…/ink/toggle-rep0-01-open-pane.png",
+                                    "alone": null } ] } ]   // alone: true = the region's view drawn by itself (2026-11)
   } ] }
 ```
 
@@ -140,7 +143,9 @@ top-left corner):
 
 ```jsonc
 { "schema": "perfloop.snapshot/1", "size": [1800, 1400], "scale": 2, "appearance": "dark", "textSize": null,
-  "regions": [ { "name": "footer", "rect": [20, 1360, 184, 28], "source": "identifier|view|rect|child window" } ],
+  "regions": [ { "name": "footer", "rect": [20, 1360, 184, 28], "source": "identifier|view|rect|child window" },
+               { "name": "thread", "rect": [440, 120, 900, 1200], "source": "view",
+                 "compare": "ink", "inkAtLeast": 0.5, "inkMin": 0.005 } ],   // optional (2026-11): compared by its ink, not its pixels
   "missing": [ "filter" ],                                         // named, not found when the snapshot was taken
   "childWindows": [ { "name": "details", "kind": "DetailsPanel", "rect": [1248, 134, 520, 240],
                       "clipped": null, "material": null, "sheet": null } ],   // drawn in where they are on screen (v7)

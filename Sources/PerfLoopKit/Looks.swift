@@ -71,6 +71,12 @@ public struct SnapshotLayout: Codable, Sendable, Equatable {
     public var rect: [Int]
     /// identifier | view | rect | child window.
     public var source: String?
+    /// `ink`: `snapdiff` compares this region by how much of it is drawn, not pixel by pixel (a viewport that rests at
+    /// a different offset run to run); the champion's picture decides. nil: by its pixels.
+    public var compare: String?
+    /// compare `ink`: the share of the champion's ink the candidate's must keep, and the floor (the ink guard's `min`).
+    public var inkAtLeast: Double?
+    public var inkMin: Double?
     public init(name: String, rect: [Int], source: String? = nil) { self.name = name; self.rect = rect; self.source = source }
   }
 

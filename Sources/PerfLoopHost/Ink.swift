@@ -25,7 +25,30 @@ public struct InkRegion {
   /// The least share of the region's pixels that must differ from its background (its most common colour).
   /// nil: the scenario's `ink.min` guard parameter, else `Ink.defaultMin`.
   public var min: Double?
+  /// How `snapdiff` compares this region between two snapshots (v5): its pixels (the default), or `ink`: only how much
+  /// of it is drawn, for a viewport whose content rests at a different offset run to run (a scrolled thread, a list
+  /// after a switch). Set with `comparedByInk(atLeast:)`.
+  public var compare: Compare = .pixels
+  /// The ink guard draws this region's view by itself (`.view`, `.find`, an `.identifier` that names an NSView), not
+  /// the window's content in its rect: an overlay's ink is then its own, not what shows behind it. Set with
+  /// `drawnAlone()`.
+  public var alone = false
+
+  public enum Compare: Equatable, Sendable {
+    case pixels
+    /// The candidate's region must hold at least `atLeast` of the champion's ink (and the floor, `min`, when the
+    /// champion's did): `same`, else `differs`.
+    case ink(atLeast: Double)
+  }
+
   public init(_ name: String, _ place: Place, min: Double? = nil) { self.name = name; self.place = place; self.min = min }
+
+  /// This region compared by its ink in snapshots, not pixel by pixel (`Compare.ink`). `atLeast`: the share of the
+  /// champion's ink the candidate's must keep (0.5: at least half as much drawn).
+  public func comparedByInk(atLeast: Double = 0.5) -> InkRegion { var r = self; r.compare = .ink(atLeast: atLeast); return r }
+
+  /// This region's ink judged on its view drawn by itself (`alone`).
+  public func drawnAlone() -> InkRegion { var r = self; r.alone = true; return r }
 
   public static func rect(_ name: String, _ r: CGRect, min: Double? = nil) -> InkRegion { InkRegion(name, .rect(r), min: min) }
   public static func view(_ name: String, _ v: NSView, min: Double? = nil) -> InkRegion { InkRegion(name, .view(v), min: min) }
@@ -126,6 +149,24 @@ public enum Ink {
     return ctx.makeImage().flatMap { Snapshot.Pixels(image: $0) }
   }
 
+  /// The view a region names, when it names one (`.view`, `.find`, an `.identifier` of an NSView).
+  @MainActor static func view(of r: InkRegion, in window: NSWindow) -> NSView? {
+    switch r.place {
+    case .view(let v): return v
+    case .find(let f): return f()
+    case .identifier(let id): return windows(window).lazy.compactMap { $0.contentView.flatMap { find(id, in: $0) } }.first
+    case .rect: return nil
+    }
+  }
+
+  /// `rect` (in `content`'s coordinates) of `view` drawn by itself, over its window's background colour: what is
+  /// behind the view (its superviews, its siblings under it) is left out.
+  @MainActor static func capture(alone view: NSView, _ rect: NSRect, in content: NSView) -> Snapshot.Pixels? {
+    let r = view.convert(rect, from: content).intersection(view.bounds)
+    guard !r.isNull, r.width >= 1, r.height >= 1 else { return nil }
+    return capture(view, r)
+  }
+
   /// One region after a step: resolved, clipped to the window, drawn, measured, its crop written to `dir`.
   @MainActor static func judge(_ r: InkRegion, after: String, window: NSWindow, min: Double, dir: URL?, file: String) -> InkRegionResult {
     func fail(_ why: String, rect: [Double]? = nil) -> InkRegionResult {
@@ -149,7 +190,9 @@ public enum Ink {
     case .view(let v) where v.isHiddenOrHasHiddenAncestor || v.alphaValue == 0: return fail("its view is hidden", rect: topLeft(rect))
     default: break
     }
-    guard let px = capture(content, rect) else { return fail("couldn't draw the region", rect: topLeft(rect)) }
+    // Alone: the view by itself; a rect (or an accessibility element) has no view of its own, so it is drawn in place.
+    let alone = r.alone ? view(of: r, in: window) : nil
+    guard let px = alone.flatMap({ capture(alone: $0, rect, in: content) }) ?? capture(content, rect) else { return fail("couldn't draw the region", rect: topLeft(rect)) }
     let (share, _) = Ink.share(px)
     var picture: String?
     if let d = dir, let png = px.png() {
@@ -158,8 +201,11 @@ public enum Ink {
       if (try? png.write(to: u)) != nil { picture = u.path }
     }
     let pct = Stats.round(share * 100, 2), pass = share >= min
-    let detail = pass ? "\(pct) % ink" : (share == 0 ? "blank: no pixel differs from its background" : "\(pct) % ink, under \(Stats.round(min * 100, 2)) %: next to blank")
-    return InkRegionResult(region: r.name, after: after, pass: pass, ink: Stats.round(share, 5), min: min, rect: topLeft(rect), detail: detail, picture: picture)
+    var detail = pass ? "\(pct) % ink" : (share == 0 ? "blank: no pixel differs from its background" : "\(pct) % ink, under \(Stats.round(min * 100, 2)) %: next to blank")
+    if alone != nil { detail += " (its view drawn alone)" } else if r.alone { detail += " (drawn in place: the region has no view of its own to draw alone)" }
+    var out = InkRegionResult(region: r.name, after: after, pass: pass, ink: Stats.round(share, 5), min: min, rect: topLeft(rect), detail: detail, picture: picture)
+    out.alone = alone != nil ? true : nil
+    return out
   }
 
   /// The rep's `ink` guard from every region judged in it: pass when all passed. Its artifacts are every crop,

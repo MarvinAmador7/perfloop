@@ -194,11 +194,14 @@ public struct ScenarioEntry: Codable, Sendable, Equatable {
   public var fixture: String?
   /// Metrics that may not get worse beyond their band (Acceptance judges them as frame guards).
   public var frameGuards: [String]?
+  /// Where the scenario runs: `window` (a window the bench makes; absent means this) or `app` (inside the app as it
+  /// starts, in the app's own window, menu bar and scene). Added 2026-11; the runner only shows it.
+  public var host: String?
 
   public init(name: String, kind: String, objective: String?, guards: [String] = [], params: [String: String] = [:], secondFixture: String? = nil) {
     self.name = name; self.kind = kind; self.objective = objective; self.guards = guards; self.params = params; self.secondFixture = secondFixture
   }
-  enum CodingKeys: String, CodingKey { case name, summary, kind, budget, rule, latencyBudgetMs, params, objective, guards, guardParams, secondFixture, frameGuards, fixture }
+  enum CodingKeys: String, CodingKey { case name, summary, kind, budget, rule, latencyBudgetMs, params, objective, guards, guardParams, secondFixture, frameGuards, fixture, host }
   public init(from d: Decoder) throws {
     let c = try d.container(keyedBy: CodingKeys.self)
     name = try c.decode(String.self, forKey: .name)
@@ -210,6 +213,7 @@ public struct ScenarioEntry: Codable, Sendable, Equatable {
     guardParams = try c.decodeIfPresent([String: JSONValue].self, forKey: .guardParams); secondFixture = try c.decodeIfPresent(String.self, forKey: .secondFixture)
     frameGuards = try? c.decodeIfPresent([String].self, forKey: .frameGuards)
     fixture = try? c.decodeIfPresent(String.self, forKey: .fixture)
+    host = try? c.decodeIfPresent(String.self, forKey: .host)
   }
 }
 

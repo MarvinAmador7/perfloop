@@ -26,11 +26,25 @@ import PerfLoopProbe
   func now() -> Double { (CACurrentMediaTime() - t0) * 1000 }
 
   func start(on view: NSView, sampler s: MainThreadSampler?) {
+    startClock(sampler: s)
+    startLink(on: view)
+  }
+
+  /// The display link on `view`'s window: the frames. A rep that opens its window inside a step (`run.open`) starts
+  /// the clock first and this once the window exists.
+  func startLink(on view: NSView) {
+    guard link == nil else { return }
     let l = view.displayLink(target: self, selector: #selector(tick(_:)))
     let hz = Float(timeline.nominalHz)
     l.preferredFrameRateRange = CAFrameRateRange(minimum: hz, maximum: hz, preferred: hz)   // hold ProMotion at its top rate
     l.add(to: .main, forMode: .common)
     link = l
+  }
+
+  /// The stretch clock (and the sampler on it): main-thread stretches are recorded from here on, with or without a
+  /// window.
+  func startClock(sampler s: MainThreadSampler?) {
+    guard !clock.attached else { return }
     clock.closed = { [unowned self] in
       if let e = clock.entries.last {
         timeline.stretches.append(StretchSample(id: e.id, atMs: e.at, durationMs: e.dur, cpuMs: e.cpu))

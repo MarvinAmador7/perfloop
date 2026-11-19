@@ -71,6 +71,34 @@ import PerfLoopKit
     XCTAssertTrue(Ink.guardResult([status]).pass)
   }
 
+  /// An overlay over text: in place its rect shows the text behind it (ink); drawn alone it is what it draws itself
+  /// (blank here, then a line of its own). A rect has no view to draw alone: drawn in place, and it says so.
+  func testAnOverlayDrawnAloneIsJudgedOnItsOwnInk() throws {
+    let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    let content = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+    let behind = NSTextField(labelWithString: "Threads under the palette: Ember, Aspen, Birch, Cedar, Dogwood, Elm")
+    behind.font = .systemFont(ofSize: 18); behind.frame = NSRect(x: 10, y: 140, width: 380, height: 30)
+    let overlay = NSView(frame: NSRect(x: 0, y: 100, width: 400, height: 100))   // draws nothing of its own
+    content.addSubview(behind); content.addSubview(overlay)
+    window.contentView = content
+    let inPlace = Ink.judge(.view("palette", overlay), after: "open", window: window, min: Ink.defaultMin, dir: nil, file: "x")
+    XCTAssertTrue(inPlace.pass, "in place, the text behind it counts: \(inPlace.detail)")
+    XCTAssertNil(inPlace.alone)
+    let alone = Ink.judge(InkRegion.view("palette", overlay).drawnAlone(), after: "open", window: window, min: Ink.defaultMin, dir: nil, file: "x")
+    XCTAssertFalse(alone.pass, alone.detail); XCTAssertEqual(alone.ink, 0)
+    XCTAssertEqual(alone.detail, "blank: no pixel differs from its background (its view drawn alone)")
+    XCTAssertEqual(alone.alone, true)
+    XCTAssertEqual(alone.rect, inPlace.rect, "the same place")
+    let own = NSTextField(labelWithString: "Search: matchkey — 12 results")
+    own.font = .systemFont(ofSize: 18); own.frame = NSRect(x: 10, y: 60, width: 380, height: 30)
+    overlay.addSubview(own)
+    XCTAssertTrue(Ink.judge(.find("palette", { overlay }).drawnAlone(), after: "typed", window: window, min: Ink.defaultMin, dir: nil, file: "x").pass, "its own line")
+    let rect = Ink.judge(InkRegion.rect("band", CGRect(x: 0, y: 100, width: 400, height: 100)).drawnAlone(), after: "a", window: window, min: Ink.defaultMin, dir: nil, file: "x")
+    XCTAssertTrue(rect.detail.hasSuffix("(drawn in place: the region has no view of its own to draw alone)"), rect.detail)
+  }
+
   func testCropNamesAreSafe() {
     XCTAssertEqual(Ink.fileName(scenario: "select", rep: 1, after: "filter#2 'em'", region: "rows/list", n: 3), "select-rep1-03-filter_2__em_-rows_list.png")
   }

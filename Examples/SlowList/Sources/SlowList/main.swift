@@ -2,26 +2,9 @@ import AppKit
 import SlowListKit
 
 // The app: an AppKit window whose content is the SwiftUI list over an AppKit status line (ListContainerView), the same
-// view the bench hosts on its fixtures.
-final class AppDelegate: NSObject, NSApplicationDelegate {
-  var window: NSWindow?
-  func applicationDidFinishLaunching(_ n: Notification) {
-    let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-    w.title = "SlowList"
-    w.contentView = MainActor.assumeIsolated {
-      let model = ListModel.sample(count: 1000)
-      ListMenu.install(for: model)
-      return ListContainerView(model: model)
-    }
-    w.center(); w.makeKeyAndOrderFront(nil)
-    window = w
-    NSApp.activate(ignoringOtherApps: true)
-  }
-  func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
-}
-
+// view the bench hosts on its fixtures, and its menu bar (SlowListAppDelegate, which the bench's `menu` scenario runs in).
 let app = NSApplication.shared
-let delegate = AppDelegate()
+let delegate = SlowListAppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.regular)
 app.run()

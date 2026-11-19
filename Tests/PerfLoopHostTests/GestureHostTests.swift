@@ -73,6 +73,52 @@ import PerfLoopProbe
     XCTAssertTrue(zero.sent.allSatisfy { $0.timestamp == 0 }, "timestamps: false stamps every event 0")
   }
 
+  /// `delivery: .window`: the app's local event monitors see every event (NSApp.sendEvent: a reel that takes sideways
+  /// gestures on its own monitor), and AppKit's window routes the finger phases to the scroll view under the point, at
+  /// that point; handed to the scroll view itself, no monitor sees one. The deltas and phases are the same either way.
+  func testASwipeThroughTheWindowIsSeenByLocalMonitors() async throws {
+    let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.orderFrontRegardless()
+    defer { window.close() }
+    final class Scroll: NSScrollView {
+      var got: [NSEvent] = []
+      override func scrollWheel(with e: NSEvent) { got.append(e); super.scrollWheel(with: e) }
+    }
+    let content = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+    let sv = Scroll(frame: NSRect(x: 100, y: 0, width: 300, height: 300))
+    sv.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 4000))
+    content.addSubview(sv)
+    window.contentView = content
+    var seen: [NSEvent] = []
+    let monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { e in seen.append(e); return e }
+    defer { monitor.map(NSEvent.removeMonitor) }
+    let g = try SyntheticGestures.load("synthetic:scroll-down")
+    func replay(_ d: SwipeDelivery) async -> GestureReplay {
+      let r = GestureReplay(sv: sv, window: window, gesture: g, timestamps: true)
+      r.delivery = d
+      r.start()
+      let limit = Date().addingTimeInterval(10)
+      while !r.done, Date() < limit { try? await Task.sleep(nanoseconds: 5_000_000) }
+      r.stop()
+      return r
+    }
+    let direct = await replay(.scrollView)
+    XCTAssertEqual(seen.count, 0, "handed to the scroll view: no monitor sees it")
+    XCTAssertEqual(sv.got.count, g.events.count)
+    sv.got = []
+    let through = await replay(.window)
+    XCTAssertEqual(seen.count, g.events.count, "every event went through NSApp.sendEvent")
+    XCTAssertTrue(seen.allSatisfy { $0.window === window && $0.locationInWindow == NSPoint(x: 250, y: 150) }, "for the window, at the scroll view's middle")
+    let fingers = g.events.filter { $0.phase != .none }.count
+    XCTAssertEqual(sv.got.filter { !$0.phase.isEmpty }.count, fingers, "the window sent the finger phases to the scroll view under the point")
+    XCTAssertTrue(through.notes().first?.hasSuffix("through the window (NSApp.sendEvent: local monitors saw them)") == true, "\(through.notes())")
+    XCTAssertNil(through.unfaithful(), "the same deltas and phases as handed to the scroll view")
+    XCTAssertEqual(through.sent.map(\.d), direct.sent.map(\.d))
+    XCTAssertEqual(seen.map(\.timestamp), through.sent.map(\.timestamp))
+    for x in through.sent { XCTAssertEqual(x.timestamp, x.due, accuracy: 1e-6, "stamped with the recorded times") }
+  }
+
   /// The recorder's tap, fed NSEvents made from a synthetic gesture's numbers: one file, the same deltas and phases.
   func testTheRecorderCutsEventsIntoAFile() throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("perfloop-rec-\(UUID().uuidString)")
