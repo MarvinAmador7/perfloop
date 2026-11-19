@@ -40,6 +40,7 @@ FAKE_HARNESS=
 FAKE_INK=
 FAKE_INPUT=0
 FAKE_APPEARANCES=
+FAKE_QUITS=0
 
 self="$0"
 log() { if [ -n "$FAKE_LOG" ]; then echo "$*" >> "$FAKE_LOG"; fi; }
@@ -178,6 +179,8 @@ run)
   while [ $# -gt 0 ]; do case "$1" in --fixture) fixture=$2; shift 2 ;; --reps|--set|--quiet-check) shift 2 ;; *) shift ;; esac; done
   log "run $sc $fixture knobs=$PERFLOOP_KNOBS guards=$PERFLOOP_GUARDS $self"
   if [ -n "$PERFLOOP_PICTURES" ]; then log "pictures run $sc $PERFLOOP_PICTURES"; fi
+  # FAKE_QUITS=1: the app quits before the bench prints its result (a SwiftUI app's last window closed).
+  if [ "$FAKE_QUITS" = 1 ]; then exit 0; fi
   c=$(cpu_of "$self" "$fixture" "$PERFLOOP_KNOBS" "$$")
   total=$(awk -v c="$c" 'BEGIN { printf "%.1f", c * 8 }')
   lat=$(awk -v c="$c" 'BEGIN { printf "%.2f", c * 3 }')

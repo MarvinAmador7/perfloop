@@ -21,4 +21,13 @@ case "$FAKE_SSH_FAIL" in
   timeout) echo "ssh: connect to host $host port 22: Operation timed out" >&2; exit 255 ;;
 esac
 echo "ssh $host $*" >> "${FAKE_SSH_LOG:-/dev/null}"
+# FAKE_SSH_DROP=FILE: while FILE exists, a rep's connection drops (once per FILE): the rep goes on "there" in the
+# background, as one in the GUI session does, and ssh exits 255.
+case "$*" in *rep.sh*)
+  if [ -n "$FAKE_SSH_DROP" ] && [ -f "$FAKE_SSH_DROP" ]; then
+    rm -f "$FAKE_SSH_DROP"; in=$(mktemp); cat > "$in"
+    (HOME="$FAKE_REMOTE_HOME" PATH="$FAKE_BIN:$PATH" /bin/sh -c "$*" < "$in"; rm -f "$in") > /dev/null 2>&1 &
+    echo "Connection to $host closed by remote host." >&2; exit 255
+  fi ;;
+esac
 HOME="$FAKE_REMOTE_HOME" PATH="$FAKE_BIN:$PATH" exec /bin/sh -c "$*"

@@ -423,8 +423,10 @@ public final class Bench: @unchecked Sendable {
     return out
   }
 
-  /// The verb, its text printed, the process ended with its code.
+  /// The verb, its text printed, the process ended with its code. The app is held from quitting until then
+  /// (`AppHold`: a SwiftUI app quits when its last window closes, e.g. `run.open`'s at the end of a rep).
   @MainActor func go(_ a: HostArgs) async {
+    AppHold.begin(say: { [adapter] in FileHandle.standardError.write(Data("\(adapter): \($0)\n".utf8)) })
     let (code, text) = a.positional.first == "run" ? await runCommand(a) : await recordGesture(a)
     if !text.isEmpty { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
     exit(code)
@@ -664,6 +666,7 @@ public final class Bench: @unchecked Sendable {
     result.expectedFixture = spec.fixture
     result.appearance = look.appearance; result.textSize = look.textSize
     if a.has("profiled") { result.profiled = true; result.notes.append("recorded under a profiler: these numbers never decide") }
+    if let n = AppHold.note { result.notes.append(n) }
     let text = PLJSON.encode(result)
     if let o = a.one("out") { try text.write(toFile: o, atomically: true, encoding: .utf8) }
     return (code, a.has("json") ? text : explain(result))

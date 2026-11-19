@@ -128,7 +128,8 @@ runners and the queue (C10): where windowed reps run; results never mix runners
                                             this Mac's screen lock doesn't stop it, the guest's does); no rep
                                             starts after --until; ssh:// copies the build there and opens the window
                                             in the logged-in user's session (--launch direct: plain ssh)
-  runner check R | runner clean R           the runner's machine, session and store there; clean removes that store
+  runner check R | runner clean R [--all]   the runner's machine, session and store there; clean removes this store's
+                                            (--all: every runner store there, never one a rep is running in)
   ssh runner flags: --accept-new-host-key, --remote-env K=V, --launch gui|direct
   local runner flags: --busy-apps A,B, --idle-from FILE (testing; vm:tart/NAME takes both)
                                             no rep starts while the screen is locked: the runner waits for the unlock
@@ -382,9 +383,9 @@ func run(_ args: Args) throws -> Int32 {
     let r = try Runners.make(spec, store: try store(), options: runnerOptions(args, gatedByDefault: false))
     defer { r.close() }
     if args[1] == "clean" {
-      if let v = r as? VMRunner { out(try v.clean()); return 0 }
+      if let v = r as? VMRunner { out(try v.clean(all: args.has("all"))); return 0 }
       guard let s = r as? SSHRunner else { out("\(r.name): nothing to clean (the store is this one)"); return 0 }
-      out(try s.clean()); return 0
+      out(try s.clean(all: args.has("all"))); return 0
     }
     if let s = r as? SSHRunner { try s.check().forEach(out); return 0 }
     if let v = r as? VMRunner { try v.check().forEach(out); return 0 }

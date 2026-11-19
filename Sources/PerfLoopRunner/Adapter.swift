@@ -17,6 +17,17 @@ public struct Adapter {
     /// The machine when the rep started (the local runner's quiet gate); nil when nobody checked.
     public var machine: MachineState? = nil
     public var json: JSONValue? { PLJSON.firstObject(in: stdout) }
+
+    /// "exited N", and when a run's result is missing, why that likely is and what to do. Exit 0 without a result is
+    /// a bench that ended before writing it: one inside the app (`bench.attach()`, a SwiftUI `App`) ends with the app,
+    /// and a SwiftUI app with one `Window` scene quits when its last window closes (`run.open`'s at the end of a rep).
+    public var exitText: String {
+      guard json == nil else { return "exited \(status)" }
+      guard status == 0 else { return "exited \(status) without a result" }
+      return "exited 0 without a result: the bench ended before writing it, most likely its app quit (a SwiftUI app with one Window scene "
+        + "quits when its last window closes, e.g. run.open's at the end of a rep): rebuild the bench against current PerfLoopHost, which keeps "
+        + "the app running until the result is written (an adapter of its own: ADAPTER.md §3)"
+    }
   }
 
   /// Variables the runner sets for one call and never passes on from its own environment: `PERFLOOP_PICTURES` (input

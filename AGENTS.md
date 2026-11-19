@@ -174,6 +174,11 @@ add <id>` and let `perfloop queue run --runner local --idle 120` (only while nob
 `--runner ssh://user@spare-mac` (a Mac nobody uses) take them. `--runner vm:tart/NAME` (a macOS VM on this Mac, screens
 only) waits on the same idle gate, read on this Mac, with the same flags.
 
+An `ssh://` runner may be shared with other sessions: each store has its own folder there, and `perfloop runner clean R`
+removes only yours (never another session's, never the launcher while their reps use it), so run it when you are done;
+`--all` is for the Mac's owner. A connection that drops during a rep is made again and the rep collected; one the runner
+still can't collect is redone, as anywhere.
+
 **The window lock** makes window runs on one Mac take turns, and it is on by default: every perfloop verb above holds it
 around each rep, as do the MCP server's jobs and a PerfLoopHost bench's `run`/`profile`. Anything else that opens a
 window (a bench's own `ab` or `run` from an adapter that isn't PerfLoopHost, a script driving the app) goes inside it:

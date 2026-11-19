@@ -270,7 +270,7 @@ public final class SweepRun {
     let raw = rawFile(p.dir, k)
     try? out.stdout.write(to: raw, atomically: true, encoding: .utf8)
     sp.result = "points/" + raw.lastPathComponent
-    guard let r = out.json, [0, 3, 4, 5].contains(out.status) else { sp.failure = "run exited \(out.status)\(out.json == nil ? " without a result" : "")"; return sp }
+    guard let r = out.json, [0, 3, 4, 5].contains(out.status) else { sp.failure = "run \(out.exitText)"; return sp }
     let sides = Readings.sides(run: r, metric: p.metric)
     let xs = sides.compactMap(\.objective)
     sp.reps = sides.count
