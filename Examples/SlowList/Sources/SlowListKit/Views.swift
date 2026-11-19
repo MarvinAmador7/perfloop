@@ -127,6 +127,30 @@ struct RowContent: View {
   }
 }
 
+/// The app's delegate: one window with the list (`ListContainerView`) and the app's menu bar (`ListMenu`), made at
+/// launch. The app runs it; the bench's `menu` scenario runs inside it too (`bench.appDelegate`), on fixture data.
+public final class SlowListAppDelegate: NSObject, NSApplicationDelegate {
+  public let rows: Int
+  public private(set) var window: NSWindow?
+  @MainActor public private(set) var model: ListModel?
+  public init(rows: Int = 1000) { self.rows = rows }
+
+  public func applicationDidFinishLaunching(_ n: Notification) {
+    MainActor.assumeIsolated {
+      let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+      w.title = "SlowList"
+      w.isReleasedWhenClosed = false
+      let model = ListModel.sample(count: rows)
+      ListMenu.install(for: model)
+      w.contentView = ListContainerView(model: model)
+      w.center(); w.makeKeyAndOrderFront(nil)
+      window = w; self.model = model
+      NSApp.activate(ignoringOtherApps: true)
+    }
+  }
+  public func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
+}
+
 /// The window's content as the app shows it: the SwiftUI list above an AppKit status line that follows the selection.
 public final class ListContainerView: NSView {
   public let model: ListModel

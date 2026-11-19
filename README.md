@@ -103,6 +103,17 @@ sent to the system. Where the numbers matter, click, expect focus and name regio
 the lookup turns on and the rest of the rep pays for, so keep identifiers for scenarios that check behaviour, not speed. Input pictures are taken
 by `perfloop run` and `baseline` only, never while an experiment measures. See [ADAPTER.md](ADAPTER.md) §3b and §6c.
 
+A shortcut that only the app's own menu bar has (a SwiftUI `Commands` item, a menu the app's delegate installs) is
+pressed inside the app: the bench starts from the app's own launch (`bench.attach()` from a SwiftUI `App`'s `init`, or
+`bench.appDelegate { … }` and `host: .app` for an AppKit app), and the scenario adopts the window the app opened.
+
+```swift
+bench.scenario("menu", summary: "⌘F through the app's menu bar", kind: .latency, host: .app) { run in
+  try await run.show(window: try await run.appWindow())   // the app's window, its menu bar and commands as they are
+  await run.press("⌘F", expect: "List › Find…")
+}
+```
+
 ### Verify that a feature costs nothing
 
 A feature branch asks a different question: does the change cost anything? Add `--expect same`.

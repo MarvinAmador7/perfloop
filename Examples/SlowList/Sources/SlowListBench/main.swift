@@ -78,6 +78,35 @@ bench.scenario("find", summary: "Click a row, find with ⌘F, type a filter, cle
             "filter '\(model.filter)', the list shows \(run.lastEvent("list.count") ?? -1) of \(model.items.count)")
 }
 
+bench.scenario("open", summary: "Open the window on the fixture: the clock starts before the window exists, so its creation and first frames count",
+               kind: .latency, guards: ["checks", "rows-drawn"], latencyBudgetMs: 500) { run in
+  let model = ListModel.sample(count: run.fixture.int("rows", 1000))
+  // `open` in place of `show`: making the view and the window, the first layout and the first frame with rows are the step.
+  try await run.open("open", size: bench.windowSize, until: { run.bodyCount(of: "RowContent") > 0 }, ink: listRegions(run)) {
+    ListContainerView(model: model)
+  }
+  run.check("rows-at-first-frame", run.bodyCount(of: "RowContent") > 0, "\(run.bodyIDs(of: "RowContent").count) rows drew in the first frames")
+}
+
+// The app's own launch, for the scenarios that run inside it (host: .app): its delegate opens its window and installs its
+// menu bar, as `SlowList` does; the scenario adopts that window. A SwiftUI app calls `bench.attach()` from its `App`.
+bench.appDelegate { fixture in SlowListAppDelegate(rows: fixture.int("rows", 1000)) }
+
+bench.scenario("menu", summary: "⌘F, a filter typed, ⌘K: through the menu bar the app installed at launch, in the window it opened (the bench adopts it)",
+               kind: .latency, guards: ["checks", "rows-drawn"], host: .app) { run in
+  let app = NSApp.delegate as! SlowListAppDelegate
+  let w = try await run.appWindow { $0 === app.window }
+  try await run.show(window: w)
+  let model = app.model!
+  model.filter = ""; model.selection = nil          // a later rep in this process adopts the same window: start from the same state
+  await run.press("⌘F", expect: "List › Find…", expectFocus: .identifier("filter"), until: { run.focus().fieldEditor == true })
+  let want = model.items.filter { $0.title.localizedCaseInsensitiveContains("amber") }.count
+  await run.type("amber", ink: [.find("rows") { run.scrollView() }], expectFocus: .unchanged, until: { run.lastEvent("list.count") == want })
+  await run.press("⌘K", expect: "List › Clear Filter", until: { run.lastEvent("list.count") == model.items.count })
+  run.check("cleared", model.filter.isEmpty && run.lastEvent("list.count") == model.items.count,
+            "filter '\(model.filter)', the list shows \(run.lastEvent("list.count") ?? -1) of \(model.items.count)")
+}
+
 bench.gestures = SyntheticGestures.specs
 bench.scenario("scroll", summary: "Swipe down the list on the trackpad: every row that scrolls in builds its body",
                guards: ["checks", "rows-drawn"], frameGuards: ["hitchTimeRatioMsPerS", "longestStretchMs", "positionErrorP95Pt", "stalls"],

@@ -59,6 +59,42 @@ import PerfLoopKit
     XCTAssertEqual(look(ls, "rest")?.look, "differs", "the sidebar itself is outside every named region")
   }
 
+  /// A region compared by its ink (the champion's layout says so): rows resting elsewhere with another pattern are
+  /// the same; a blank one differs, with both shares in the detail. A candidate can't opt itself in.
+  func testARegionComparedByItsInk() throws {
+    var la = layout()
+    la.regions[0].compare = "ink"; la.regions[0].inkAtLeast = 0.5; la.regions[0].inkMin = 0.005
+    let a = window()
+    // Another pattern altogether (not a shift): pixel by pixel it differs.
+    var other = window()
+    for i in 0..<(160 * 100) { let k = i * 4; if other.bytes[k] < 200 { other.bytes[k] = 230; other.bytes[k + 1] = 230; other.bytes[k + 2] = 230 } }
+    for r in 0..<7 { for y in 0..<6 { for x in 0..<(30 + r * 15) { let k = ((14 + r * 12 + y) * 160 + 20 + x) * 4; for c in 0..<3 { other.bytes[k + c] = 60 } } } }
+    let ls = Snapshot.regionLooks(a: a, b: other, la: la, lb: layout(), tolerance: 0.005, maxMovePt: 0, pictures: dir.appendingPathComponent("ink").path)
+    XCTAssertEqual(look(ls, "list")?.look, "same", "\(ls)")
+    XCTAssertTrue(look(ls, "list")?.detail?.hasPrefix("compared by ink: ") == true, "\(ls)")
+    XCTAssertEqual(look(Snapshot.regionLooks(a: a, b: other, la: layout(), lb: layout(), tolerance: 0.005, maxMovePt: 0), "list")?.look, "differs", "pixel by pixel it isn't")
+    // Blank rows: under half the champion's ink.
+    var blank = window()
+    for i in 0..<(160 * 100) { let k = i * 4; for c in 0..<3 { blank.bytes[k + c] = 230 } }
+    let bl = Snapshot.regionLooks(a: a, b: blank, la: la, lb: layout(), tolerance: 0.005, pictures: dir.appendingPathComponent("blank").path)
+    let l = try XCTUnwrap(look(bl, "list"))
+    XCTAssertEqual(l.look, "differs")
+    XCTAssertTrue(l.detail?.hasSuffix("→ 0.0 %, under 50 % of the champion's") == true, l.detail ?? "")
+    XCTAssertNotNil(l.before); XCTAssertNotNil(l.after, "pictures to look at")
+    XCTAssertNil(l.diff, "no pixel diff for a region compared by ink")
+    // The candidate's layout can't make it an ink region: the champion's picture decides.
+    XCTAssertEqual(look(Snapshot.regionLooks(a: a, b: other, la: layout(), lb: la, tolerance: 0.005, maxMovePt: 0), "list")?.look, "differs")
+
+    // A capture writes what the region asked for into its layout.
+    let w = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 200, height: 100), styleMask: [.borderless], backing: .buffered, defer: false)
+    w.isReleasedWhenClosed = false; defer { w.close() }
+    w.contentView = Fill(.white, NSRect(x: 0, y: 0, width: 200, height: 100))
+    let c = try XCTUnwrap(Snapshot.capture(w, regions: [InkRegion.rect("thread", CGRect(x: 0, y: 0, width: 100, height: 50), min: 0.01).comparedByInk(atLeast: 0.2), .rect("head", CGRect(x: 0, y: 60, width: 100, height: 20))]))
+    let t = try XCTUnwrap(c.layout.regions.first { $0.name == "thread" })
+    XCTAssertEqual(t.compare, "ink"); XCTAssertEqual(t.inkAtLeast, 0.2); XCTAssertEqual(t.inkMin, 0.01)
+    XCTAssertNil(c.layout.regions.first { $0.name == "head" }?.compare)
+  }
+
   func testMissingResizedAndNoLayout() {
     let a = window()
     var lb = layout(); lb.regions.removeAll { $0.name == "footer" }; lb.missing = ["footer"]

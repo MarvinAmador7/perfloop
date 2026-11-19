@@ -29,6 +29,12 @@ public struct Fixture: Sendable, Equatable {
 /// the time to the first frame that shows the change.
 public enum ScenarioKind: String, Sendable { case smooth, latency, isolation }
 
+/// Where a scenario runs (`bench.scenario(…, host:)`): in a window the bench makes for it (`run.show`, `run.open`), or
+/// inside the app as it starts (`app`): the app's own delegate or SwiftUI `App` opens its window and installs its main
+/// menu, and the scenario adopts that window (`run.show(window: try await run.appWindow())`), so keys go through the
+/// app's real menu bar and scene commands.
+public enum ScenarioHost: String, Sendable { case window, app }
+
 /// The number a scenario climbs on (lower is better).
 public enum Metric: String, Sendable { case mainThreadCpuMsPerStep, instructionsPerStep, latencyMs }
 
@@ -50,6 +56,7 @@ public struct ScenarioSpec: Sendable {
   public var secondFixture: String?
   /// The fixture the scenario runs on when `--fixture` doesn't name one (the bench's `defaultFixture` otherwise).
   public var fixture: String?
+  public var host: ScenarioHost = .window
 }
 
 /// A guard's outcome, as the runner reads it (PerfLoopKit's `GuardResult`, named here so a bench needs only this import).
@@ -102,6 +109,15 @@ public final class Bench: @unchecked Sendable {
   public var textSizes: [String] = []
   /// Regions every scenario's snapshots are compared by (`region`); a scenario adds its own with `run.region`.
   var regionList: [InkRegion] = []
+  /// `--fixture SCHEME:…` forms the bench takes besides its listed names (`bench.fixtureScheme`).
+  var schemes: [String: (String) throws -> Fixture] = [:]
+  /// Fixture parameter values beyond a number in range (`bench.fixtureValues`), by key: which fixtures (nil: all), what
+  /// they take, and the check.
+  var valueChecks: [String: (fixtures: [String]?, accepts: String, check: (String) -> String?)] = [:]
+  /// The app's own delegate, for scenarios with `host: .app` under `bench.main()` (`bench.appDelegate`).
+  var appDelegateMaker: (@MainActor (Fixture) -> NSApplicationDelegate)?
+  /// The bench was started from the app's own `main` (`bench.attach()`): every scenario runs inside the app.
+  public private(set) var attached = false
 
   /// `stamp` is `perfLoopBuildStamp` from the PerfLoopStamp plugin; nil leaves the bench unstamped, which
   /// `perfloop store add` refuses.
@@ -123,15 +139,41 @@ public final class Bench: @unchecked Sendable {
   /// The app's knobs (C4). A closure, so the statics are first touched after `PERFLOOP_KNOBS` is final.
   public func knobs(_ list: @escaping @MainActor () -> [any AnyKnob]) { knobList = list }
 
+  /// `host: .app`: the scenario runs inside the app as it starts (`ScenarioHost`): under `bench.main()` the bench
+  /// installs the app's delegate from `bench.appDelegate` first; a bench started with `bench.attach()` runs every
+  /// scenario inside the app anyway.
   public func scenario(_ name: String, summary: String, kind: ScenarioKind = .smooth, objective: Metric? = nil, guards: [String] = ["checks"],
                        guardParams: [String: Double] = [:], frameGuards: [String] = ["hitchTimeRatioMsPerS", "longestStretchMs"], params: [String: String] = [:],
-                       budget: String? = nil, latencyBudgetMs: Double? = nil, secondFixture: String? = nil, fixture: String? = nil, _ body: @escaping ScenarioBody) {
+                       budget: String? = nil, latencyBudgetMs: Double? = nil, secondFixture: String? = nil, fixture: String? = nil, host: ScenarioHost = .window,
+                       _ body: @escaping ScenarioBody) {
     precondition(bodies[name] == nil, "scenario \(name) registered twice")
     scenarios.append(ScenarioSpec(name: name, summary: summary, kind: kind, objective: objective ?? (kind == .latency ? .latencyMs : .mainThreadCpuMsPerStep),
                                   guards: guards, guardParams: guardParams, frameGuards: frameGuards, params: params, budget: budget,
-                                  latencyBudgetMs: latencyBudgetMs, secondFixture: secondFixture, fixture: fixture))
+                                  latencyBudgetMs: latencyBudgetMs, secondFixture: secondFixture, fixture: fixture, host: host))
     bodies[name] = body
   }
+
+  /// A `--fixture SCHEME:…` form the bench takes besides its listed names (`file` for `file:PATH`, a captured
+  /// fixture): `make` gets the whole spec and returns the fixture (its name is set to the spec, so the result says what
+  /// was asked for), or throws why it can't (the error's description is the usage message). The manifest's
+  /// `fixtureSchemes` lists the schemes registered, so the runner refuses any other before a rep runs.
+  public func fixtureScheme(_ scheme: String, _ make: @escaping (String) throws -> Fixture) {
+    schemes[scheme.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ":"))] = make
+  }
+
+  /// Values a fixture parameter takes beyond a number in its `parametric` range, in `NAME@key=value`: `check` returns
+  /// nil when it takes `value` (`items=40-60`), else why not. `accepts` says what it takes, for the manifest's fixture
+  /// entries (`"accepts": { "items": "N, or LO-HI" }`). `fixtures`: the fixtures it applies to (nil: every one). A key
+  /// with a check needn't be `parametric` (a sweep varies only those, by number).
+  public func fixtureValues(_ key: String, accepts: String, fixtures: [String]? = nil, _ check: @escaping (String) -> String?) {
+    valueChecks[key] = (fixtures, accepts, check)
+  }
+
+  /// The app's own `NSApplicationDelegate`, made once for the process, for the scenarios registered with `host: .app`
+  /// under `bench.main()`: it launches as the app does (its window, its main menu), and the scenario adopts the window
+  /// (`run.show(window: try await run.appWindow())`). Gets the run's fixture. A SwiftUI app calls `bench.attach()` from
+  /// its `App` instead.
+  public func appDelegate(_ make: @escaping @MainActor (Fixture) -> NSApplicationDelegate) { appDelegateMaker = make }
 
   /// A guard of the bench's own (`built-within`-like checks of what is on screen), by name: a scenario lists it in
   /// `guards`, the runner asks for it, and it is judged after each rep with the window up.
@@ -202,6 +244,7 @@ public final class Bench: @unchecked Sendable {
       e.guardParams = s.guardParams.isEmpty ? nil : s.guardParams.mapValues { .number($0) }
       e.frameGuards = s.frameGuards
       e.fixture = s.fixture
+      e.host = s.host == .window ? nil : s.host.rawValue
       return e
     }
     let ks = knobList().map { k -> KnobEntry in
@@ -210,18 +253,26 @@ public final class Bench: @unchecked Sendable {
       e.since = i.since
       return e
     }
-    var m = Manifest(app: app, adapter: adapter, build: build, scenarios: entries, fixtures: fixtures.map(\.json), knobs: ks, source: nil)
-    m.hosts = ["window"]; m.defaultHost = "window"; m.defaultFixture = defaultFixture ?? fixtures.first?.name
+    var m = Manifest(app: app, adapter: adapter, build: build, scenarios: entries, fixtures: fixtures.map(fixtureJSON), knobs: ks, source: nil)
+    m.hosts = scenarios.contains { $0.host == .app } || attached ? ["window", "app"] : ["window"]; m.defaultHost = "window"; m.defaultFixture = defaultFixture ?? fixtures.first?.name
     m.probes = probes.isEmpty ? nil : probes; m.exitCodes = Self.exitCodes
     m.isolationGuards = isolationScenarios.isEmpty ? nil : isolationScenarios
     m.verbs = Self.verbs; m.privatePaths = privatePaths.isEmpty ? nil : privatePaths
     m.profileEnv = profileEnv.isEmpty ? nil : profileEnv
     m.gestures = gestures.isEmpty ? nil : gestures
-    // `resolveFixture` takes only registered names when there are some (any name when none): no `scheme:` form.
-    m.fixtureSchemes = fixtures.isEmpty ? nil : []
+    // `resolveFixture` takes registered names and schemes when there are some (any name when none).
+    m.fixtureSchemes = fixtures.isEmpty && schemes.isEmpty ? nil : schemes.keys.sorted()
     m.harness = "PerfLoopHost"
     m.appearances = Looks.appearances; m.textSizes = textSizes.isEmpty ? nil : textSizes
     return m
+  }
+
+  /// A fixture's manifest entry, with what its parameters take beyond numbers (`accepts`).
+  func fixtureJSON(_ f: Fixture) -> JSONValue {
+    guard case .object(var o) = f.json else { return f.json }
+    let acc = valueChecks.filter { $0.value.fixtures?.contains(f.name) ?? true }
+    if !acc.isEmpty { o["accepts"] = .object(acc.mapValues { .string($0.accepts) }) }
+    return .object(o)
   }
 
   /// `list --json`: `tool.build` (the stamp `store add` requires), scenarios and fixtures.
@@ -275,29 +326,106 @@ public final class Bench: @unchecked Sendable {
     """
   }
 
-  /// Runs the command line and exits. `run` starts the app's run loop; the other verbs answer without a window.
+  /// Runs the command line and exits. `run` starts the app's run loop; the other verbs answer without a window. A
+  /// scenario with `host: .app` runs inside the app's own delegate (`bench.appDelegate`), launched as the app launches.
   public func main(_ argv: [String] = Array(CommandLine.arguments.dropFirst())) -> Never {
     dispatchPrecondition(condition: .onQueue(.main))
     let a = HostArgs(argv)
-    // `--knob k=v` joins PERFLOOP_KNOBS before any knob is first read (knobs resolve once, from the environment).
+    prepare(a)
+    if Self.loopVerbs.contains(a.positional.first ?? "") {
+      NSApplication.shared.setActivationPolicy(a.has("no-activate") ? .accessory : .regular)
+      if let name = a.positional.dropFirst().first, scenarios.first(where: { $0.name == name })?.host == .app {
+        let made: Result<NSApplicationDelegate, HostError> = MainActor.assumeIsolated {
+          guard let make = appDelegateMaker else {
+            return .failure(.usage("scenario \(name) runs inside the app (host: .app), and the bench gives no app to run it in: register the app's delegate with "
+                                   + "bench.appDelegate { fixture in … }, or start the bench from the app's own main with bench.attach() (a SwiftUI App's init)"))
+          }
+          do { return .success(make(try resolveFixture(a.one("fixture"), scenario: name))) } catch let e as HostError { return .failure(e) } catch { return .failure(.harness("\(error)")) }
+        }
+        switch made {
+        case .failure(let e): FileHandle.standardOutput.write(Data("\(adapter): \(e)\n".utf8)); exit(e.code)
+        case .success(let d):
+          // The app's own launch (its window, its menu), then the scenario.
+          NSApplication.shared.delegate = d
+          startWhenLaunched(a)
+          withExtendedLifetime(d) { NSApplication.shared.run() }
+          exit(2)
+        }
+      }
+      let d = LaunchDelegate { [unowned self] in await go(a) }
+      NSApplication.shared.delegate = d
+      withExtendedLifetime(d) { NSApplication.shared.run() }
+      exit(2)
+    }
+    let (code, text) = MainActor.assumeIsolated { handle(a) }
+    if !text.isEmpty { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
+    exit(code)
+  }
+
+  /// Runs the bench inside the app's own start, for an app whose `main` is its own: a SwiftUI `App` (call it from the
+  /// `App`'s `init`) or an AppKit `main` (call it before `NSApplication.run()`). The headless verbs (`list`, `describe`,
+  /// `snapdiff`, …) answer and exit here, before any window. `run` and `record-gesture` return at once and start the
+  /// scenario when the app has finished launching (its scenes, its main menu and its scene commands in place), then
+  /// exit with the run's code; the scenario adopts the app's window with `run.show(window: try await run.appWindow())`,
+  /// so `run.press("⌘K")` goes through the app's real menu bar.
+  ///
+  ///     @main struct BenchApp: App {
+  ///       init() { bench.attach() }
+  ///       var body: some Scene { Window("Desk", id: "desk") { DeskRoot() }.commands { DeskCommands() } }
+  ///     }
+  public func attach(_ argv: [String] = Array(CommandLine.arguments.dropFirst())) {
+    dispatchPrecondition(condition: .onQueue(.main))
+    let a = HostArgs(Self.benchArguments(argv))
+    prepare(a)
+    guard Self.loopVerbs.contains(a.positional.first ?? "") else {
+      let (code, text) = MainActor.assumeIsolated { handle(a) }
+      if !text.isEmpty { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
+      exit(code)
+    }
+    attached = true
+    if a.has("no-activate") { NSApplication.shared.setActivationPolicy(.accessory) }
+    startWhenLaunched(a)
+  }
+
+  /// The verbs that need the app's run loop.
+  static let loopVerbs: Set<String> = ["run", "record-gesture"]
+
+  /// `--knob k=v` joins PERFLOOP_KNOBS before any knob is first read (knobs resolve once, from the environment); the
+  /// window verbs take the window lock.
+  func prepare(_ a: HostArgs) {
     if a.has("knob") {
       var k = Knobs.parse(ProcessInfo.processInfo.environment[Knobs.variable] ?? "")
       for x in a.all("knob") { k.merge(Knobs.parse(x)) { $1 } }
       setenv(Knobs.variable, Knobs.format(k), 1)
     }
     takeWindowLock(a)
-    if a.positional.first == "run" || a.positional.first == "record-gesture" {
-      NSApplication.shared.setActivationPolicy(a.has("no-activate") ? .accessory : .regular)
-      let d = LaunchDelegate { [unowned self] in
-        let (code, text) = a.positional.first == "run" ? await runCommand(a) : await recordGesture(a)
-        if !text.isEmpty { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
-        exit(code)
-      }
-      NSApplication.shared.delegate = d
-      withExtendedLifetime(d) { NSApplication.shared.run() }
-      exit(2)
+  }
+
+  /// Starts the verb once the app has finished launching (its own delegate's `applicationDidFinishLaunching` and the
+  /// scenes' windows first: the verb starts in a later turn).
+  func startWhenLaunched(_ a: HostArgs) {
+    launchObserver = NotificationCenter.default.addObserver(forName: NSApplication.didFinishLaunchingNotification, object: nil, queue: .main) { [unowned self] _ in
+      if let t = launchObserver { NotificationCenter.default.removeObserver(t); launchObserver = nil }
+      Task { @MainActor in await go(a) }
     }
-    let (code, text) = MainActor.assumeIsolated { handle(a) }
+  }
+  var launchObserver: NSObjectProtocol?
+
+  /// The command line without what AppKit takes for itself (`-NSDocumentRevisionsDebugMode YES`, `-AppleLanguages (en)`:
+  /// a single dash and a value), which Xcode and `open` add to an app's arguments.
+  static func benchArguments(_ argv: [String]) -> [String] {
+    var out: [String] = [], i = 0
+    while i < argv.count {
+      let x = argv[i]
+      if x.hasPrefix("-NS") || x.hasPrefix("-Apple") { i += 2; continue }
+      out.append(x); i += 1
+    }
+    return out
+  }
+
+  /// The verb, its text printed, the process ended with its code.
+  @MainActor func go(_ a: HostArgs) async {
+    let (code, text) = a.positional.first == "run" ? await runCommand(a) : await recordGesture(a)
     if !text.isEmpty { FileHandle.standardOutput.write(Data((text + "\n").utf8)) }
     exit(code)
   }
@@ -330,7 +458,7 @@ public final class Bench: @unchecked Sendable {
     case "list":
       if json { return (0, PLJSON.encode(listJSON())) }
       let b = build
-      return (0, (["\(adapter) · \(b.line)"] + scenarios.map { "  \($0.name) (\($0.kind.rawValue), \($0.objective.rawValue)): \($0.summary)" }
+      return (0, (["\(adapter) · \(b.line)"] + scenarios.map { "  \($0.name) (\($0.kind.rawValue), \($0.objective.rawValue)\($0.host == .app ? ", in the app" : "")): \($0.summary)" }
                   + fixtures.map { "  fixture \($0.name)\($0.summary.map { ": \($0)" } ?? "")" }).joined(separator: "\n"))
     case "describe": return (0, PLJSON.encode(manifest()))
     case "knobs":
@@ -374,18 +502,37 @@ public final class Bench: @unchecked Sendable {
 
   /// `name@k=v,k=v` → the named fixture with those parameters, refused outside its `parametric` ranges. Without one, the
   /// scenario's own fixture, else the bench's default, else the first.
+  /// A registered scheme (`file:PATH`, `bench.fixtureScheme`) goes to the bench's own maker; a listed name of that
+  /// form (registered with `bench.fixture`) is taken as listed. A parameter value that isn't a number in range goes to
+  /// the key's `bench.fixtureValues` check.
   func resolveFixture(_ spec: String?, scenario: String? = nil) throws -> Fixture {
     let s = spec ?? scenario.flatMap { n in scenarios.first { $0.name == n }?.fixture } ?? defaultFixture ?? fixtures.first?.name ?? "default"
+    if !fixtures.contains(where: { $0.name == s }), let scheme = Manifest.fixtureScheme(s), let make = schemes[scheme] {
+      do { var f = try make(s); f.name = s; return f } catch let e as HostError { throw e } catch { throw HostError.usage("fixture '\(s)': \(error)") }
+    }
     let parts = s.split(separator: "@", maxSplits: 1).map(String.init)
-    guard var f = fixtures.first(where: { $0.name == parts[0] }) ?? (fixtures.isEmpty ? Fixture(parts[0]) : nil) else {
+    guard var f = fixtures.first(where: { $0.name == parts[0] }) ?? (fixtures.isEmpty && schemes.isEmpty ? Fixture(parts[0]) : nil) else {
+      if let scheme = Manifest.fixtureScheme(s) {
+        throw HostError.usage("fixture '\(s)': \(adapter) takes no \(scheme): fixtures (schemes: \(schemes.isEmpty ? "none" : schemes.keys.sorted().map { $0 + ":" }.joined(separator: ", ")); fixtures: \(fixtures.map(\.name).joined(separator: ", ")))")
+      }
       throw HostError.usage("unknown fixture '\(parts[0])' (fixtures: \(fixtures.map(\.name).joined(separator: ", ")))")
     }
     if parts.count == 2 {
       for kv in parts[1].split(separator: ",") {
         let x = kv.split(separator: "=", maxSplits: 1).map(String.init)
         guard x.count == 2 else { throw HostError.usage("fixture parameter '\(kv)' is not k=v") }
-        guard let r = f.parametric?[x[0]] else { throw HostError.usage("fixture \(f.name) has no parameter '\(x[0])' to vary (parametric: \((f.parametric ?? [:]).keys.sorted().joined(separator: ", ")))") }
-        guard let d = Double(x[1]), r.contains(d) else { throw HostError.usage("fixture \(f.name): \(x[0])=\(x[1]) is outside \(r.lowerBound)…\(r.upperBound)") }
+        let r = f.parametric?[x[0]], d = Double(x[1])
+        let values = valueChecks[x[0]].flatMap { $0.fixtures?.contains(f.name) ?? true ? $0 : nil }
+        if let r, let d {
+          guard r.contains(d) else { throw HostError.usage("fixture \(f.name): \(x[0])=\(x[1]) is outside \(r.lowerBound)…\(r.upperBound)") }
+        } else if let v = values {
+          if let why = v.check(x[1]) { throw HostError.usage("fixture \(f.name): \(x[0])=\(x[1]): \(why) (it takes \(v.accepts))") }
+        } else if r != nil {
+          throw HostError.usage("fixture \(f.name): \(x[0])=\(x[1]) is not a number (\(r!.lowerBound)…\(r!.upperBound))")
+        } else {
+          let keys = Set((f.parametric ?? [:]).keys).union(valueChecks.filter { $0.value.fixtures?.contains(f.name) ?? true }.keys).sorted()
+          throw HostError.usage("fixture \(f.name) has no parameter '\(x[0])' to vary (parametric: \(keys.joined(separator: ", ")))")
+        }
         f.params[x[0]] = x[1]
       }
       f.name = s

@@ -6,8 +6,8 @@ deliberately slow path, and its PerfLoop bench. It is the second app PerfLoop ru
 | File | What it shows |
 |---|---|
 | `Sources/SlowListKit/Model.swift` | a knob (`ListKnobs.rank`) where an idea varies, and `Mutations.record` on the state that drives bodies |
-| `Sources/SlowListKit/Views.swift` | `Probe.body("Row", id:)` in the bodies worth counting; the slow path; the fix (`SLOWLIST_ROW_VALUES`); a cheat (`SLOWLIST_CHEAT`); a look change (`SLOWLIST_LOOK`: the status line names the item); the details panel (a child window) |
-| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, five scenarios (one replays a trackpad gesture, one presses real keys and clicks through the menu bar, one opens a child panel), ink regions each step must leave drawn (the rows, the status line), which are also the regions snapshots are compared by, a knob, a guard of its own, `bench.main()` |
+| `Sources/SlowListKit/Views.swift` | `Probe.body("Row", id:)` in the bodies worth counting; the slow path; the fix (`SLOWLIST_ROW_VALUES`); a cheat (`SLOWLIST_CHEAT`); a look change (`SLOWLIST_LOOK`: the status line names the item); the details panel (a child window); the app's delegate (`SlowListAppDelegate`: its window and menu bar, which the `menu` scenario runs in) |
+| `Sources/SlowListBench/main.swift` | the whole adapter: fixtures, seven scenarios (one replays a trackpad gesture, one presses real keys and clicks through the menu bar, one runs inside the app's own launch and presses through the menu bar the app installed (`menu`, `host: .app`), one measures the window opening from before it exists (`open`), one opens a child panel), ink regions each step must leave drawn (the rows, the status line), which are also the regions snapshots are compared by, a knob, a guard of its own, `bench.main()` |
 | `Package.swift` | depends on PerfLoop like an outside app; the `PerfLoopStamp` plugin on the bench target |
 | `walkthrough.sh` | the loop end to end on this app |
 
@@ -46,6 +46,8 @@ PERFLOOP_KNOBS=rows.rank=index $B run select --reps 1
 $B run scroll --reps 1                       # a trackpad flick replayed into the list: how closely the content followed
 $B run find --reps 1 --pictures /tmp/find    # ⌘F, typing, ⌘K: the menu item each fired, the focus, the window before/after
 $B run details --set appearance=dark --reps 1   # the details panel over the list, in dark mode
+$B run open --reps 1                         # the window opening, measured from before it exists (run.open)
+$B run menu --reps 1                         # inside the app's own launch: ⌘F and ⌘K through the menu bar it installed
 $B run scroll --set gesture=synthetic:drag-down --set inject-block-ms=60 --reps 1   # the meter's self-check: stalls
 $B record-gesture scroll --name my-swipe     # your own swipe over the list, for --set gesture=FILE
 $B profile select                            # the same scenario under xctrace: call trees per step

@@ -39,8 +39,11 @@ candidate's, so an experiment can't change how it is judged. Without `describe`,
                    "guardParams": { "snapshot-diff.tolerance": 0.005 },
                    "frameGuards": ["hitchTimeRatioMsPerS", "longestStretchMs"],
                    "secondFixture": "rows500", "latencyBudgetMs": null,
-                   "fixture": "rows2000" } ],                        // optional: the scenario's own fixture
-  "fixtures": [ { "name": "rows2000", "params": { "rows": "2000" }, "parametric": { "rows": [10, 50000] } } ],
+                   "fixture": "rows2000",                            // optional: the scenario's own fixture
+                   "host": "app" } ],                                // optional: runs inside the app (§3b); absent: a window of its own
+  "fixtures": [ { "name": "rows2000", "params": { "rows": "2000" }, "parametric": { "rows": [10, 50000] },
+                  "accepts": { "rows": "N, or LO-HI" } } ],           // optional: values beyond a number in range
+  "hosts": ["window", "app"],
   "knobs": [ { "name": "rows.rank", "type": "choice", "default": "sort", "choices": ["sort", "index"] } ],
   "defaultFixture": "rows2000", "isolationGuards": [],
   "verbs": ["help", "list", "describe", "knobs", "run", "snapdiff", "profile", "diff"],   // optional; absent = deskbench's (with ab)
@@ -66,11 +69,18 @@ part of the contract: a candidate that changes it needs the owner to be promoted
 
 `fixtureSchemes` (optional, added 2026-11): the `scheme:` forms your `--fixture` takes besides the listed names, e.g.
 `["file"]`. Without it any scheme reaches you as before; with it, another scheme is refused before a rep runs (`[]`:
-none; a PerfLoopHost bench with fixtures says `[]`, since it takes listed names only). A `file:PATH` fixture (`file:///abs`
+none). A PerfLoopHost bench lists the schemes it registered with `bench.fixtureScheme("file") { spec in … }` (the closure
+gets the whole `file:PATH`, returns the fixture or throws why not; the run's `fixture` is the spec as asked), and `[]`
+when it has fixtures and no scheme. A `file:PATH` fixture (`file:///abs`
 too) is checked on the Mac the reps run on before any of them start, whatever this says: perfloop refuses it when the
 file isn't readable there (this Mac: from perfloop's working directory when relative; an `ssh://` runner: asked over
 ssh, absolute paths only, as perfloop copies builds there but never fixture files; a VM: once it is up, at the stage's
 start). `doctor --bench` warns when a `file:` fixture the manifest names isn't on this Mac.
+
+`parametric` and `accepts`: `NAME@k=v,…` sets a listed fixture's parameters; the runner passes it through (a sweep
+varies a `parametric` key by number, within its range). A value that isn't a number (`items=40-60`) is the adapter's to
+take or refuse: PerfLoopHost refuses it unless the bench registered `bench.fixtureValues("items", accepts: "N, or LO-HI")
+{ value in nil or why }`, which the fixture's entry then lists under `accepts`.
 
 ## 3. `run SCENARIO --fixture F --reps 1 --json [--set k=v …] [--quiet-check 0]`
 
@@ -164,6 +174,11 @@ and checks honest after a structural change (a sidebar, a palette, a split). `pe
 | `await run.settle()` | Wait for the window to come to rest (no main-thread stretch over 2 ms for 100 ms) before something that needs a still frame: a snapshot, a check of positions |
 | `run.step(…, ink: [regions])` | The **ink guard**: regions (`.view`, `.find { view }`, `.rect` in points from the content's top-left, `.identifier`; prefer the first three, below) that must show drawn content once the step has come to rest. Each is drawn by its views (`cacheDisplay`) and fails when blank, all background (under `ink.min`, 0.5 % of its pixels unlike its most common colour), zero-size, outside the window or not found; every region leaves a PNG crop in `$PERFLOOP_ARTIFACTS/ink/`, pass or fail, and the rep's `guards[]` gets one `ink` record with them. `await run.ink(regions, after: "label")` judges at another moment |
 | `await run.check(name) { (pass, detail) }` | A check that costs something (pixels, a walk of the view tree): its work runs off the clock |
+| `run.step(name) { await … }` | An action that is work over time (items at a rate, events at their times): awaited inside the step, so its CPU, stretches and frames are the step's; latency to the first frame after it finished (and `until:` held). A synchronous action runs as before |
+| `try await run.open(name, until:, ink:) { view }` | An `open` scenario, in place of `show`: the clock starts before the window exists, so making the view and the window, the first layout and the first frames are the step's number |
+| `run.show(window:)`, `run.appWindow()`, `host: .app` | A scenario that runs inside the app as it starts: the app's own delegate (`bench.appDelegate { fixture in AppDelegate(…) }`, for an AppKit app under `bench.main()`) or its SwiftUI `App` (which calls `bench.attach()` from its `init`) opens its window and installs its main menu and scene commands; the scenario adopts that window (`try await run.show(window: try await run.appWindow())`), so `run.press("⌘K")` goes through the app's real menu bar and reports the item fired. The rep leaves the window up (the app owns it); each rep resets the app's state itself |
+| `.find("palette") { v }.drawnAlone()` | An ink region judged on its view drawn by itself, not the window in its rect: an overlay's ink is its own, not what shows behind it (`inkRegions[].alone`). A `.rect` has no view: drawn in place, and its detail says so |
+| `region.comparedByInk(atLeast: 0.5)` | A snapshot region compared by how much of it is drawn, not pixel by pixel: a viewport whose content rests at a different offset run to run (a thread after a switch) is `same` while the candidate keeps `atLeast` of the champion's ink (and the floor); the champion's picture decides (§5a) |
 | `run.windowState()`, snapshots, `profile` | the trust fields (§3), `snapshot-diff` (§5), the profiler (§6) |
 
 **Views, points and rects first; identifiers for functional scenarios.** An `.identifier` region, `click(identifier:)`
@@ -248,6 +263,7 @@ PerfLoopHost does all of this; an adapter of its own (capcomd's deskbench) gets 
 | What | PerfLoopHost | A protocol-1 adapter must |
 |---|---|---|
 | Regions | one region model for the ink guard and the looks (§3b's `InkRegion`: `.view`, `.find`, `.rect` in points from the content's top-left, `.identifier`, views and rects first: §3b): every region a step names for the ink guard is a snapshot region too; add others with `bench.regions([…])` or `run.regions([…])`; a visible child window is a region by its `identifier` or title | write `X.layout.json` beside each capture with the regions' rects, and answer `snapdiff` with `looks[]` (§5) |
+| Compared by ink | `region.comparedByInk(atLeast:)`: the layout's region says `"compare": "ink"` (with `inkAtLeast`, `inkMin`) and `snapdiff` judges it `same` when the candidate's crop keeps that share of the champion's ink (and the floor), else `differs`, with both shares in its detail and the two crops to look at; the champion's layout decides | the same in its `snapdiff` |
 | Child windows (v7) | each visible child window and sheet of the bench window, at any depth, is drawn into the snapshot where it is on screen (its content over its background colour) and listed in `childWindows`; keep a panel up past the scenario's end with `run.atClose { panel.close() }` | draw `window.childWindows` and `sheets` into its `cacheDisplay` picture at their screen offsets |
 | Appearance (v11) | `--set appearance=light\|dark\|system` (light by default) sets the bench window's and `NSApp.appearance`, so panels, popovers and sheets follow; the result says `appearance`, the snapshot's file and layout carry it | set its windows' appearance from the parameter, list `appearances` in the manifest, write it into the layout |
 | Text size (v11) | `--set textSize=NAME`, refused unless the bench lists `bench.textSizes`; the scenario reads `run.textSize` and applies it through the app's own setting (macOS has no system text size an app follows) | the same, listing `textSizes` |
@@ -299,7 +315,11 @@ the built-in ones) or a `perfloop.gesture/1` file. Its steps carry `smoothness` 
 them (`reps[].smoothness`), the summary the medians (`summary.smoothness`), which the runner reads as frame guards when
 the scenario lists `positionErrorP95Pt` and `stalls` in `frameGuards`. PerfLoopHost: `run.swipe(gesture)` replays into
 the window's largest NSScrollView (CGEvent-built NSEvents handed to `scrollWheel(with:)` at the recorded times; nothing
-posted to the system). `record-gesture SCENARIO [--name N] [--out FILE] [--count N] [--timeout S]` shows the scenario's
+posted to the system). `run.swipe(g, delivery: .window)` hands each event to the app (`NSApp.sendEvent`) for the scroll view's window, at its
+middle, instead: the app's local event monitors see every event (a reel that takes sideways gestures on its own monitor)
+and AppKit's window routes what they pass on as for a hand (the finger phases to the scroll view under the point; the
+window decides where momentum goes), and the step's note says it went through the window.
+`record-gesture SCENARIO [--name N] [--out FILE] [--count N] [--timeout S]` shows the scenario's
 window and records a hand's gestures over it (a local event monitor: deltas, phases, times) into
 `${PERFLOOP_HOME:-~/.perfloop}/APP/gestures/NAME.json`, where `perfloop gestures list` looks; it refuses a path inside a
 git checkout. `gestures [--json]` lists the built-in ones.
@@ -327,7 +347,9 @@ where expected) goes in `checks[]` like any other.
 
 PerfLoopHost does all of it: `run.press("⇧⌘D", expect: "Split Down")`, `run.key(.escape)`, `run.type("query")`,
 `run.click(view)` / `click(identifier:)` / `click(at:)`, `expectFocus:` (and `ink:`, as on `run.step`) on any of them and on `run.step`, and
-`run.expectFocus(.identifier("palette.field"))`. The events are made from the virtual key and modifiers (a CGEvent that
+`run.expectFocus(.identifier("palette.field"))`. A shortcut that is a SwiftUI `Commands` item exists only in a SwiftUI app:
+run that scenario inside the app (§3b: `bench.attach()` from the app's `App`, `run.show(window:)`), and `press` goes
+through its real menu bar and names the item that fired. The events are made from the virtual key and modifiers (a CGEvent that
 is never posted, made into an NSEvent, so AppKit takes the characters from the current keyboard layout and matches
 ⇧⌘D to ⇧⌘D, which a hand-made `NSEvent.keyEvent` doesn't: the study's misrouted ⇧⌘D), the modifiers pressed and
 released around the key as a hand does, and put on the app's own queue with `NSApp.postEvent` (not `sendEvent`, which
@@ -363,12 +385,12 @@ adapter that can't can be wrapped instead: `perfloop lock -- BENCH ab …`.
 
 | Document | Version | Written by | Stability |
 |---|---|---|---|
-| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `fixtureSchemes`, `profileEnv`, `harness`, `appearances`, `textSizes` added 2026-11 |
+| `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `fixtureSchemes`, `profileEnv`, `harness`, `appearances`, `textSizes`, `scenarios[].host`, `fixtures[].accepts` added 2026-11 |
 | `perfloop.build` | 1 | adapter (`tool.build`), store (`build.json`) | stable |
-| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11), `guards[].inkRegions` and `worstStretches[].benchSamples`/`topBench` (2026-11), `steps[].input` and `steps[].focus` (§6c, 2026-11), `appearance` and `textSize` (2026-11, v11) |
+| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11), `guards[].inkRegions` and `worstStretches[].benchSamples`/`topBench` (2026-11), `steps[].input` and `steps[].focus` (§6c, 2026-11), `appearance` and `textSize` (2026-11, v11), `inkRegions[].alone` (2026-11) |
 | `perfloop.measure`, `perfloop.baseline` | 1 | runner (`runs/<id>/run.json`, `baselines/<scenario>[~<look>]/baseline.json`) | new (2026-11); a pair's `Side` gained `fixture` (what the rep ran); `input` (one rep's input lines and pictures, §6c); a baseline gained `look` (one per look) |
 | `perfloop.snapdiff` | 1 (reads `deskbench.snapdiff/1`) | adapter `snapdiff` | fields only added; `guard.looks[]` (2026-11, v5) |
-| `perfloop.snapshot` | 1 | adapter (`X.layout.json` beside a snapshot) | new (2026-11, v5/v7/v11) |
+| `perfloop.snapshot` | 1 | adapter (`X.layout.json` beside a snapshot) | new (2026-11, v5/v7/v11); `regions[].compare`, `inkAtLeast`, `inkMin` added 2026-11 |
 | `perfloop.experiment`, `perfloop.ledger`, `perfloop.champion` | 1 | runner (store) | stable since Phase 2 |
 | `perfloop.sweep`, `perfloop.queue`, `perfloop.gesture`, `perfloop.gestures` | 1 | runner / probe | stable since Phase 3–4; `perfloop.sweep` gained `walls` (2026-11) |
 | `perfloop.doctor` | 1 | runner `doctor --json` | new |

@@ -37,6 +37,8 @@ import PerfLoopProbe
   /// scenario's (`run.region`), and every region a step named for the ink guard, once per name.
   var regions: [InkRegion] = []
   var appAppearance: NSAppearance??
+  /// The app's own window, adopted with `show(window:)`, and its appearance before: the rep leaves it up.
+  var adopted: (window: NSWindow, appearance: NSAppearance?)?
   var closers: [@MainActor () -> Void] = []
   var steps: [StepRecord] = []
   var checks: [CheckResult] = []
@@ -85,41 +87,147 @@ import PerfLoopProbe
 
   /// The same, for an AppKit view (the bench sizes the window; the view fills it).
   public func show(view: NSView, size: CGSize = CGSize(width: 900, height: 700), title: String? = nil) async throws {
+    let w = makeWindow(view: view, size: size, title: title)
+    present(w, view: view)
+    try await shown(w)
+  }
+
+  /// Adopts a window the app made itself (its SwiftUI scene's, its delegate's) as the rep's window, instead of one the
+  /// bench makes: the app's main menu, its scene's commands and its window controller stay what they are, so
+  /// `run.press("⌘K")` goes through the app's real menu bar. Activates it, waits until it draws and comes to rest, as
+  /// `show` does. `size`: the content size to set (nil keeps the app's). The rep's close leaves the window up (the app
+  /// owns it) with its appearance as it was; a later rep adopts it again, so each rep resets the app's state itself.
+  /// Find the window with `appWindow()`.
+  public func show(window w: NSWindow, size: CGSize? = nil) async throws {
+    guard window == nil else { throw HostError.usage("the rep already has its window: show(window:) adopts the app's window in place of run.show, once per rep") }
+    guard let view = w.contentView else { throw HostError.harness("the app's window '\(w.title)' has no content view to measure") }
+    adopted = (w, w.appearance)
+    if let s = size { w.setContentSize(s) }
+    look(w)
+    window = w
+    present(w, view: view)
+    try await shown(w)
+  }
+
+  /// The app's own window, once it is up: the first visible window that can be main (not a panel), matching `where`
+  /// when given. SwiftUI makes a scene's windows a little after launch: this waits for one.
+  /// Throws after `timeoutMs`, naming the windows there were.
+  public func appWindow(timeoutMs: Double = 5000, where match: ((NSWindow) -> Bool)? = nil) async throws -> NSWindow {
+    func find() -> NSWindow? { NSApp.windows.first { $0.isVisible && $0.canBecomeMain && !($0 is NSPanel) && (match?($0) ?? true) } }
+    let until = Date().addingTimeInterval(timeoutMs / 1000)
+    while Date() < until {
+      if let w = find() { return w }
+      await sleep(ms: 20)
+    }
+    if let w = find() { return w }
+    let seen = NSApp.windows.map { "'\($0.title)' (\(Focus.name($0))\($0.isVisible ? "" : ", hidden"))" }
+    throw HostError.harness("the app showed no window within \(Int(timeoutMs)) ms" + (match == nil ? "" : " that matches") + (seen.isEmpty ? " (it has none)" : ": it has \(seen.joined(separator: ", "))")
+                            + ". The scenario runs inside the app (bench.attach, or bench.appDelegate with host: .app): is its window scene opened at launch?")
+  }
+
+  /// A window for `view`, in the rep's look, centred: the rep's window from here on (not shown yet).
+  func makeWindow(view: NSView, size: CGSize, title: String?) -> NSWindow {
     let w = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
     w.title = title ?? "\(scenario) (perfloop bench)"
     w.isReleasedWhenClosed = false
-    // One appearance on every machine, so snapshots of the champion and the candidate compare (Bench.appearance).
-    if let a = appearance { w.appearance = NSAppearance(named: a) }
-    // Child windows, popovers and sheets follow the app's appearance, not their parent's: set it too, for the rep.
-    if appAppearance == nil { appAppearance = .some(NSApp.appearance) }
-    NSApp.appearance = appearance.flatMap { NSAppearance(named: $0) }
+    look(w)
     w.contentView = view
     w.center()
     window = w
+    return w
+  }
+
+  /// One appearance on every machine, so snapshots of the champion and the candidate compare (Bench.appearance). Child
+  /// windows, popovers and sheets follow the app's appearance, not their parent's: set it too, for the rep.
+  func look(_ w: NSWindow) {
+    if let a = appearance { w.appearance = NSAppearance(named: a) }
+    if appAppearance == nil { appAppearance = .some(NSApp.appearance) }
+    NSApp.appearance = appearance.flatMap { NSAppearance(named: $0) }
+  }
+
+  /// Puts the window in front (activating this process unless `--no-activate`) and starts the frames on `view`. No
+  /// waiting: `open` calls it inside its step.
+  func present(_ w: NSWindow, view: NSView) {
     recorder.timeline.nominalHz = Double(w.screen?.maximumFramesPerSecond ?? NSScreen.main?.maximumFramesPerSecond ?? 60)
-    activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleDisplaySleepDisabled, .suddenTerminationDisabled], reason: "perfloop scenario")
+    if activity == nil {
+      activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical, .idleDisplaySleepDisabled, .suddenTerminationDisabled], reason: "perfloop scenario")
+    }
     if activate { NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil) } else { w.orderFrontRegardless() }
     recorder.start(on: view, sampler: sampler)
-    if activate {
-      for _ in 0..<10 where !(w.isKeyWindow && NSApp.isActive) {
-        NSApp.activate(ignoringOtherApps: true); NSRunningApplication.current.activate(); w.makeKeyAndOrderFront(nil)
-        await sleep(ms: 100)
-      }
-    }
+  }
+
+  /// Until the window is key (up to 1 s), draws and comes to rest; then `profile`'s wait and `record-gesture`'s
+  /// recording, when asked for.
+  func shown(_ w: NSWindow) async throws {
+    await makeKey(w)
     let start = recorder.timeline.ticks.count
     guard await recorder.wait(timeoutMs: 5000, { [unowned self] in recorder.timeline.ticks.count >= start + 3 }) else {
       throw HostError.harness("the window drew no frame in 5 s: is the screen locked, or is this an ssh session without the console?")
     }
     if !(await settle(timeoutMs: 3000)) { notes.append("the window was still busy 3 s after it opened") }
-    if let wf = waitFor {
-      waitFor = nil
-      FileManager.default.createFile(atPath: wf + ".waiting", contents: Data())
-      FileHandle.standardError.write(Data("waiting for \(wf) (a profiler attaches to pid \(ProcessInfo.processInfo.processIdentifier))\n".utf8))
-      let until = Date().addingTimeInterval(120)
-      while !FileManager.default.fileExists(atPath: wf), Date() < until { await sleep(ms: 50) }
-      _ = await settle(timeoutMs: 1000)
-    }
+    await profilerWait()
     if let q = recordRequest { recordRequest = nil; try await record(q) }
+  }
+
+  func makeKey(_ w: NSWindow) async {
+    guard activate else { return }
+    for _ in 0..<10 where !(w.isKeyWindow && NSApp.isActive) {
+      NSApp.activate(ignoringOtherApps: true); NSRunningApplication.current.activate(); w.makeKeyAndOrderFront(nil)
+      await sleep(ms: 100)
+    }
+  }
+
+  /// `profile`'s child: once, write `<file>.waiting` and wait (up to 120 s) for `<file>`, the profiler attached.
+  func profilerWait() async {
+    guard let wf = waitFor else { return }
+    waitFor = nil
+    FileManager.default.createFile(atPath: wf + ".waiting", contents: Data())
+    FileHandle.standardError.write(Data("waiting for \(wf) (a profiler attaches to pid \(ProcessInfo.processInfo.processIdentifier))\n".utf8))
+    let until = Date().addingTimeInterval(120)
+    while !FileManager.default.fileExists(atPath: wf), Date() < until { await sleep(ms: 50) }
+    if window != nil { _ = await settle(timeoutMs: 1000) }
+  }
+
+  // MARK: opening, measured
+
+  /// One measured step that opens the rep's window (an `open` scenario: in place of `show`): the clock starts before
+  /// the window exists, so making `content`, the window, its first layout and its first frames are all in the step.
+  /// The step's action builds the view, makes the window, puts it in front and starts the frames; its latency is to the
+  /// first frame after `until` held (without `until`: the end of the last busy stretch before rest), as `step`'s.
+  /// `ink` regions are judged once it has come to rest. Throws when no frame comes within `timeoutMs`.
+  @discardableResult
+  public func open<V: View>(_ name: String = "open", size: CGSize = CGSize(width: 900, height: 700), title: String? = nil, timeoutMs: Double = 5000, quietMs: Double = 100,
+                            until: (() -> Bool)? = nil, ink: [InkRegion] = [], expectFocus: FocusTarget? = nil, _ content: () -> V) async throws -> StepRecord {
+    try await open(name, size: size, title: title, timeoutMs: timeoutMs, quietMs: quietMs, until: until, ink: ink, expectFocus: expectFocus, view: {
+      let h = NSHostingView(rootView: content())
+      h.sizingOptions = []
+      return h
+    })
+  }
+
+  /// The same, for an AppKit view.
+  @discardableResult
+  public func open(_ name: String = "open", size: CGSize = CGSize(width: 900, height: 700), title: String? = nil, timeoutMs: Double = 5000, quietMs: Double = 100,
+                   until: (() -> Bool)? = nil, ink: [InkRegion] = [], expectFocus: FocusTarget? = nil, view content: () -> NSView) async throws -> StepRecord {
+    guard window == nil else { throw HostError.usage("run.open makes the rep's window: call it in place of run.show, before any other window of the rep") }
+    // The profiler attaches before the clock starts: there is no window to wait on yet.
+    await profilerWait()
+    recorder.timeline.nominalHz = Double(NSScreen.main?.maximumFramesPerSecond ?? 60)
+    recorder.startClock(sampler: sampler)
+    // A fresh run-loop turn: the step's action is the first thing in it.
+    await nextTurn()
+    let r = await measuredStep(name, timeoutMs: timeoutMs, quietMs: quietMs, until: until, expectFocus: expectFocus, input: true) {
+      let v = content()
+      present(makeWindow(view: v, size: size, title: title), view: v)
+    }
+    guard let w = window, !recorder.timeline.ticks.isEmpty else {
+      throw HostError.harness("the window drew no frame in \(Int(timeoutMs)) ms: is the screen locked, or is this an ssh session without the console?")
+    }
+    await makeKey(w)
+    if !ink.isEmpty { await self.ink(ink, after: name) }
+    for r in ink where !regions.contains(where: { $0.name == r.name }) { regions.append(r) }
+    if let q = recordRequest { recordRequest = nil; try await record(q) }
+    return r
   }
 
   /// The window's state now: a rep whose window wasn't active, key, visible and unoccluded is untrusted. A visible
@@ -141,7 +249,12 @@ import PerfLoopProbe
     closers = []
     recorder.stop()
     if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
-    window?.orderOut(nil); window?.contentView = nil; window?.close(); window = nil
+    if let a = adopted {
+      // The app's own window stays up, as the app left it.
+      a.window.appearance = a.appearance; window = nil; adopted = nil
+    } else {
+      window?.orderOut(nil); window?.contentView = nil; window?.close(); window = nil
+    }
     if let a = appAppearance { NSApp.appearance = a; appAppearance = nil }
   }
 
@@ -182,9 +295,29 @@ import PerfLoopProbe
     return r
   }
 
+  /// One measured step whose action is work over time (a burst of items at a rate, events at their times): the step
+  /// starts it, awaits it and ends once it has finished, `until` (when given) held and the window came to rest. Its
+  /// CPU and stretches are everything from the action's start to rest, the frames in between included; its latency is
+  /// the action's start → the first frame after the action finished (and `until` held). Everything else is `step`'s.
+  @discardableResult
+  public func step(_ name: String, timeoutMs: Double = 5000, quietMs: Double = 100, until: (() -> Bool)? = nil, ink: [InkRegion] = [], expectFocus: FocusTarget? = nil,
+                   _ action: @MainActor () async -> Void) async -> StepRecord {
+    let r = await measuredStep(name, timeoutMs: timeoutMs, quietMs: quietMs, until: until ?? { true }, expectFocus: expectFocus, asyncAction: action)
+    if !ink.isEmpty { await self.ink(ink, after: name) }
+    for r in ink where !regions.contains(where: { $0.name == r.name }) { regions.append(r) }
+    return r
+  }
+
   /// `input`: an input step, whose line reports the focus itself (no note when it moves).
   func measuredStep(_ name: String, timeoutMs: Double, quietMs: Double, until: (() -> Bool)?, expectFocus: FocusTarget? = nil, input: Bool = false,
                     _ action: () -> Void) async -> StepRecord {
+    await measuredStep(name, timeoutMs: timeoutMs, quietMs: quietMs, until: until, expectFocus: expectFocus, input: input, asyncAction: { action() })
+  }
+
+  /// The step: `asyncAction` runs on the main actor and is awaited (a synchronous one returns before anything else
+  /// runs, as it always did); `until` and the rest are waited from its return, the clock from its start.
+  func measuredStep(_ name: String, timeoutMs: Double, quietMs: Double, until: (() -> Bool)?, expectFocus: FocusTarget? = nil, input: Bool = false,
+                    asyncAction action: @MainActor () async -> Void) async -> StepRecord {
     let focusBefore = focus()
     let at = now
     // The `step` signpost a profile's per-step call trees are cut on (cheap when nothing records it).
@@ -193,7 +326,7 @@ import PerfLoopProbe
     defer { sp.endInterval("step", spState) }
     let cpu0 = KernelCounters.threadCpuMs(), ins0 = KernelCounters.instructions()
     recorder.lastBusyEnd = at
-    action()
+    await action()
     var latency: Double?
     var stepNotes: [String] = []
     if let u = until {

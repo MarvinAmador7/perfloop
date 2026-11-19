@@ -57,6 +57,8 @@ public struct InkRegionResult: Codable, Sendable, Equatable {
   public var detail: String
   /// The crop it judged (the region as drawn), absolute, or store-relative once the runner has it.
   public var picture: String?
+  /// The region was its view drawn by itself (`InkRegion.drawnAlone()`): what is behind the view didn't count.
+  public var alone: Bool?
   public init(region: String, after: String, pass: Bool, ink: Double?, min: Double, rect: [Double]?, detail: String, picture: String?) {
     self.region = region; self.after = after; self.pass = pass; self.ink = ink; self.min = min; self.rect = rect; self.detail = detail; self.picture = picture
   }
