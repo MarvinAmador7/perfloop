@@ -9,6 +9,8 @@ final class RunnerTests: FakeBenchCase {
   static let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures")
   var remoteHome: URL { tmp.appendingPathComponent("mini-home") }
   var sshLog: URL { tmp.appendingPathComponent("ssh.log") }
+  /// The store's folder on the fake remote Mac: `<app>-<store id>` (the id fixed in setUp).
+  var remoteStore: String { remoteHome.appendingPathComponent(".perfloop/fake-app-0a1b2c3d").path }
 
   override func setUpWithError() throws {
     try super.setUpWithError()
@@ -21,9 +23,11 @@ final class RunnerTests: FakeBenchCase {
     for t in ["iostat", "ps"] { try? FileManager.default.createSymbolicLink(at: bin.appendingPathComponent(t), withDestinationURL: Self.fixtures.appendingPathComponent("fake-load.sh")) }
     setenv("FAKE_REMOTE_LOCKED", tmp.appendingPathComponent("mini-locked").path, 1)
     setenv("FAKE_REMOTE_HOME", remoteHome.path, 1); setenv("FAKE_BIN", bin.path, 1); setenv("FAKE_SSH_LOG", sshLog.path, 1)
+    try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+    try "0a1b2c3d\n".write(to: store.root.appendingPathComponent(".runner-id"), atomically: true, encoding: .utf8)
   }
   override func tearDownWithError() throws {
-    for k in ["FAKE_REMOTE_HOME", "FAKE_BIN", "FAKE_SSH_LOG", "FAKE_SSH_FAIL", "FAKE_REMOTE_LOCKED", "FAKE_REMOTE_IDLE", "FAKE_REMOTE_TOUCH", "FAKE_REMOTE_LOAD"] { unsetenv(k) }
+    for k in ["FAKE_REMOTE_HOME", "FAKE_BIN", "FAKE_SSH_LOG", "FAKE_SSH_FAIL", "FAKE_REMOTE_LOCKED", "FAKE_REMOTE_IDLE", "FAKE_REMOTE_TOUCH", "FAKE_REMOTE_LOAD", "FAKE_SSH_DROP"] { unsetenv(k) }
     try super.tearDownWithError()
   }
 
@@ -67,7 +71,7 @@ final class RunnerTests: FakeBenchCase {
     XCTAssertTrue(stages.allSatisfy { $0.runner == "ssh://fake-mini" && $0.machine == "FakeMac1,1" })
 
     // The adapter ran there, on the runner's copies of the builds, in the GUI-session launcher.
-    let remoteRoot = remoteHome.appendingPathComponent(".perfloop/fake-app").path
+    let remoteRoot = remoteStore
     let abs = adapterCalls("ab")
     XCTAssertFalse(abs.isEmpty)
     XCTAssertTrue(abs.allSatisfy { $0.contains("A=\(remoteRoot)/builds/") && $0.contains("B=\(remoteRoot)/builds/") }, abs[0])
@@ -97,7 +101,7 @@ final class RunnerTests: FakeBenchCase {
     loop.runner = r
     // A path under this Mac's store is the remote store's for the reps (perfloop copies builds there, not fixtures).
     let local = store.root.appendingPathComponent("fixtures/big.json").path
-    let remote = remoteHome.appendingPathComponent(".perfloop/fake-app/fixtures/big.json").path
+    let remote = remoteStore + "/fixtures/big.json"
     var n = Loop.NewOptions(hypothesis: "h"); n.bench = try bench("cand", ["CPU": "8"]); n.fixture = "file:" + local; n.screen = false
     XCTAssertThrowsError(try loop.new(n)) { e in
       XCTAssertEqual((e as? PLError)?.code, 1)
@@ -368,6 +372,142 @@ final class RunnerTests: FakeBenchCase {
     XCTAssertEqual(RunnerSpec("vm:tart/seq"), .vm(tool: "tart", name: "seq"))
     XCTAssertEqual((try? Runners.make("vm:tart/seq", store: store))?.name, "vm:tart/seq")   // connects (and boots) on first use
     XCTAssertThrowsError(try Runners.make("vm:parallels/seq", store: store)) { XCTAssertTrue("\($0)".contains("only Tart VMs")) }
+  }
+
+  /// Each store has its own folder there (`<app>-<id>`, the id kept in the store), so two sessions' run and experiment
+  /// ids never meet in one folder; each perfloop process has its own ssh master, so one session ending (`-O exit`)
+  /// never cuts another's reps.
+  func testEachStoreHasItsOwnFolderThereAndItsOwnConnection() throws {
+    let r = try sshRunner()
+    _ = try r.identity()
+    XCTAssertEqual(r.remoteRoot, remoteStore)
+    XCTAssertTrue(r.sshOptions.contains { $0.hasPrefix("ControlPath=") && $0.hasSuffix("/plssh-\(ProcessInfo.processInfo.processIdentifier)-%C") }, "\(r.sshOptions)")
+    XCTAssertLessThan(r.controlPath.count - 2 + 40 + 17, 104, "a unix socket path fits")
+    // Another store of the same app (another session's PERFLOOP_HOME): another folder there, an id of its own, kept.
+    let other = Store(root: tmp.appendingPathComponent("other-home/fake-app"))
+    let r2 = try XCTUnwrap(try Runners.make("ssh://mar@fake-mini", store: other) as? SSHRunner)
+    r2.ssh = r.ssh; r2.rsync = r.rsync
+    _ = try r2.identity()
+    let id = try String(contentsOf: other.root.appendingPathComponent(".runner-id"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+    XCTAssertEqual(id.count, 8)
+    XCTAssertNotEqual(id, "0a1b2c3d")
+    XCTAssertEqual(r2.remoteRoot, remoteHome.appendingPathComponent(".perfloop/fake-app-\(id)").path)
+    let r3 = try XCTUnwrap(try Runners.make("ssh://mar@fake-mini", store: other) as? SSHRunner)
+    r3.ssh = r.ssh; _ = try r3.identity()
+    XCTAssertEqual(r3.remoteRoot, r2.remoteRoot, "the same store, the same folder: its builds there are used again")
+    // A store directory named in the URL is used as given.
+    let r4 = try sshRunner("ssh://mar@fake-mini/~/pl-stores/mine"); _ = try r4.identity()
+    XCTAssertEqual(r4.remoteRoot, remoteHome.path + "/pl-stores/mine")
+    // A measurement's folder there is emptied once fetched, as an experiment's is.
+    try baseline()
+    loop.runner = r
+    _ = try loop.runScenario(Loop.MeasureOptions(target: "champion"))
+    let left = FileManager.default.enumerator(atPath: remoteStore + "/runs")?.allObjects.compactMap { $0 as? String }.filter { $0.hasSuffix(".json") } ?? []
+    XCTAssertEqual(left, [])
+    XCTAssertTrue(FileManager.default.fileExists(atPath: remoteStore + "/.perfloop-runner"), "marked as a runner's store")
+  }
+
+  /// The connection drops during a rep: the rep runs on in the GUI session there, and the runner reconnects, waits for
+  /// it and collects its result instead of losing it.
+  func testARepWhoseConnectionDropsIsCollected() throws {
+    try baseline(["SLEEP": "1"])
+    let r = try sshRunner(); r.collectPoll = 0.1
+    var waits: [String] = []
+    r.onWait = { waits.append($0) }
+    loop.runner = r
+    let drop = tmp.appendingPathComponent("drop")
+    FileManager.default.createFile(atPath: drop.path, contents: Data())
+    setenv("FAKE_SSH_DROP", drop.path, 1)
+    let m = try loop.runScenario(Loop.MeasureOptions(target: "champion"))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: drop.path), "it dropped")
+    XCTAssertTrue(waits.contains { $0.contains("dropped during the rep (ssh exit 255); the rep goes on there: reconnecting to collect it") }, "\(waits)")
+    XCTAssertEqual(m.reps.count, 3)
+    XCTAssertTrue(m.reps.allSatisfy { $0.failure == nil && $0.redone == nil }, "\(m.reps.map(\.failure))")
+    XCTAssertEqual(m.summary.trusted, 3, "the dropped rep's result counts as any other's")
+    XCTAssertEqual(adapterCalls("run").count, 3, "nothing was run twice")
+  }
+
+  /// A rep whose connection dropped and that ended there without a status is the harness error it always was.
+  func testACollectedRepThatEndedWithoutAStatusIsAnError() throws {
+    let r = try sshRunner(); r.collectPoll = 0.1
+    _ = try r.identity()
+    let ctl = remoteStore + "/runs/m0001/.perfloop-run"
+    try FileManager.default.createDirectory(atPath: ctl, withIntermediateDirectories: true)
+    try "999999".write(toFile: ctl + "/pid", atomically: true, encoding: .utf8)
+    XCTAssertThrowsError(try r.collect(ctl, token: "t0k3n", machine: nil)) { XCTAssertTrue("\($0)".contains("dropped during the rep (ssh exit 255), and the rep there ended without a status; it is redone on resume"), "\($0)") }
+    try "0 an-earlier-rep".write(toFile: ctl + "/status", atomically: true, encoding: .utf8)
+    XCTAssertThrowsError(try r.collect(ctl, token: "t0k3n", machine: nil), "an earlier rep's status isn't this one's")
+    try "3 t0k3n".write(toFile: ctl + "/status", atomically: true, encoding: .utf8)
+    try "{\"a\": \"\(remoteStore)/runs/m0001/r1.json\"}".write(toFile: ctl + "/out", atomically: true, encoding: .utf8)
+    let o = try r.collect(ctl, token: "t0k3n", machine: nil)
+    XCTAssertEqual(o.status, 3)
+    XCTAssertEqual(o.json?["a"]?.string, store.root.path + "/runs/m0001/r1.json", "paths come back as the store's")
+  }
+
+  /// `runner clean` removes this store's folder only; the launcher stays while another store there or a running rep
+  /// uses it; `--all` removes the other runner stores too, never one a rep is running in, never a store of perfloop run
+  /// on that Mac itself.
+  func testRunnerCleanRemovesOnlyThisStoresAndNeverWhatARepUses() throws {
+    try baseline()
+    loop.runner = try sshRunner()
+    _ = try loop.runScenario(Loop.MeasureOptions(target: "champion"))
+    let base = remoteHome.appendingPathComponent(".perfloop").path, fm = FileManager.default
+    let launcher = base + "/.runner/PerfLoopLauncher.app"
+    XCTAssertTrue(fm.fileExists(atPath: launcher))
+    // Another session's store with a rep running in it (this test's pid is alive), an older perfloop's, and one of a
+    // perfloop run on that Mac itself.
+    for (d, f) in [("fake-app-deadbeef", ".perfloop-runner"), ("fake-app", "builds/x/build.json"), ("mine", "ledger.jsonl"), ("fake-app-0ld5e55", ".perfloop-runner")] {
+      try fm.createDirectory(at: URL(fileURLWithPath: base + "/\(d)/\(f)").deletingLastPathComponent(), withIntermediateDirectories: true)
+      fm.createFile(atPath: base + "/\(d)/\(f)", contents: Data("x".utf8))
+    }
+    try fm.createDirectory(atPath: base + "/mine/builds", withIntermediateDirectories: true)
+    // Written an hour ago, all but one: a store used in the last 10 minutes may be an older perfloop's session that
+    // leaves no in-use file.
+    func age(_ d: String) throws {
+      let old = Date().addingTimeInterval(-3600)
+      for rel in (fm.enumerator(atPath: base + "/" + d)?.allObjects as? [String] ?? []) + [""] {
+        try fm.setAttributes([.modificationDate: old], ofItemAtPath: base + "/" + d + (rel.isEmpty ? "" : "/" + rel))
+      }
+    }
+    for d in ["fake-app-deadbeef", "fake-app", "mine"] { try age(d) }
+    try (base + "/fake-app-deadbeef\n").write(toFile: base + "/.runner/in-use/rep.\(ProcessInfo.processInfo.processIdentifier)", atomically: true, encoding: .utf8)
+    try (base + "/fake-app-gone\n").write(toFile: base + "/.runner/in-use/rep.999999", atomically: true, encoding: .utf8)
+
+    let out = try sshRunner().clean()
+    XCTAssertTrue(out.hasPrefix("ssh://fake-mini: removed \(remoteStore); left 3 other store(s) there: "), out)
+    XCTAssertTrue(out.contains("fake-app-deadbeef (0 MB, a rep running in it)"), out)
+    XCTAssertTrue(out.contains("fake-app (0 MB, an older perfloop's)"), out)
+    XCTAssertTrue(out.contains("perfloop runner clean ssh://fake-mini --all"), out)
+    XCTAssertTrue(out.contains("kept the launcher (other stores there use it)"), out)
+    XCTAssertFalse(fm.fileExists(atPath: remoteStore))
+    for d in ["fake-app-deadbeef", "fake-app", "mine"] { XCTAssertTrue(fm.fileExists(atPath: base + "/" + d), d) }
+    XCTAssertTrue(fm.fileExists(atPath: launcher))
+    XCTAssertFalse(fm.fileExists(atPath: base + "/.runner/in-use/rep.999999"), "a dead rep's file is dropped")
+
+    let all = try sshRunner().clean(all: true)
+    XCTAssertTrue(all.contains("nothing of this store's there"), all)
+    XCTAssertTrue(all.contains("left 2 store(s) in use (a rep running in it, or used in the last 10 minutes): "), all)
+    XCTAssertTrue(all.contains("fake-app-0ld5e55 (0 MB, used in the last 10 minutes)"), all)
+    XCTAssertTrue(all.contains("fake-app-deadbeef (0 MB, a rep running in it)"), all)
+    XCTAssertTrue(all.contains("kept the launcher"), all)
+    XCTAssertFalse(fm.fileExists(atPath: base + "/fake-app"), "the older perfloop's store")
+    XCTAssertTrue(fm.fileExists(atPath: base + "/fake-app-deadbeef"), "a rep runs in it")
+    XCTAssertTrue(fm.fileExists(atPath: base + "/mine/ledger.jsonl"), "never a store of perfloop run there")
+
+    // The rep ended, and ten minutes went by: --all takes the last runner stores and the launcher.
+    try fm.removeItem(atPath: base + "/.runner/in-use/rep.\(ProcessInfo.processInfo.processIdentifier)")
+    try age("fake-app-0ld5e55")
+    let last = try sshRunner().clean(all: true)
+    XCTAssertTrue(last.contains("removed the launcher"), last)
+    XCTAssertFalse(fm.fileExists(atPath: base + "/fake-app-deadbeef"))
+    XCTAssertFalse(fm.fileExists(atPath: base + "/.runner"))
+    XCTAssertTrue(fm.fileExists(atPath: base + "/mine/ledger.jsonl"))
+
+    // A rep after another session's clean removed the launcher makes it again.
+    loop.runner = try sshRunner()
+    _ = try loop.runScenario(Loop.MeasureOptions(target: "champion"))
+    XCTAssertTrue(fm.fileExists(atPath: launcher))
+    XCTAssertEqual(try fm.contentsOfDirectory(atPath: base + "/.runner/in-use"), [], "each rep's in-use files gone with it")
   }
 
   // MARK: mixing runners

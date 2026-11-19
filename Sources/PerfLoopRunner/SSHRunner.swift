@@ -4,8 +4,16 @@ import PerfLoopKit
 /// `ssh://[user@]host[:port][/store-dir]`: a spare Mac (SPEC §4.2, §7.2: the Mac mini). The runner copies the
 /// content-addressed build (the binary, its resource bundles, `build.json`) into a store directory there with rsync, runs
 /// the adapter there, and brings its result and artifacts back. The remote Mac needs nothing but a login: no Swift
-/// toolchain, no perfloop. The store directory there is `~/.perfloop/<app>` unless the URL names one; the runner touches
-/// nothing outside it (and `~/.perfloop/.runner`, where its launcher app lives).
+/// toolchain, no perfloop. The store directory there is `~/.perfloop/<app>-<store id>` unless the URL names one: each
+/// store (this Mac's `PERFLOOP_HOME/<app>`, by the random id in its `.runner-id`) has its own there, so two sessions'
+/// run and experiment ids never meet in one folder. The runner touches nothing outside it but `~/.perfloop/.runner`,
+/// shared by every store: the launcher app, the lock its shell steps take, and `in-use/`, one file per running rep (its
+/// pid and store directory) that `runner clean` reads so it never removes a store or the launcher a rep is using.
+///
+/// The connection: one ssh master per perfloop process (ControlPath with its pid), never shared with another session's
+/// perfloop, so one session ending (`ssh -O exit`) never cuts another's reps. With `launch = .gui` a rep runs in the GUI
+/// session, not under ssh: when the connection drops anyway, the rep goes on there, and the runner reconnects, waits
+/// for its status and collects it (`collect`) instead of losing it.
 ///
 /// Windows over SSH: a process started by sshd belongs to a background login session, not the console user's GUI
 /// session (Apple TN2083); whether it may still talk to the WindowServer depends on the macOS version (on the mini's
@@ -68,8 +76,9 @@ public final class SSHRunner: Runner {
     self.spec = spec; self.user = user; self.host = host; self.port = port; rootOverride = root; self.store = store
     // A unix socket path is at most 104 bytes: %C is 40 hex characters, and ssh adds a 17-character suffix while it
     // binds. macOS's per-user temporary directory is already ~49.
-    let t = FileManager.default.temporaryDirectory.path
-    controlPath = (t.count + 64 < 104 ? t : "/tmp") + "/plssh-%C"
+    // One master per perfloop process: another session's `ssh -O exit` on a shared one cut this one's reps (exit 255).
+    let t = FileManager.default.temporaryDirectory.path, name = "/plssh-\(ProcessInfo.processInfo.processIdentifier)-%C"
+    controlPath = (t.count + name.count + 55 < 104 ? t : "/tmp") + name
   }
 
   public var name: String { nameOverride ?? spec.name }
@@ -208,7 +217,8 @@ public final class SSHRunner: Runner {
     func v(_ k: String) -> String? { d[k].flatMap { $0.isEmpty ? nil : $0 } }
     let i = Info(home: d["home"] ?? "", model: v("model"), os: v("os"), host: v("host"), user: v("user"), console: v("console"), arch: v("arch"))
     guard !i.home.isEmpty else { throw PLError.harness("\(name): no home directory on \(host)") }
-    let root = rootOverride.map { $0.hasPrefix("/~/") ? i.home + $0.dropFirst(2) : $0 } ?? "\(i.home)/.perfloop/\(store.root.lastPathComponent)"
+    let id = try storeID()
+    let root = rootOverride.map { $0.hasPrefix("/~/") ? i.home + $0.dropFirst(2) : $0 } ?? "\(i.home)/.perfloop/\(store.root.lastPathComponent)-\(id)"
     guard root.hasPrefix("/"), root.allSatisfy({ $0.isLetter || $0.isNumber || "/-._+,".contains($0) }) else {
       throw PLError.usage("\(name): the store directory there must be a plain absolute path (letters, digits, / - . _ + ,): \(root)")
     }
@@ -222,6 +232,20 @@ public final class SSHRunner: Runner {
     return i
   }
 
+  /// This store's id on runners: 8 random hex characters kept in the store's `.runner-id`, made the first time. Not
+  /// derived from the path or the host: two Macs' stores at the same path, or one Mac renamed, stay apart and stay put.
+  func storeID() throws -> String {
+    let f = store.root.appendingPathComponent(".runner-id")
+    if let t = try? String(contentsOf: f, encoding: .utf8) {
+      let id = t.trimmingCharacters(in: .whitespacesAndNewlines)
+      if id.count == 8, id.allSatisfy(\.isHexDigit) { return id }
+    }
+    let id = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
+    try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+    try (id + "\n").write(to: f, atomically: true, encoding: .utf8)
+    return id
+  }
+
   static func localArch() -> String? { (try? Adapter.spawn("/usr/bin/uname", ["-m"], quiet: true))?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) }
   static func sha(_ path: String) -> String { "(shasum -a 256 \(q(path)) 2>/dev/null || sha256sum \(q(path))) | cut -d' ' -f1" }
 
@@ -231,7 +255,10 @@ public final class SSHRunner: Runner {
     if let p = prepared[key] { return p }
     let rdir = "\(remoteRoot)/builds/\(key)", exe = build.build.executable ?? "bench", rexe = "\(rdir)/\(exe)"
     let want = (build.build.hash ?? "").replacingOccurrences(of: "sha256:", with: "")
-    let have = try remote("if [ -f \(Self.q(rdir))/build.json ] && [ -f \(Self.q(rexe)) ]; then \(Self.sha(rexe)); fi").out.trimmingCharacters(in: .whitespacesAndNewlines)
+    // `.perfloop-runner` marks the folder as a runner's store (`runner clean --all` removes only those).
+    let mark = "\(remoteRoot)/.perfloop-runner"
+    let have = try remote("mkdir -p \(Self.q(remoteRoot)) && { [ -f \(Self.q(mark)) ] || echo \(Self.q(storeIDLine)) > \(Self.q(mark)); } || exit 2\n"
+                          + "if [ -f \(Self.q(rdir))/build.json ] && [ -f \(Self.q(rexe)) ]; then \(Self.sha(rexe)); fi").out.trimmingCharacters(in: .whitespacesAndNewlines)
     if have != want || want.isEmpty {
       log("\(name): copying build \(Build.short(build.build.hash ?? key)) to \(host)")
       let incoming = "\(remoteRoot)/builds/.incoming-\(UUID().uuidString)"
@@ -240,19 +267,34 @@ public final class SSHRunner: Runner {
       let got = try remote("rm -rf \(Self.q(rdir)) && mv \(Self.q(incoming)) \(Self.q(rdir)) && \(Self.sha(rexe))").out.trimmingCharacters(in: .whitespacesAndNewlines)
       guard got == want else { throw PLError.harness("\(name): the copy of \(exe) on \(host) hashes to \(got.prefix(12)), the store's to \(want.prefix(12))") }
     }
-    if launch == .gui { try ensureLauncher() }
     prepared[key] = rexe
     return rexe
   }
 
-  var launcherApp: String { "\(info?.home ?? "~")/.perfloop/.runner/PerfLoopLauncher.app" }
+  /// What `.perfloop-runner` in the store there says: whose store it is.
+  var storeIDLine: String { "perfloop runner store \((try? storeID()) ?? "?") of \(MachineModel.shortHost()):\(store.root.path)" }
 
-  /// The launcher: an app bundle whose executable is `exec /bin/sh "$1"`, so `open -W -n APP --args SCRIPT` runs the
-  /// script in the console user's GUI session and returns when it ends. Background-only: no Dock icon, no menu. Its
-  /// architecture is said outright (arm64 first): LaunchServices can't tell a script's, and on a Mac without Rosetta
-  /// (a fresh VM) it refused to start it as an Intel app (error -10669).
-  func ensureLauncher() throws {
-    let app = launcherApp
+  /// `~/.perfloop/.runner` there: shared by every store on that Mac.
+  var runnerDir: String { "\(info?.home ?? "~")/.perfloop/.runner" }
+  var launcherApp: String { "\(runnerDir)/PerfLoopLauncher.app" }
+
+  /// Shell: `R`, the runner's shared folder, and `lock`/`unlock` around a change to it (the launcher, `in-use/`), so a
+  /// rep starting and another session's `runner clean` never interleave. A `mkdir` lock: its holders take
+  /// milliseconds, so one still held after 10 s of waiting is a dead holder's and is broken.
+  var lockShell: String {
+    """
+    R=\(Self.q(runnerDir))
+    lock() { i=0; while ! mkdir "$R/lock" 2>/dev/null; do mkdir -p "$R/in-use"; i=$((i+1)); if [ $i -ge 100 ]; then rmdir "$R/lock" 2>/dev/null; i=0; fi; sleep 0.1; done; mkdir -p "$R/in-use"; }
+    unlock() { rmdir "$R/lock" 2>/dev/null; true; }
+    """
+  }
+
+  /// Shell, inside `lock`: the launcher, made when it isn't there (another session's `runner clean` may have removed it
+  /// since this one's last rep): an app bundle whose executable is `exec /bin/sh "$1"`, so `open -W -n APP --args
+  /// SCRIPT` runs the script in the console user's GUI session and returns when it ends. Background-only: no Dock icon,
+  /// no menu. Its architecture is said outright (arm64 first): LaunchServices can't tell a script's, and on a Mac
+  /// without Rosetta (a fresh VM) it refused to start it as an Intel app (error -10669).
+  var launcherShell: String {
     let plist = """
     <?xml version="1.0" encoding="UTF-8"?>
     <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -266,10 +308,11 @@ public final class SSHRunner: Runner {
     <key>LSArchitecturePriority</key><array><string>arm64</string><string>x86_64</string></array>
     </dict></plist>
     """
-    try remote("""
-    a=\(Self.q(app)); if grep -q LSArchitecturePriority "$a/Contents/Info.plist" 2>/dev/null && [ -x "$a/Contents/MacOS/launch" ]; then exit 0; fi
-    mkdir -p "$a/Contents/MacOS" && cat > "$a/Contents/Info.plist" && printf '#!/bin/sh\\nexec /bin/sh "$1"\\n' > "$a/Contents/MacOS/launch" && chmod 755 "$a/Contents/MacOS/launch"
-    """, stdin: plist)
+    return """
+    a=\(Self.q(launcherApp)); if ! grep -q LSArchitecturePriority "$a/Contents/Info.plist" 2>/dev/null || [ ! -x "$a/Contents/MacOS/launch" ]; then
+    mkdir -p "$a/Contents/MacOS" && printf '%s\\n' \(Self.q(plist)) > "$a/Contents/Info.plist" && printf '#!/bin/sh\\nexec /bin/sh "$1"\\n' > "$a/Contents/MacOS/launch" && chmod 755 "$a/Contents/MacOS/launch" || { unlock; exit 2; }
+    fi
+    """
   }
 
   public func run(_ exe: String, _ args: [String], env: [String: String], workDir: URL) throws -> Adapter.Output {
@@ -292,32 +335,46 @@ public final class SSHRunner: Runner {
     let exports = renv.sorted { $0.key < $1.key }.map { "export \($0.key)=\(Self.q($0.value))" }.joined(separator: "\n")
     let cmdline = ([rexe] + rargs).map(Self.q).joined(separator: " ")
     let child: Child
+    // The rep's own status line carries it: a collect after a drop never takes an earlier rep's status for this one's.
+    let token = String(UUID().uuidString.prefix(8))
     switch launch {
     case .direct:
-      let script = "mkdir -p \(Self.q(ctl)) && cd \(Self.q(rwork)) && echo $$ > \(Self.q(ctl + "/pid")) || exit 2\n\(exports)\nexec \(cmdline)"
+      // The adapter keeps this shell's pid (exec): its in-use file says the rep runs while it does.
+      let script = "mkdir -p \(Self.q(ctl)) && cd \(Self.q(rwork)) && echo $$ > \(Self.q(ctl + "/pid")) || exit 2\n\(lockShell)\nlock; echo \(Self.q(remoteRoot)) > \"$R/in-use/side.$$\"; unlock\n\(exports)\nexec \(cmdline)"
       child = try Child(ssh, sshOptions + [target, command(script)])
     case .gui:
       // The rep's script, run by the launcher in the GUI session; its stdout, stderr and status go to files the ssh
       // side reads (stderr live, through tail).
       let caffeinate = "if [ -x /usr/bin/caffeinate ]; then set -- /usr/bin/caffeinate -di; else set --; fi"
+      // Its in-use file lives as long as it does, whatever becomes of the ssh side.
+      let inUse = Self.q(runnerDir + "/in-use") + "/rep.$$"
       let rep = """
       #!/bin/sh
       echo $$ > \(Self.q(ctl + "/pid"))
-      cd \(Self.q(rwork)) || { echo 2 > \(Self.q(ctl + "/status")); exit 2; }
+      mkdir -p \(Self.q(runnerDir + "/in-use")) && echo \(Self.q(remoteRoot)) > \(inUse)
+      cd \(Self.q(rwork)) || { echo 2 > \(Self.q(ctl + "/status")); rm -f \(inUse); exit 2; }
       \(exports)
       \(caffeinate)
       "$@" \(cmdline) > \(Self.q(ctl + "/out")) 2>> \(Self.q(ctl + "/err"))
-      echo $? > \(Self.q(ctl + "/status.tmp")) && mv \(Self.q(ctl + "/status.tmp")) \(Self.q(ctl + "/status"))
+      echo "$? \(token)" > \(Self.q(ctl + "/status.tmp")) && mv \(Self.q(ctl + "/status.tmp")) \(Self.q(ctl + "/status"))
+      rm -f \(inUse)
       """
       let wakeCmd = wake ? "[ -x /usr/bin/caffeinate ] && /usr/bin/caffeinate -u -t 2 >/dev/null 2>&1 &\n" : ""
+      // Under the lock: the launcher made if another session's `runner clean` removed it, and this side's in-use file
+      // (until the rep's own is written) before anyone could remove either.
       let side = """
-      c=\(Self.q(ctl)); mkdir -p "$c" && rm -f "$c/status" "$c/out" && : > "$c/err" && cat > "$c/rep.sh" || exit 2
+      c=\(Self.q(ctl)); mkdir -p "$c" && rm -f "$c/status" "$c/out" "$c/pid" && : > "$c/err" && cat > "$c/rep.sh" || exit 2
+      \(lockShell)
+      lock
+      \(launcherShell)
+      echo \(Self.q(remoteRoot)) > "$R/in-use/side.$$"; trap 'rm -f "$R/in-use/side.$$"' EXIT
+      unlock
       \(wakeCmd)tail -n +1 -f "$c/err" >&2 & t=$!
       o=$(open -W -n -g \(Self.q(launcherApp)) --args "$c/rep.sh" 2>&1); s=$?
       i=0; while [ ! -f "$c/status" ] && [ $i -lt 20 ]; do sleep 0.5; i=$((i+1)); done
       sleep 0.3; kill -PIPE $t 2>/dev/null
       if [ ! -f "$c/status" ]; then echo "perfloop-runner: the launcher didn't run the rep (open exited $s: $o): is \(info?.user ?? "the user") logged in at the console?" >&2; exit 2; fi
-      cat "$c/out"; exit $(cat "$c/status")
+      cat "$c/out"; exit $(cut -d' ' -f1 "$c/status")
       """
       let inp = Pipe()
       child = try Child(ssh, sshOptions + [target, command(side)], stdin: inp.fileHandleForReading)
@@ -340,8 +397,67 @@ public final class SSHRunner: Runner {
       }
     }
     let o = child.finish()
-    if o.status == 255 { throw PLError.harness("\(name): the connection to \(host) dropped during the rep (ssh exit 255); it is redone on resume") }
+    if o.status == 255 {
+      // In the GUI session the rep doesn't depend on the connection: collect it once it ends there.
+      if launch == .gui { return try collect(ctl, token: token, machine: machine) }
+      throw PLError.harness("\(name): the connection to \(host) dropped during the rep (ssh exit 255); it is redone on resume")
+    }
     return Adapter.Output(status: o.status, stdout: unmap(o.stdout), machine: machine)
+  }
+
+  /// Seconds between tries while collecting a rep after the connection dropped, how long the rep may still run there,
+  /// and how long the runner keeps trying to reconnect.
+  public var collectPoll = 5.0
+  public var collectTimeout = 1800.0
+  public var reconnectTimeout = 600.0
+  var startGrace = 20.0
+
+  /// The rep whose connection dropped (ssh exit 255) runs on in the GUI session there (the launcher is LaunchServices',
+  /// not sshd's): reconnects, waits for its status file, and returns its output as the rep's, as if nothing had dropped.
+  /// A rep that ended there without a status, one still running after `collectTimeout` (killed), or a Mac unreachable
+  /// for `reconnectTimeout` is the harness error it always was: the rep is redone.
+  func collect(_ ctl: String, token: String, machine: MachineState?) throws -> Adapter.Output {
+    let t = "\(name): the connection to \(host) dropped during the rep (ssh exit 255); the rep goes on there: reconnecting to collect it"
+    log(t); onWait(t)
+    let start = Date()
+    var unreachable: (since: Date, why: String)?
+    let script = """
+    c=\(Self.q(ctl)); p=$(cat "$c/pid" 2>/dev/null); alive=0; if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then alive=1; fi
+    if grep -q \(Self.q(" " + token)) "$c/status" 2>/dev/null; then echo "perfloop-collect=done $(cut -d' ' -f1 "$c/status")"; cat "$c/out"; elif [ $alive = 1 ]; then echo perfloop-collect=running
+    elif [ -z "$p" ]; then echo perfloop-collect=starting; else echo perfloop-collect=gone; fi
+    """
+    while true {
+      do {
+        let r = try remote(script, check: false)
+        unreachable = nil
+        let first = r.out.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        let head = first.first.map(String.init) ?? ""
+        if head.hasPrefix("perfloop-collect=done ") {
+          let status = Int32(head.dropFirst("perfloop-collect=done ".count).trimmingCharacters(in: .whitespaces)) ?? 2
+          log("\(name): collected the rep (exit \(status)) after the connection dropped")
+          return Adapter.Output(status: status, stdout: unmap(first.count > 1 ? String(first[1]) : ""), machine: machine)
+        }
+        // No pid yet: the launcher may still be starting the rep (the ssh side gives it 10 s too).
+        let starting = head == "perfloop-collect=starting" && Date().timeIntervalSince(start) < startGrace
+        if head != "perfloop-collect=running" && !starting {
+          let why = head == "perfloop-collect=starting" ? "the rep never started there" : head == "perfloop-collect=gone" ? "the rep there ended without a status"
+            : "no word of the rep there (\(head.isEmpty ? "no answer" : head))"
+          throw PLError.harness("\(name): the connection to \(host) dropped during the rep (ssh exit 255), and \(why); it is redone on resume")
+        }
+        if Date().timeIntervalSince(start) > collectTimeout {
+          try? remoteKill(ctl)
+          throw PLError.harness("\(name): the connection to \(host) dropped during the rep, and the rep was still running there \(Int(collectTimeout)) s later: killed; it is redone on resume")
+        }
+      } catch let e as PLError where e.code == 2 && !"\(e)".contains("dropped during the rep") {
+        // Still unreachable: keep trying for a while (a Wi-Fi blip, a sleeping router), then give up as before.
+        let u = unreachable ?? (Date(), "\(e)")
+        unreachable = u
+        if Date().timeIntervalSince(u.since) > reconnectTimeout {
+          throw PLError.harness("\(name): the connection to \(host) dropped during the rep (ssh exit 255) and couldn't be made again for \(Int(reconnectTimeout)) s (\(u.why)); it is redone on resume")
+        }
+      }
+      Thread.sleep(forTimeInterval: collectPoll)
+    }
   }
 
   /// The remote Mac's load, for the quiet gate: the share of its cores busy over a second (`iostat`: 100 − idle) and
@@ -444,7 +560,7 @@ public final class SSHRunner: Runner {
       try fm.moveItem(at: src, to: dst)
     }
     guard rwork.hasPrefix(remoteRoot + "/") else { throw PLError.harness("\(name): \(local.path) isn't under the store \(localRoot)") }
-    if rwork.hasPrefix(remoteRoot + "/exp/") { try remote("rm -rf \(Self.q(rwork))", check: false) }
+    if rwork.hasPrefix(remoteRoot + "/exp/") || rwork.hasPrefix(remoteRoot + "/runs/") { try remote("rm -rf \(Self.q(rwork))", check: false) }
   }
 
   public func close() {
@@ -499,11 +615,75 @@ public final class SSHRunner: Runner {
     return s
   }
 
-  /// `runner clean`: removes the store directory there (builds and any results left), and the launcher.
-  public func clean() throws -> String {
-    try connect()
-    try remote("rm -rf \(Self.q(remoteRoot)) \(Self.q(launcherApp)); rmdir \(Self.q(info!.home + "/.perfloop/.runner")) 2>/dev/null; true", check: false)
-    let r = try remote("du -sk \(Self.q(info!.home + "/.perfloop")) 2>/dev/null | cut -f1", check: false)
-    return "\(name): removed \(remoteRoot); ~/.perfloop there is \(r.out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gone" : r.out.trimmingCharacters(in: .whitespacesAndNewlines) + " KB")"
+  /// `runner clean`: removes this store's directory there (builds and any results left), never one a rep is running in
+  /// (another session on this store), and the launcher once no store of a runner's is left there and no rep runs.
+  /// `all`: every runner store there too (`.perfloop-runner` in it, or an older perfloop's `<app>` folder with builds
+  /// and no ledger), still never one a rep is running in, nor one written to in the last 10 minutes (an older
+  /// perfloop's reps leave no in-use file); a folder with a `ledger.jsonl` is a store of perfloop run on that Mac itself
+  /// and is never touched. All under the runner's lock, so no rep starts halfway through.
+  public func clean(all: Bool = false) throws -> String {
+    let i = try connect()
+    let base = i.home + "/.perfloop"
+    let r = try remote("""
+    \(lockShell)
+    P=\(Self.q(base)); me=\(Self.q(remoteRoot)); all=\(all ? 1 : 0); live=""; n=0
+    lock
+    for m in "$R"/in-use/*; do
+      [ -f "$m" ] || continue; p=${m##*.}
+      if kill -0 "$p" 2>/dev/null; then live="$live$(cat "$m")
+    "; else rm -f "$m"; fi
+    done
+    busy() { printf '%s' "$live" | grep -qxF "$1"; }
+    gone() { if busy "$1"; then echo "busy=$1"; else rm -rf "$1" && echo "removed=$1"; fi; }
+    recent() { [ -n "$(find "$1" -mmin -10 2>/dev/null | head -n 1)" ]; }
+    kind() { if [ -f "$1/.perfloop-runner" ]; then echo runner; elif [ -f "$1/ledger.jsonl" ] || [ ! -d "$1/builds" ]; then echo own; else echo older; fi; }
+    if [ -d "$me" ]; then gone "$me"; else echo "absent=$me"; fi
+    for d in "$P"/*; do
+      [ -d "$d" ] && [ "$d" != "$me" ] || continue
+      k=$(kind "$d"); [ $k = own ] && continue
+      u=0; if busy "$d"; then u=1; elif recent "$d"; then u=2; fi
+      [ $all = 1 ] && [ $u = 0 ] && rm -rf "$d"
+      if [ -d "$d" ]; then n=$((n+1)); echo "left=$k $u $(du -sk "$d" 2>/dev/null | cut -f1) $d"; fi
+    done
+    if [ -z "$live" ] && [ $n = 0 ]; then rm -rf "$R"; rmdir "$P" 2>/dev/null; echo launcher=removed; else echo launcher=kept; unlock; fi
+    echo "size=$(du -sk "$P" 2>/dev/null | cut -f1)"
+    """, check: false)
+    return Self.cleanText(r.out, name: name, all: all)
+  }
+
+  /// `runner clean`'s report from what its script printed (`removed=`, `busy=`, `absent=`, `left=KIND INUSE KB DIR`,
+  /// `launcher=`, `size=`).
+  static func cleanText(_ out: String, name: String, all: Bool) -> String {
+    var removed: [String] = [], busy: [String] = [], absent: String?, left: [(kind: String, use: String, kb: Int, dir: String)] = [], launcher = "kept", size = ""
+    for l in out.split(separator: "\n").map(String.init) {
+      let kv = l.split(separator: "=", maxSplits: 1).map(String.init)
+      guard kv.count == 2 else { continue }
+      switch kv[0] {
+      case "removed": removed.append(kv[1])
+      case "busy": busy.append(kv[1])
+      case "absent": absent = kv[1]
+      case "launcher": launcher = kv[1]
+      case "size": size = kv[1].trimmingCharacters(in: .whitespaces)
+      case "left":
+        let f = kv[1].split(separator: " ", maxSplits: 3).map(String.init)
+        if f.count == 4 { left.append((f[0], f[1], Int(f[2]) ?? 0, f[3])) }
+      default: break
+      }
+    }
+    var parts: [String] = []
+    if !removed.isEmpty { parts.append("removed \(removed.joined(separator: ", "))") }
+    if let a = absent, removed.isEmpty, busy.isEmpty { parts.append("nothing of this store's there (no \(a))") }
+    for b in busy { parts.append("kept \(b): a rep is running in it (another perfloop session on this store); clean again once it ends") }
+    if !left.isEmpty {
+      let list = left.map { l -> String in
+        let notes = [l.use == "1" ? "a rep running in it" : l.use == "2" ? "used in the last 10 minutes" : nil, l.kind == "older" ? "an older perfloop's" : nil].compactMap { $0 }
+        return "\(URL(fileURLWithPath: l.dir).lastPathComponent) (\(([String(l.kb / 1024) + " MB"] + notes).joined(separator: ", ")))"
+      }.joined(separator: ", ")
+      parts.append(all ? "left \(left.count) store(s) in use (a rep running in it, or used in the last 10 minutes): \(list); clean again once they are done"
+                       : "left \(left.count) other store(s) there: \(list) (other sessions' or other stores'; `perfloop runner clean \(name) --all` removes them too, except one in use)")
+    }
+    parts.append(launcher == "removed" ? "removed the launcher (no store or rep left to use it)" : "kept the launcher (\(left.isEmpty ? "a rep is running there" : "other stores there use it"))")
+    parts.append("~/.perfloop there is \(size.isEmpty ? "gone" : size + " KB")")
+    return "\(name): " + parts.joined(separator: "; ")
   }
 }

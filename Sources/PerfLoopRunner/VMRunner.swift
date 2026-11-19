@@ -164,7 +164,7 @@ public final class VMRunner: Runner {
     o.append("vm: \(vm) via \(tart)\(booted != nil ? " (booted by this check; stopped when it ends)" : " (was already running)"); its numbers screen and never decide a full")
     return o
   }
-  public func clean() throws -> String { try connect().clean() }
+  public func clean(all: Bool = false) throws -> String { try connect().clean(all: all) }
 
   /// Ends the connection; stops the VM if this runner booted it.
   public func close() {

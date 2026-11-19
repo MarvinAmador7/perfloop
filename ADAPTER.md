@@ -92,6 +92,16 @@ process each time) and interleaves champion and candidate itself. Exit 0 (pass),
 4 (regression) or 5 (untrusted) all carry numbers, but a rep that exits 5 never decides; anything else is a harness
 error and the pair is redone once.
 
+**The app must not quit before the result is out.** A bench that runs inside the app (`bench.attach()` from a SwiftUI
+`App`, or `host: .app`) lives under the app's own delegate, and a SwiftUI app with one `Window` scene quits when its
+last window closes, for instance `run.open`'s at the end of a rep. The process then exits 0 with nothing printed, and
+the runner can only say `the run exited 0 without a result` (it adds the likely cause). PerfLoopHost holds the app
+while `run` and `record-gesture` go: the delegate's `applicationShouldTerminateAfterLastWindowClosed:` answers false
+and `applicationShouldTerminate:` cancels until the result is written and the bench exits with its code, and a request
+it held off is said on stderr and in the result's `notes` (`the app asked to quit during the run (its last window
+closed, …)`): outside the bench, the app would have quit there. An adapter of its own does the same: keep its app from
+quitting until it has printed (and written `--out`) its result, then exit.
+
 The environment it runs with:
 
 | Variable | Meaning |

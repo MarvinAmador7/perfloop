@@ -119,5 +119,47 @@ import PerfLoopKit
     XCTAssertEqual(order, ["action", "after"])
     XCTAssertEqual(r.steps.map(\.name), ["burst 3 items", "sync"])
   }
+
+  /// A SwiftUI app with one Window scene quits when its last window closes (its delegate says so), e.g. `run.open`'s at
+  /// the end of a rep, and the process ended before the result was written. Held, the delegate's answers are refused
+  /// and remembered for the result; released, the app's own answers come back.
+  func testTheAppIsHeldFromQuittingUntilTheResultIsWritten() {
+    let app = NSApplication.shared
+    let before = app.delegate
+    defer { AppHold.end(); app.delegate = before }
+    let d = QuitsWithLastWindow()
+    app.delegate = d
+    var said: [String] = []
+    AppHold.begin { said.append($0) }
+    XCTAssertEqual(app.delegate?.applicationShouldTerminateAfterLastWindowClosed?(app), false, "held: the last window closing doesn't quit")
+    XCTAssertEqual(app.delegate?.applicationShouldTerminate?(app), .terminateCancel, "held: a terminate is cancelled (the delegate had no such method: added)")
+    XCTAssertTrue(app.delegate === d, "the app's own delegate, set again")
+    XCTAssertEqual(said, ["the app asked to quit during the run (its last window closed, and its delegate quits then): kept running until the result is written",
+                          "the app asked to quit during the run (NSApplication terminate): kept running until the result is written"])
+    XCTAssertTrue(AppHold.note?.hasPrefix("the app asked to quit during the run (its last window closed, and its delegate quits then; NSApplication terminate)") == true, AppHold.note ?? "")
+    _ = app.delegate?.applicationShouldTerminateAfterLastWindowClosed?(app)
+    XCTAssertEqual(said.count, 2, "said once each")
+    AppHold.end()
+    XCTAssertEqual(app.delegate?.applicationShouldTerminateAfterLastWindowClosed?(app), true, "released: the app's own answer")
+    XCTAssertEqual(app.delegate?.applicationShouldTerminate?(app), .terminateNow, "and AppKit's default where it has none")
+    // A delegate that stays up when its last window closes is asked and answered as it says: nothing to refuse.
+    let stays = StaysUp()
+    app.delegate = stays
+    AppHold.begin { said.append($0) }
+    XCTAssertEqual(app.delegate?.applicationShouldTerminateAfterLastWindowClosed?(app), false)
+    XCTAssertNil(AppHold.note)
+    // No delegate at all: the hold brings one.
+    app.delegate = nil
+    AppHold.begin { said.append($0) }
+    XCTAssertNotNil(app.delegate)
+    XCTAssertEqual(app.delegate?.applicationShouldTerminate?(app), .terminateCancel)
+  }
+}
+
+final class QuitsWithLastWindow: NSObject, NSApplicationDelegate {
+  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+}
+final class StaysUp: NSObject, NSApplicationDelegate {
+  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 #endif

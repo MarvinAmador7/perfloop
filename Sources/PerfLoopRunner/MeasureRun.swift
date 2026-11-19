@@ -252,7 +252,7 @@ extension Loop {
       }
       // Pass, budget failed, regression, untrusted: all carry numbers (ADAPTER.md §3).
       guard let v = o.json, [0, 3, 4, 5].contains(o.status) else {
-        var r = MeasureRep(index: i, result: nil, side: Side(objective: nil), failure: "the run exited \(o.status)\(o.json == nil ? " without a result" : "")")
+        var r = MeasureRep(index: i, result: nil, side: Side(objective: nil), failure: "the run \(o.exitText)")
         r.interruptions = n > 0 ? n : nil
         return r
       }

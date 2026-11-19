@@ -390,7 +390,7 @@ public final class Loop {
         let o = try Adapter(exe: entry.executable, runner: runner, workDir: dir).run(scenario: sc, fixture: fixture, params: sc == e.scenario ? params : [:], knobs: knobs, env: guardEnv(g, dir: pdir.appendingPathComponent(label)))
         if o.status == interruptedStatus { return interrupted() }
         status[label] = o.status; machines[label] = o.machine
-        if let v = o.json, ok.contains(o.status) { got[label] = v } else { failure = "\(label == "a" ? "champion" : "candidate") run exited \(o.status)"; break }
+        if let v = o.json, ok.contains(o.status) { got[label] = v } else { failure = "\(label == "a" ? "champion" : "candidate") run \(o.exitText)"; break }
       }
       try PLJSON.write(JSONValue.object(got), path: raw.path)
       var a = got["a"].flatMap { Readings.sides(run: $0, metric: metric).first }, b = got["b"].flatMap { Readings.sides(run: $0, metric: metric).first }
@@ -406,7 +406,7 @@ public final class Loop {
                                                       env: guardEnv(g, dir: pdir))
     if o.status == interruptedStatus { return interrupted() }
     let v = o.json ?? (try? PLJSON.read(JSONValue.self, path: raw.path))
-    guard let v, ok.contains(o.status) else { return Pair(index: i, order: order, result: store.rel(raw), a: Side(objective: nil), b: Side(objective: nil), failure: "ab exited \(o.status)") }
+    guard let v, ok.contains(o.status) else { return Pair(index: i, order: order, result: store.rel(raw), a: Side(objective: nil), b: Side(objective: nil), failure: v == nil ? "ab \(o.exitText)" : "ab exited \(o.status)") }
     if !FileManager.default.fileExists(atPath: raw.path) { try PLJSON.write(v, path: raw.path) }
     let cl = first ? "A" : "B", dl = first ? "B" : "A"
     var a = Readings.sides(ab: v, label: cl, metric: metric).first, b = Readings.sides(ab: v, label: dl, metric: metric).first

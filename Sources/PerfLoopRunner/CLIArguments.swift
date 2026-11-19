@@ -76,7 +76,7 @@ public enum CLIArguments {
     spec("queue remove", "queue remove QID", positional: 1...1),
     spec("queue run", "queue run --runner R [--until HH:MM] [--idle S] [runner flags]", valued: ["until"], flags: ["force"], runner: true),
     spec("runner check", "runner check R [runner flags]", positional: 1...1, runner: true),
-    spec("runner clean", "runner clean R [runner flags]", positional: 1...1, runner: true),
+    spec("runner clean", "runner clean R [--all] [runner flags]", flags: ["all"], positional: 1...1, runner: true),
     spec("gestures", "gestures list [FILE…] [--dir DIR]… [--bench PATH] [--json]", valued: ["dir", "bench", "exe"], ownHelp: true),
     spec("gestures list", "gestures list [FILE…] [--dir DIR]… [--bench PATH] [--json]", valued: ["dir", "bench", "exe"], positional: 0...Int.max, ownHelp: true),
     spec("mcp", "mcp [--app NAME | --store DIR] [--lock DIR]", valued: ["lock"]),

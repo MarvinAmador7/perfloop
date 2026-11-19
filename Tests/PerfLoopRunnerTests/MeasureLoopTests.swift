@@ -124,6 +124,20 @@ final class MeasureLoopTests: FakeBenchCase {
     XCTAssertEqual(ok.summary.trusted, 1); XCTAssertNil(ok.summary.untrusted)
   }
 
+  /// A bench that exits 0 with nothing printed: its app quit before the result was written. The failure says the
+  /// likely cause and what to do, not only the exit status.
+  func testARunThatQuitsBeforeItsResultSaysWhy() throws {
+    try baseline()
+    let cand = try bench("cand", ["QUITS": "1"])
+    let m = try loop.runScenario(options(cand, "step", reps: 1))
+    XCTAssertEqual(m.summary.trusted, 0)
+    let f = m.reps.first?.failure ?? ""
+    XCTAssertTrue(f.hasPrefix("the run exited 0 without a result: the bench ended before writing it, most likely its app quit (a SwiftUI app with one Window scene quits when its last window closes"), f)
+    XCTAssertTrue(f.hasSuffix("rebuild the bench against current PerfLoopHost, which keeps the app running until the result is written (an adapter of its own: ADAPTER.md §3)"), f)
+    XCTAssertEqual(Adapter.Output(status: 2, stdout: "").exitText, "exited 2 without a result")
+    XCTAssertEqual(Adapter.Output(status: 3, stdout: "{}").exitText, "exited 3")
+  }
+
   func testAWindowWrongEveryTimeIsSaidOnceNotRerunForever() throws {
     try baseline()
     let cand = try bench("cand", ["KEY": "false"])
