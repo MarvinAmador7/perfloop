@@ -363,7 +363,16 @@ through its real menu bar and names the item that fired. The events are made fro
 is never posted, made into an NSEvent, so AppKit takes the characters from the current keyboard layout and matches
 ⇧⌘D to ⇧⌘D, which a hand-made `NSEvent.keyEvent` doesn't: the study's misrouted ⇧⌘D), the modifiers pressed and
 released around the key as a hand does, and put on the app's own queue with `NSApp.postEvent` (not `sendEvent`, which
-skips the queue and leaves `NSApp.currentEvent` stale). Nothing is posted to the system. A SwiftUI view's
+skips the queue and leaves `NSApp.currentEvent` stale). Nothing is posted to the system. The modifiers go down before
+the step, off its clock (posted, then waited for until AppKit has taken them), as a hand holds ⌘ before it presses K:
+posted in one burst with the key, the key down waited behind the ⌘'s flagsChanged in AppKit's update cycle, 5–7 ms in 6
+reps of 15 on the owner's ssh runner, a wait no hand's key has. So a shortcut step starts at its key down and its numbers
+are a few ms lower than before (2026-11); the modifiers come up inside the step, after the key, as before. `postEvent`
+wakes the main thread itself (it signals AppKit's event loop and the run loop): nothing more is needed. Each input step
+records `steps[].input.queueMs`, how long the key down (or mouse down) waited, from the step's start to AppKit taking it;
+it is counted in the step. On the owner's ssh runner it is ~0.1 ms for keys and clicks; more means the main thread was
+still busy or AppKit held the event. An adapter of its own does the same: modifiers first, then the key, timed with a
+local event monitor for the key down. A SwiftUI view's
 `.accessibilityIdentifier` lives on its accessibility element, not on an NSView: `click(identifier:)` and an identifier
 `expectFocus` find it there, turning on SwiftUI's accessibility tree (`AXEnhancedUserInterface`, as VoiceOver does) for
 the lookup; SwiftUI may then keep the tree up to date for the rest of the rep, which the step says, so a scenario
@@ -397,7 +406,7 @@ adapter that can't can be wrapped instead: `perfloop lock -- BENCH ab …`.
 |---|---|---|---|
 | `perfloop.manifest` | 1 (`protocol: 1`) | adapter `describe` | fields only added; `verbs`, `privatePaths`, `scenarios[].fixture`, `fixtureSchemes`, `profileEnv`, `harness`, `appearances`, `textSizes`, `scenarios[].host`, `fixtures[].accepts` added 2026-11 |
 | `perfloop.build` | 1 | adapter (`tool.build`), store (`build.json`) | stable |
-| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11), `guards[].inkRegions` and `worstStretches[].benchSamples`/`topBench` (2026-11), `steps[].input` and `steps[].focus` (§6c, 2026-11), `appearance` and `textSize` (2026-11, v11), `inkRegions[].alone` (2026-11) |
+| `perfloop.result` | 2 (reads `deskbench.result/1`) | adapter `run` | fields only added; PerfLoopHost's adds `expectedFixture` (2026-11), `guards[].inkRegions` and `worstStretches[].benchSamples`/`topBench` (2026-11), `steps[].input` and `steps[].focus` (§6c, 2026-11), `steps[].input.queueMs` (§6c, 2026-11), `appearance` and `textSize` (2026-11, v11), `inkRegions[].alone` (2026-11) |
 | `perfloop.measure`, `perfloop.baseline` | 1 | runner (`runs/<id>/run.json`, `baselines/<scenario>[~<look>]/baseline.json`) | new (2026-11); a pair's `Side` gained `fixture` (what the rep ran); `input` (one rep's input lines and pictures, §6c); a baseline gained `look` (one per look) |
 | `perfloop.snapdiff` | 1 (reads `deskbench.snapdiff/1`) | adapter `snapdiff` | fields only added; `guard.looks[]` (2026-11, v5) |
 | `perfloop.snapshot` | 1 | adapter (`X.layout.json` beside a snapshot) | new (2026-11, v5/v7/v11); `regions[].compare`, `inkAtLeast`, `inkMin` added 2026-11 |

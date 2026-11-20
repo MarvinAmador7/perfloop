@@ -98,6 +98,7 @@ Everything in `deskbench.result/1` (`Results.swift`) stays with the same names a
                             "responder": { … }, "count": null, "unhandled": null, "asText": null,              // type
                             "point": null, "asked": null, "hit": null, "consumer": null, "consumerKind": null,   // click: view | gesture-recognizer | nobody
                             "recognizer": null, "notes": null,
+                            "queueMs": 0.11,               // the key down (mouse down) on the app's queue before AppKit took it; counted in the step
                             "pictures": { "before": "/…/find-rep0-1-press-F.before.png", "after": "….after.png", "diff": "….diff.png",
                                           "changedPct": 3.2, "changedRect": [8, 6, 420, 30] } | null,   // points from the top-left
                             "line": "press ⌘F → fired menu 'Find…' (List › Find…) → Actions; focus: nothing (the bench window is key) → NSTextField #filter \"Filter\" (field editor)" } | null } ],

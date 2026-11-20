@@ -108,7 +108,7 @@ import SwiftUI
   func testStepsCarryInputAndFocusAndTheRunnerStillReadsThem() throws {
     var tl = Timeline(nominalHz: 60); tl.ticks = stride(from: 0.0, through: 200, by: 1000 / 60).map { $0 }
     var s = tl.step(name: "press ⌘K", at: 0, end: 100, latencyMs: 20, settleMs: 20, settled: true, cpuMs: 4, instructions: nil)
-    var i = InputRecord(kind: "press", outcome: "fired"); i.keys = "⌘K"; i.menuItem = "Search…"
+    var i = InputRecord(kind: "press", outcome: "fired"); i.keys = "⌘K"; i.menuItem = "Search…"; i.queueMs = 0.11
     s.input = i
     s.focus = FocusChange(before: FocusRecord(), after: FocusRecord(keyWindow: WindowRef(title: "", class: "NSWindow", role: "bench")))
     let rep = tl.rep(index: 0, steps: [s], checks: [], guards: nil, window: nil)
@@ -117,6 +117,7 @@ import SwiftUI
                        summary: ResultSummary(reps: [rep], metric: "mainThreadCpuMsPerStep"), verdict: "pass", exitCode: 0, notes: [])
     let v = try PLJSON.decode(JSONValue.self, from: Data(PLJSON.encode(r).utf8))
     XCTAssertEqual(v["reps"]?[0]?["steps"]?[0]?["input"]?["outcome"]?.string, "fired")
+    XCTAssertEqual(v["reps"]?[0]?["steps"]?[0]?["input"]?["queueMs"]?.double, 0.11)
     XCTAssertEqual(v["reps"]?[0]?["steps"]?[0]?["focus"]?["after"]?["keyWindow"]?["role"]?.string, "bench")
     XCTAssertEqual(Readings.sides(run: v, metric: "mainThreadCpuMsPerStep").first?.objective, 4)
     let back = try PLJSON.decode(HostResult.self, from: Data(PLJSON.encode(r).utf8))
@@ -169,6 +170,7 @@ import SwiftUI
     XCTAssertEqual(down.input?.outcome, "fired")
     XCTAssertEqual(down.input?.menuPath, "View › Split Down")
     XCTAssertEqual(down.input?.target?.class, "Target")
+    XCTAssertNotNil(down.input?.queueMs, "the key down's wait on the queue (here the test's own dispatch, after the step)")
     XCTAssertTrue(r.checks.last?.pass == true, "\(r.checks)")
 
     let right = await r.press("⌘D", expect: "Split Down", name: "wrong", timeoutMs: 200)
@@ -182,6 +184,98 @@ import SwiftUI
     XCTAssertEqual(none.input?.holder, "View › Jump", "a disabled item has the keys")
     XCTAssertEqual(r.steps.map(\.name), ["press ⇧⌘D", "wrong", "press ⌘J"])
     XCTAssertNotNil(r.steps[0].input, "the step in the rep carries the record")
+  }
+
+  /// The microbenchmark for the queue's wait: ⌘K posted as a step posts it and taken by AppKit's own event loop
+  /// (`nextEvent`, the update cycle included, as `NSApplication.run` takes events), timed from the post of the key down to
+  /// the view's `keyDown` and to the probe's `queueMs`; once with the ⌘ going down in the same burst (as before), once
+  /// with it taken first (as `run.press` does now, and as a hand holds ⌘ before K). AppKit's `postEvent` wakes the loop
+  /// itself: a posted key needs nothing more. On the owner's ssh runner the burst's key down waited 5–7 ms behind the
+  /// ⌘'s flagsChanged in 6 reps of 15; held first, ~0.1 ms.
+  func testAPostedKeyIsTakenAtOnceByAppKitsOwnEventLoop() async throws {
+    final class Keys: NSView {
+      var at: Double?
+      override var acceptsFirstResponder: Bool { true }
+      override func keyDown(with e: NSEvent) { if at == nil { at = CACurrentMediaTime() * 1000 } }
+      override func keyUp(with e: NSEvent) {}
+      override func flagsChanged(with e: NSEvent) {}
+      override func performKeyEquivalent(with e: NSEvent) -> Bool { false }
+    }
+    let w = window(key: true)
+    defer { w.close() }
+    let v = Keys(frame: w.contentView!.bounds)
+    w.contentView!.addSubview(v)
+    XCTAssertTrue(w.makeFirstResponder(v))
+    let k = try XCTUnwrap(try? KeyMap(SystemKeyLayout()).press(Shortcut.parse("⌘K").get()).get())
+    func clock() -> Double { CACurrentMediaTime() * 1000 }
+    func take(_ p: InputProbe) {
+      let until = Date().addingTimeInterval(1)
+      while !p.delivered, Date() < until {
+        if let e = NSApp.nextEvent(matching: .any, until: until, inMode: .default, dequeue: true) { NSApp.sendEvent(e) }
+      }
+    }
+    var toView: [String: [Double]] = [:], queue: [String: [Double]] = [:]
+    for i in 0..<60 {
+      let held = i % 2 == 1, events = InputEvents.key(k, window: w)
+      XCTAssertEqual(events.first?.type, .flagsChanged)
+      var keyEvents = events
+      if held {
+        let lead = InputProbe(); lead.watchMarker()
+        lead.post(Array(events.prefix { $0.type == .flagsChanged }), clock: clock)
+        take(lead); lead.disarm()
+        keyEvents = Array(events.drop { $0.type == .flagsChanged })
+      }
+      v.at = nil
+      let probe = InputProbe()
+      probe.arm(chainFrom: v)
+      let posted = clock()
+      probe.post(keyEvents, clock: clock)
+      take(probe)
+      probe.disarm()
+      let side = held ? "held" : "burst"
+      if let a = v.at { toView[side, default: []].append(a - posted) }
+      if let q = probe.queueMs { queue[side, default: []].append(q) }
+    }
+    for side in ["burst", "held"] {
+      let t = toView[side, default: []].sorted(), q = queue[side, default: []].sorted()
+      XCTAssertEqual(t.count, 30, "every key down reached the view (\(side))")
+      XCTAssertEqual(q.count, 30, "and every one has its queueMs (\(side))")
+      guard t.count == 30, q.count == 30 else { continue }
+      print("\(side): post → keyDown median \(Stats.round(t[15], 2)) ms, p90 \(Stats.round(t[27], 2)) ms; queueMs median \(Stats.round(q[15], 2)) ms")
+      XCTAssertLessThanOrEqual(q[15], t[15] + 0.5, "queueMs ends when AppKit takes the key down, before the view has it")
+      if side == "held" { XCTAssertLessThan(q[15], 4, "a posted key with ⌘ already down waited \(q[15]) ms (median) before AppKit took it") }
+    }
+  }
+
+  /// `run.press` puts the modifiers down before the step's clock starts: the ⌘'s flagsChanged is handled before the
+  /// step's start, the key down after it, and the shortcut still fires its item.
+  func testAPressHoldsItsModifiersBeforeTheStep() async throws {
+    final class Flags: NSView {
+      var flags: [Double] = []
+      override var acceptsFirstResponder: Bool { true }
+      override func flagsChanged(with e: NSEvent) { flags.append(CACurrentMediaTime()) }
+    }
+    let t = Target()
+    let saved = NSApp.mainMenu
+    defer { NSApp.mainMenu = saved }
+    let bar = NSMenu(title: "Main"), menu = NSMenu(title: "File")
+    let top = NSMenuItem(title: "File", action: nil, keyEquivalent: ""); top.submenu = menu; bar.addItem(top)
+    let item = NSMenuItem(title: "Search…", action: #selector(Target.act(_:)), keyEquivalent: "k"); item.target = t; menu.addItem(item)
+    NSApp.mainMenu = bar
+    let w = window(key: true)
+    defer { w.close() }
+    let v = Flags(frame: w.contentView!.bounds)
+    w.contentView!.addSubview(v)
+    XCTAssertTrue(w.makeFirstResponder(v))
+    let r = run(w)
+    defer { r.close() }
+    let step = await r.press("⌘K", expect: "Search…", timeoutMs: 200)
+    XCTAssertEqual(t.fired, ["Search…"])
+    XCTAssertEqual(step.input?.outcome, "fired")
+    let start = r.recorder.t0 + step.atMs / 1000
+    XCTAssertEqual(v.flags.count, 2, "⌘ down and up")
+    XCTAssertLessThan(v.flags.first ?? .infinity, start, "the ⌘ went down before the step started")
+    XCTAssertGreaterThan(v.flags.last ?? 0, start, "and up inside it, after the key")
   }
 
   /// Typed text reaches the field editor; an Escape the field editor takes is handled by it; a key nothing takes went
@@ -238,6 +332,7 @@ import SwiftUI
     XCTAssertEqual(t.fired, ["button"])
     XCTAssertEqual(go.input?.outcome, "hit")
     XCTAssertEqual(go.input?.hit?.identifier, "go"); XCTAssertEqual(go.input?.consumer?.identifier, "go"); XCTAssertEqual(go.input?.consumerKind, "view")
+    XCTAssertNotNil(go.input?.queueMs, "the mouse down's wait on the queue")
     XCTAssertEqual(r.checks.last?.pass, true)
 
     let miss = await r.click(covered, timeoutMs: 200)

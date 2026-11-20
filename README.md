@@ -87,7 +87,8 @@ Use the returned experiment ID in `perfloop explain exp/ID`. If the verdict is `
 
 A PerfLoopHost scenario presses keys, types and clicks through the app's own event queue, as a hand would reach it:
 menus, key equivalents, the responder chain, field editors. Each step records what happened, in one line per action,
-and the focus before and after.
+and the focus before and after. A shortcut's modifiers go down before the step starts, as a hand holds ⌘ before K, and
+each step says how long its key or click waited on the queue (`queueMs`, ~0.1 ms on a real window).
 
 ```swift
 await run.press("⌘F", expect: "Find…", expectFocus: .identifier("filter"))  // fails the check when another item fires
