@@ -151,6 +151,10 @@ public struct InputRecord: Codable, Sendable, Equatable {
   /// What AppKit did that a reader should know (the window wasn't key, so the click made it key; a hosting view).
   public var notes: [String]?
   public var pictures: InputPictures?
+  /// How long the key down (or mouse down) waited on the app's queue, from the step's start to AppKit taking it (ms;
+  /// counted in the step's numbers). About 0.1 ms on a real window; more means the main thread
+  /// was busy, or AppKit held events for its update cycle. nil: AppKit never took it.
+  public var queueMs: Double?
   /// The one line a reader reads: what was done, what happened, where the focus went and how much of the window changed
   /// (`press ⌘K → fired menu 'Search…' (File › Search…); focus: nothing → #palette.field (field editor)`).
   public var line: String

@@ -249,12 +249,7 @@ final class ChainEnd: NSResponder {
         self.fired.append((item, target))
       }
     }
-    let id = id
-    monitor = NSEvent.addLocalMonitorForEvents(matching: .applicationDefined) { [weak self] e in
-      guard e.subtype.rawValue == InputEvents.markerSubtype, e.data1 == id else { return e }
-      MainActor.assumeIsolated { self?.delivered = true }
-      return nil
-    }
+    watchMarker()
     if let s = start {
       var r: NSResponder = s, n = 0
       while let next = r.nextResponder, n < 64 { r = next; n += 1 }
@@ -273,22 +268,55 @@ final class ChainEnd: NSResponder {
     }
   }
 
-  func post(_ events: [NSEvent]) {
+  /// Watches for this probe's marker (`delivered`). `arm` does it; alone, it is the modifiers' probe (`keys`).
+  func watchMarker() {
+    guard monitor == nil else { return }
+    let id = id
+    monitor = NSEvent.addLocalMonitorForEvents(matching: .applicationDefined) { [weak self] e in
+      guard e.subtype.rawValue == InputEvents.markerSubtype, e.data1 == id else { return e }
+      MainActor.assumeIsolated { self?.delivered = true }
+      return nil
+    }
+  }
+
+  /// When the events went on the queue, and when AppKit took the one that acts (the key down, the mouse down; not the
+  /// modifiers' flagsChanged before it), on the step's clock (ms).
+  private(set) var postedAt: Double?
+  private(set) var takenAt: Double?
+  private var takenMonitor: Any?
+
+  /// Puts the events and the marker on the app's queue. Nothing more is needed to wake the main thread: AppKit's
+  /// `postEvent` signals its event loop (macOS 26's update cycle) and wakes the run loop itself, so the events are taken
+  /// as soon as the step's own run-loop turn ends. `queueMs` says how long that was (`steps[].input.queueMs`).
+  func post(_ events: [NSEvent], clock: @escaping @MainActor () -> Double) {
+    if let first = events.first(where: { [.keyDown, .leftMouseDown].contains($0.type) }) ?? events.first {
+      // The first of its type for its window: AppKit may hand the monitor a copy (a mouse event's timestamp changes).
+      let type = first.type, window = first.windowNumber
+      takenMonitor = NSEvent.addLocalMonitorForEvents(matching: NSEvent.EventTypeMask(type: type)) { [weak self] e in
+        if e.type == type, e.windowNumber == window { MainActor.assumeIsolated { if let s = self, s.takenAt == nil { s.takenAt = clock() } } }
+        return e
+      }
+    }
+    postedAt = clock()
     for e in events { NSApp.postEvent(e, atStart: false) }
     if let m = InputEvents.marker(id) { NSApp.postEvent(m, atStart: false) }
   }
 
+  /// How long the acting event waited on the queue before AppKit took it (ms), when it took it.
+  var queueMs: Double? { guard let p = postedAt, let t = takenAt else { return nil }; return max(0, t - p) }
+
   /// Waits up to `timeoutMs` for the marker. Outside NSApp's run loop (a test) it dispatches the queue itself, as the
   /// run loop would. A control's tracking loop may discard what follows its mouse-up, the marker with it: a marker no
   /// longer on the queue means everything before it was handled too.
-  func waitDelivered(timeoutMs: Double) async {
+  /// `peek: false` waits for the marker itself (the modifiers' probe: nothing tracks a flagsChanged), every `pollMs`.
+  func waitDelivered(timeoutMs: Double, peek: Bool = true, pollMs: Double = 5) async {
     let until = Date().addingTimeInterval(timeoutMs / 1000)
     while !delivered, Date() < until {
       if !NSApp.isRunning {
         while !delivered, let e = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) { NSApp.sendEvent(e) }
       }
-      if !delivered, NSApp.nextEvent(matching: .applicationDefined, until: .distantPast, inMode: .default, dequeue: false) == nil { delivered = true }
-      if !delivered { try? await Task.sleep(nanoseconds: 5_000_000) }
+      if peek, !delivered, NSApp.nextEvent(matching: .applicationDefined, until: .distantPast, inMode: .default, dequeue: false) == nil { delivered = true }
+      if !delivered { try? await Task.sleep(nanoseconds: UInt64(pollMs * 1_000_000)) }
     }
   }
 
@@ -296,6 +324,7 @@ final class ChainEnd: NSResponder {
     InputTrace.shared.recording = false
     if let o = observer { NotificationCenter.default.removeObserver(o); observer = nil }
     if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+    if let m = takenMonitor { NSEvent.removeMonitor(m); takenMonitor = nil }
     if let o = endOwner, o.nextResponder === end { o.nextResponder = nil }
     endOwner = nil
     recognizers.forEach { $0.1.invalidate() }; recognizers = []
@@ -606,13 +635,20 @@ extension Run {
     let target = NSApp.keyWindow.flatMap { k in benchWindows().contains { $0 === k } ? k : nil } ?? window
     let events = presses.flatMap { InputEvents.key($0.0, window: target, text: $0.1) }
     let before = await picture()
+    // The modifiers go down before the step, off the clock, as a hand holds ⌘ before it presses K. Posted with the key,
+    // the key down waited behind the ⌘'s flagsChanged in AppKit's update cycle (0.4 ms, or 5–7 ms in 6 reps of 15 on the
+    // owner's ssh runner), a wait no hand's key has.
+    let held = events.prefix { $0.type == .flagsChanged }
+    if !held.isEmpty { await holdModifiers(Array(held)) }
+    let keyEvents = Array(events.dropFirst(held.count))
     let probe = InputProbe()
     let fr = target?.firstResponder
     probe.arm(chainFrom: fr)
-    var r = await measuredStep(label, timeoutMs: timeoutMs, quietMs: quietMs, until: until, expectFocus: expectFocus, input: true) { probe.post(events) }
+    var r = await measuredStep(label, timeoutMs: timeoutMs, quietMs: quietMs, until: until, expectFocus: expectFocus, input: true) { probe.post(keyEvents) { [unowned self] in now } }
     if !probe.delivered { await probe.waitDelivered(timeoutMs: 1000) }
     probe.disarm()
     var rec = InputRecord(kind: kind, outcome: "delivered")
+    rec.queueMs = probe.queueMs.map { Stats.round($0, 2) }
     rec.keys = keys; rec.text = text; rec.layout = keyMap.layout
     if let k = presses.first?.0 { rec.keyCode = k.keyCode }
     rec.characters = events.first { $0.type == .keyDown }?.charactersIgnoringModifiers
@@ -650,6 +686,17 @@ extension Run {
     return r
   }
 
+  /// Posts the modifiers' flagsChanged and waits, off the clock, until AppKit has taken them.
+  func holdModifiers(_ events: [NSEvent]) async {
+    let lead = InputProbe()
+    lead.watchMarker()
+    await offTheClock {
+      lead.post(events) { [unowned self] in now }
+      await lead.waitDelivered(timeoutMs: 1000, peek: false, pollMs: 1)
+    }
+    lead.disarm()
+  }
+
   func click(at p: CGPoint, window w: NSWindow, asked: ResponderRef?, askedView: NSView?, count: Int, modifiers: NSEvent.ModifierFlags, ink: [InkRegion] = [], expectFocus: FocusTarget?,
              label: String, timeoutMs: Double, quietMs: Double, until: (() -> Bool)?, notes extra: [String] = []) async -> StepRecord {
     let root = w.contentView?.superview ?? w.contentView
@@ -659,10 +706,11 @@ extension Run {
     let before = await picture()
     let probe = InputProbe()
     probe.arm(chainFrom: hitView, recognizersOf: hitView)
-    var r = await measuredStep(label, timeoutMs: timeoutMs, quietMs: quietMs, until: until, expectFocus: expectFocus, input: true) { probe.post(events) }
+    var r = await measuredStep(label, timeoutMs: timeoutMs, quietMs: quietMs, until: until, expectFocus: expectFocus, input: true) { probe.post(events) { [unowned self] in now } }
     if !probe.delivered { await probe.waitDelivered(timeoutMs: 1000) }
     probe.disarm()
     var rec = InputRecord(kind: "click", outcome: "hit")
+    rec.queueMs = probe.queueMs.map { Stats.round($0, 2) }
     rec.point = [Stats.round(Double(p.x), 1), Stats.round(Double(p.y), 1)]
     rec.asked = asked
     var notes = extra
